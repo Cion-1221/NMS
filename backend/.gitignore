@@ -1,0 +1,18 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+ipam-server
+
+logs/
+config.yaml
+.env
+.env.*
+!config.example.yaml
+go.work
+go.work.sum
+.idea/
+.vscode/
+.DS_Store
