@@ -1,0 +1,40 @@
+name: Build and Release NMS Server
+
+# 触发条件：当你向 GitHub 推送以 "v" 开头的标签（如 v1.0.0）时，自动触发编译
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build Binary for Debian
+    runs-on: ubuntu-latest # 使用 GitHub 提供的 Linux 云服务器作为编译机
+
+    steps:
+      # 1. 检出（拉取）代码到云服务器
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. 在云端安装并配置 Go 环境
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22' # 匹配你编写后端代码时的 Go 版本
+
+      # 3. 编译针对 Linux (Debian) 系统的独立二进制文件
+      - name: Build Backend Binary
+        run: |
+          cd backend
+          go mod tidy
+          # CGO_ENABLED=0 确保编译出的二进制文件是完全静态链接的，不依赖系统底层库，完美兼容 Debian 13
+          # GOOS=linux GOARCH=amd64 确保编译出的是 64位 Linux 可执行文件
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o nms-server main.go
+
+      # 4. 将编译好的二进制文件发布到 GitHub Releases 页面
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: backend/nms-server # 告诉 GitHub 把这个编译好的文件作为附件上传
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 自动调取 GitHub 内置的权限令牌
