@@ -1,192 +1,263 @@
-import React, { useEffect, useState, useMemo } from 'react';
-import { Table, Button, Select, Space, Modal, Form, message, Tag, Alert } from 'antd';
-import { getRootPrefixes, getSubnetTree, splitSubnet, mergeSubnets } from '../../../api/ipam';
-import { RootPrefix, SubnetNode } from '../../../types/ipam';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  Alert, Button, Form, Input, message, Modal, Select, Space, Table, Tag,
+} from 'antd';
+import { SearchOutlined } from '@ant-design/icons';
 import { AxiosError } from 'axios';
+import type { ColumnsType } from 'antd/es/table';
+import { getRootPrefixes, getSubnetTree, mergeSubnets, splitSubnet } from '../../../api/ipam';
+import { RootPrefix, SubnetNode } from '../../../types/ipam';
+import { useT } from '../../../i18n';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface UINode {
-  key: string;
-  id: number;
-  cidr: string;
-  level: string;
+  key:         string;
+  id:          number;
+  cidr:        string;
+  level:       string;
   target_type: 'root' | 'subnet';
-  is_v4: boolean;
-  children?: UINode[];
+  is_v4:       boolean;
+  children?:   UINode[];
+  /** true while we are loading this root's children for the first time */
+  _loading?:   boolean;
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function mapSubnets(subnets: SubnetNode[], is_v4: boolean): UINode[] {
+  return subnets.map((s): UINode => ({
+    key:         `subnet-${s.id}`,
+    id:          s.id,
+    cidr:        s.cidr,
+    level:       s.level,
+    target_type: 'subnet',
+    is_v4,
+    children:    s.children?.length ? mapSubnets(s.children, is_v4) : undefined,
+  }));
+}
+
+function collectParentKeys(nodes: UINode[]): string[] {
+  return nodes.flatMap((n) =>
+    n.children?.length ? [n.key, ...collectParentKeys(n.children)] : [],
+  );
+}
+
+/** Recursively filter tree — keep node if its CIDR contains the search string,
+ *  OR if any of its descendants do. */
+function filterTree(nodes: UINode[], q: string): UINode[] {
+  if (!q) return nodes;
+  return nodes.reduce<UINode[]>((acc, n) => {
+    const filteredChildren = filterTree(n.children ?? [], q);
+    if (n.cidr.includes(q) || filteredChildren.length > 0) {
+      acc.push({ ...n, children: filteredChildren.length ? filteredChildren : n.children });
+    }
+    return acc;
+  }, []);
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
+
 const TabSubnetTree: React.FC = () => {
-  const [roots, setRoots] = useState<RootPrefix[]>([]);
-  const [selectedRootId, setSelectedRootId] = useState<number | undefined>();
+  const t = useT();
+
+  const [roots, setRoots]       = useState<RootPrefix[]>([]);
   const [treeData, setTreeData] = useState<UINode[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading]   = useState(false);
 
-  const [isSplitOpen, setIsSplitOpen] = useState(false);
-  const [splitNode, setSplitNode] = useState<UINode | null>(null);
-  const [splitForm] = Form.useForm();
+  // Controlled expansion
+  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
 
-  const [isMergeOpen, setIsMergeOpen] = useState(false);
-  const [mergeParentNode, setMergeParentNode] = useState<UINode | null>(null);
-  const [mergeSelectedKeys, setMergeSelectedKeys] = useState<React.Key[]>([]);
-  
+  // Search
+  const [searchCIDR, setSearchCIDR] = useState('');
+
+  // Split modal
+  const [splitOpen, setSplitOpen]   = useState(false);
+  const [splitNode, setSplitNode]   = useState<UINode | null>(null);
+  const [splitForm]                 = Form.useForm();
+
+  // Merge modal
+  const [mergeOpen, setMergeOpen]         = useState(false);
+  const [mergeParent, setMergeParent]     = useState<UINode | null>(null);
+  const [mergeSelected, setMergeSelected] = useState<React.Key[]>([]);
+
+  // ── Initial load: all roots as top-level rows (no children yet) ────────────
   useEffect(() => {
-    const init = async () => {
+    (async () => {
+      setLoading(true);
       try {
         const res = await getRootPrefixes();
         setRoots(res.data);
-        if (res.data.length > 0) {
-          setSelectedRootId(res.data[0].id);
-        }
-      } catch (err) {
-        message.error('无法获取根前缀列表');
+        const initial: UINode[] = res.data.map((r) => ({
+          key:         `root-${r.id}`,
+          id:          r.id,
+          cidr:        r.cidr,
+          level:       'Root',
+          target_type: 'root' as const,
+          is_v4:       r.ip_version === 4,
+          children:    [], // placeholder so antd shows the expand arrow
+        }));
+        setTreeData(initial);
+      } catch {
+        message.error('Failed to load root prefixes');
+      } finally {
+        setLoading(false);
       }
-    };
-    init();
+    })();
   }, []);
 
-  const fetchTree = async () => {
-    if (!selectedRootId) return;
-    setLoading(true);
-    try {
-      const res = await getSubnetTree(selectedRootId);
-      const selectedRoot = roots.find(r => r.id === selectedRootId);
-      
-      if (selectedRoot) {
-        const is_v4 = selectedRoot.ip_version === 4;
-        
-        const mapSubnetToUI = (node: SubnetNode): UINode => ({
-          key: `subnet-${node.id}`,
-          id: node.id,
-          cidr: node.cidr,
-          level: node.level,
-          target_type: 'subnet',
-          is_v4,
-          children: node.children?.length ? node.children.map(mapSubnetToUI) : undefined
-        });
+  // ── Refresh ONE root's subtree ─────────────────────────────────────────────
+  const reloadRootSubtree = useCallback(async (rootId: number) => {
+    const root = roots.find((r) => r.id === rootId);
+    if (!root) return;
+    const res = await getSubnetTree(rootId);
+    const children = mapSubnets(res.data, root.ip_version === 4);
+    setTreeData((prev) =>
+      prev.map((n) =>
+        n.id === rootId && n.target_type === 'root'
+          ? { ...n, _loading: false, children }
+          : n,
+      ),
+    );
+    // Auto-expand the refreshed root
+    setExpandedKeys((prev) => {
+      const childKeys = collectParentKeys(children).concat(`root-${rootId}`);
+      return Array.from(new Set([...prev, ...childKeys]));
+    });
+  }, [roots]);
 
-        const syntheticRoot: UINode = {
-          key: `root-${selectedRoot.id}`,
-          id: selectedRoot.id,
-          cidr: selectedRoot.cidr,
-          level: 'Root',
-          target_type: 'root',
-          is_v4,
-          children: res.data.length ? res.data.map(mapSubnetToUI) : undefined
-        };
-        
-        setTreeData([syntheticRoot]);
+  // ── Lazy-load children on first expand ────────────────────────────────────
+  const handleExpand = async (expanded: boolean, record: UINode) => {
+    if (!expanded) {
+      setExpandedKeys((prev) => prev.filter((k) => k !== record.key));
+      return;
+    }
+    setExpandedKeys((prev) => Array.from(new Set([...prev, record.key])));
+
+    if (record.target_type === 'root') {
+      // Only fetch if children are still the empty placeholder
+      const current = treeData.find((n) => n.key === record.key);
+      if (current && current.children?.length === 0) {
+        // Mark as loading
+        setTreeData((prev) =>
+          prev.map((n) => n.key === record.key ? { ...n, _loading: true } : n),
+        );
+        try {
+          await reloadRootSubtree(record.id);
+        } catch {
+          message.error('Failed to load subnets');
+          setTreeData((prev) =>
+            prev.map((n) => n.key === record.key ? { ...n, _loading: false } : n),
+          );
+        }
       }
-    } catch (err) {
-      message.error('获取网段树失败');
-    } finally {
-      setLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchTree();
-  }, [selectedRootId, roots]); 
+  // ── Mask options for split modal ───────────────────────────────────────────
+  const maskOptions = (() => {
+    if (!splitNode) return [];
+    const parts = splitNode.cidr.split('/');
+    if (parts.length !== 2) return [];
+    const cur = parseInt(parts[1], 10);
+    const max = splitNode.is_v4 ? 32 : 128;
+    const opts = [];
+    for (let i = cur + 1; i <= max && i - cur <= 16; i++) {
+      opts.push({
+        value: i,
+        label: `/${i}  (${t('ipam.subnet.generates', { n: 1 << (i - cur) })})`,
+      });
+    }
+    return opts;
+  })();
 
-  const openSplitModal = (node: UINode) => {
+  // ── Split ──────────────────────────────────────────────────────────────────
+  const openSplit = (node: UINode) => {
     setSplitNode(node);
     splitForm.resetFields();
-    setIsSplitOpen(true);
+    setSplitOpen(true);
   };
 
   const handleSplitSubmit = async () => {
     if (!splitNode) return;
+    let v: { target_bits: number };
+    try { v = await splitForm.validateFields(); } catch { return; }
     try {
-      const values = await splitForm.validateFields();
-      await splitSubnet({
-        target_type: splitNode.target_type,
-        target_id: splitNode.id,
-        target_bits: values.target_bits
-      });
-      message.success('拆分覆盖成功');
-      setIsSplitOpen(false);
-      fetchTree(); 
+      await splitSubnet({ target_type: splitNode.target_type, target_id: splitNode.id, target_bits: v.target_bits });
+      message.success(t('ipam.subnet.splitOk'));
+      setSplitOpen(false);
+      // Reload only the affected root
+      const rootId = splitNode.target_type === 'root'
+        ? splitNode.id
+        : roots.find((r) => treeData.find((n) =>
+            n.id === r.id && n.target_type === 'root' &&
+            JSON.stringify(n).includes(`"id":${splitNode.id}`)
+          ))?.id;
+      // Simpler: re-read by traversing current treeData
+      const affectedRoot = findRootId(treeData, splitNode.key);
+      if (affectedRoot) await reloadRootSubtree(affectedRoot);
     } catch (err: any) {
-      if (err.errorFields) return;
-      if (err instanceof AxiosError && err.response?.status === 400) {
-        Modal.error({ title: '拆分失败', content: err.response.data.error });
-      } else {
-        message.error('请求失败');
-      }
+      if (err instanceof AxiosError && err.response?.data?.error)
+        Modal.error({ title: 'Split rejected', content: err.response.data.error });
+      else message.error('Split failed');
     }
   };
 
-  const maskOptions = useMemo(() => {
-    if (!splitNode) return [];
-    const parts = splitNode.cidr.split('/');
-    if (parts.length !== 2) return [];
-    
-    const currentMask = parseInt(parts[1], 10);
-    const maxMask = splitNode.is_v4 ? 32 : 128;
-    const options = [];
-    
-    for (let i = currentMask + 1; i <= maxMask; i++) {
-        if (i - currentMask <= 16) {
-          options.push(
-            <Select.Option key={i} value={i}>
-              /{i} (生成 {1 << (i - currentMask)} 个)
-            </Select.Option>
-          );
-        }
-    }
-    return options;
-  }, [splitNode]);
-
-  const openMergeModal = (parentNode: UINode) => {
-    setMergeParentNode(parentNode);
-    setMergeSelectedKeys([]);
-    setIsMergeOpen(true);
+  // ── Merge ──────────────────────────────────────────────────────────────────
+  const openMerge = (node: UINode) => {
+    setMergeParent(node);
+    setMergeSelected([]);
+    setMergeOpen(true);
   };
 
   const handleMergeSubmit = async () => {
-    if (mergeSelectedKeys.length < 2) {
-      message.warning('必须至少选择两个子网进行合并');
-      return;
-    }
+    if (mergeSelected.length < 2) { message.warning('Select at least 2 subnets'); return; }
     try {
-      const ids = mergeSelectedKeys.map(key => parseInt(String(key).split('-')[1], 10));
-
+      const ids = (mergeSelected as string[]).map((k) => parseInt(k.split('-').pop()!, 10));
       await mergeSubnets({ subnet_ids: ids });
-      message.success('合并重归属成功');
-      setIsMergeOpen(false);
-      fetchTree(); 
+      message.success(t('ipam.subnet.mergeOk'));
+      setMergeOpen(false);
+      const affectedRoot = mergeParent ? findRootId(treeData, mergeParent.key) : undefined;
+      if (affectedRoot) await reloadRootSubtree(affectedRoot);
     } catch (err: any) {
-      if (err instanceof AxiosError && err.response?.status === 400) {
-        Modal.error({ title: '安全合并校验被拒绝', content: err.response.data.error });
-      } else {
-        message.error('请求失败');
-      }
+      if (err instanceof AxiosError && err.response?.data?.error)
+        Modal.error({ title: 'Merge rejected', content: err.response.data.error });
+      else message.error('Merge failed');
     }
   };
 
-  const columns = [
-    { 
-      title: '网段 (CIDR)', 
-      dataIndex: 'cidr', 
-      key: 'cidr', 
-      render: (text: string, r: UINode) => r.level === 'Root' ? <strong style={{ fontSize: 15 }}>{text}</strong> : text 
-    },
-    { 
-      title: '级别', 
-      dataIndex: 'level', 
-      key: 'level', 
-      render: (l: string) => <Tag color={l === 'Root' ? 'purple' : l === 'L1' ? 'blue' : 'cyan'}>{l}</Tag> 
+  // ─── Columns ────────────────────────────────────────────────────────────────
+  const columns: ColumnsType<UINode> = [
+    {
+      title:     t('ipam.root.cidr'),
+      dataIndex: 'cidr',
+      key:       'cidr',
+      render:    (v: string, r: UINode) =>
+        r.level === 'Root'
+          ? <strong style={{ fontSize: 15 }}>{v}</strong>
+          : v,
     },
     {
-      title: '操作',
-      key: 'action',
-      render: (_: any, record: UINode) => (
-        <Space size="middle">
-          <Button type="link" size="small" onClick={() => openSplitModal(record)}>
-            {record.children?.length ? '覆盖拆分' : '往下拆分'}
+      title:     t('ipam.subnet.level'),
+      dataIndex: 'level',
+      key:       'level',
+      width:     90,
+      render:    (l: string) => (
+        <Tag color={l === 'Root' ? 'purple' : l === 'L1' ? 'blue' : 'cyan'}>{l}</Tag>
+      ),
+    },
+    {
+      title:  t('common.actions'),
+      key:    'action',
+      width:  210,
+      render: (_: unknown, r: UINode) => (
+        <Space>
+          <Button type="link" size="small" onClick={() => openSplit(r)}>
+            {r.children?.length ? t('ipam.subnet.overSplit') : t('ipam.subnet.split')}
           </Button>
-          
-          {record.children && record.children.length > 0 && (
-            <Button type="link" size="small" onClick={() => openMergeModal(record)}>
-              合并下属子网
+          {r.children && r.children.length > 0 && (
+            <Button type="link" size="small" onClick={() => openMerge(r)}>
+              {t('ipam.subnet.merge')}
             </Button>
           )}
         </Space>
@@ -194,82 +265,90 @@ const TabSubnetTree: React.FC = () => {
     },
   ];
 
+  // Apply CIDR search filter
+  const visibleData = searchCIDR ? filterTree(treeData, searchCIDR.trim()) : treeData;
+
   return (
     <div>
-      <div style={{ marginBottom: 16, background: '#f5f5f5', padding: '12px 16px', borderRadius: 6 }}>
-        <span style={{ marginRight: 12, fontWeight: 500 }}>当前作用域 (根前缀) :</span>
-        <Select 
-          style={{ width: 350 }} 
-          value={selectedRootId} 
-          onChange={setSelectedRootId}
-          placeholder="请选择顶级根前缀"
-        >
-          {roots.map(r => (
-            <Select.Option key={r.id} value={r.id}>
-              {r.cidr} ({r.group || '无分组'})
-            </Select.Option>
-          ))}
-        </Select>
-      </div>
+      {/* Search */}
+      <Space style={{ marginBottom: 16 }}>
+        <Input
+          prefix={<SearchOutlined />}
+          placeholder={t('ipam.subnet.search')}
+          value={searchCIDR}
+          onChange={(e) => setSearchCIDR(e.target.value)}
+          allowClear
+          style={{ width: 240 }}
+        />
+      </Space>
 
-      <Table 
-        columns={columns} 
-        dataSource={treeData} 
+      {/* Tree table */}
+      <Table
+        columns={columns}
+        dataSource={visibleData}
         rowKey="key"
         loading={loading}
-        defaultExpandAllRows
-        pagination={false}
+        expandable={{
+          expandedRowKeys,
+          onExpand:              handleExpand,
+          indentSize:            20,
+          expandRowByClick:      false,
+        }}
+        pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (n) => `${n} root prefixes` }}
+        locale={{ emptyText: roots.length === 0
+          ? 'No root prefixes found — create one in the Root Prefixes tab'
+          : t('common.noData') }}
       />
 
+      {/* Split Modal */}
       <Modal
-        title={splitNode?.children?.length ? "危险：覆盖拆分" : "新建拆分"}
-        open={isSplitOpen}
+        title={splitNode?.children?.length ? t('ipam.subnet.reSplitTitle') : t('ipam.subnet.splitTitle')}
+        open={splitOpen}
         onOk={handleSplitSubmit}
-        onCancel={() => setIsSplitOpen(false)}
-        okText="确认拆分"
+        onCancel={() => setSplitOpen(false)}
+        okText={t('ipam.subnet.split')}
+        cancelText={t('common.cancel')}
         destroyOnClose
       >
         <Form form={splitForm} layout="vertical">
-          <div style={{ marginBottom: 20 }}>
-            <div>当前目标：<strong>{splitNode?.cidr}</strong> <Tag>{splitNode?.level}</Tag></div>
-            {splitNode?.children?.length ? (
-               <Alert style={{ marginTop: 12 }} type="error" message="危险操作" description="当前节点已存在子网，此操作将清除旧的所有级联子网数据，并完全覆盖为新拆分的网段！" showIcon />
-            ) : null}
-          </div>
-          <Form.Item name="target_bits" label="选择目标掩码长度 (Subnet Mask)" rules={[{ required: true, message: '请选择目标掩码' }]}>
-            <Select placeholder="请选择将要切割出的网段大小">
-              {maskOptions}
-            </Select>
+          <p>
+            Target: <strong>{splitNode?.cidr}</strong>&nbsp;
+            <Tag color={splitNode?.level === 'Root' ? 'purple' : splitNode?.level === 'L1' ? 'blue' : 'cyan'}>
+              {splitNode?.level}
+            </Tag>
+          </p>
+          {splitNode?.children?.length ? (
+            <Alert type="error" showIcon message={t('ipam.subnet.reSplitWarn')} style={{ marginBottom: 16 }} />
+          ) : null}
+          <Form.Item
+            name="target_bits"
+            label={t('ipam.subnet.targetMask')}
+            rules={[{ required: true, message: 'Please select a prefix length' }]}
+          >
+            <Select placeholder="Select subnet size" options={maskOptions} />
           </Form.Item>
         </Form>
       </Modal>
 
+      {/* Merge Modal */}
       <Modal
-        title={`安全合并下属子网 - 所属父级: ${mergeParentNode?.cidr}`}
-        open={isMergeOpen}
+        title={t('ipam.subnet.mergeTitle', { cidr: mergeParent?.cidr ?? '' })}
+        open={mergeOpen}
         onOk={handleMergeSubmit}
-        onCancel={() => setIsMergeOpen(false)}
-        okText="确认尝试合并"
-        width={650}
+        onCancel={() => setMergeOpen(false)}
+        okText={t('ipam.subnet.merge')}
+        cancelText={t('common.cancel')}
+        width={620}
         destroyOnClose
       >
-        <Alert 
-          style={{ marginBottom: 16 }} 
-          type="info" 
-          message="合并校验规则" 
-          description="请勾选需要合并的同级子网。它们必须严格相邻、连续，且选中的数量必须是 2 的整数次幂（2, 4, 8, 16...），后端将执行绝对严格的标准网段判定。" 
-          showIcon 
-        />
+        <Alert type="info" showIcon message={t('ipam.subnet.mergeRules')} style={{ marginBottom: 16 }} />
         <Table
-          rowSelection={{
-            selectedRowKeys: mergeSelectedKeys,
-            onChange: setMergeSelectedKeys,
-          }}
+          rowSelection={{ selectedRowKeys: mergeSelected, onChange: setMergeSelected }}
           columns={[
-            { title: '需要合并的子网', dataIndex: 'cidr', key: 'cidr', render: (t) => <strong>{t}</strong> },
-            { title: '级别', dataIndex: 'level', key: 'level' }
+            { title: 'CIDR', dataIndex: 'cidr', key: 'cidr', render: (v: string) => <strong>{v}</strong> },
+            { title: 'Level', dataIndex: 'level', key: 'level', width: 80 },
           ]}
-          dataSource={mergeParentNode?.children || []}
+          dataSource={mergeParent?.children ?? []}
           rowKey="key"
           pagination={false}
           size="small"
@@ -278,5 +357,21 @@ const TabSubnetTree: React.FC = () => {
     </div>
   );
 };
+
+/** Walk the tree to find which Root-level node contains the given key */
+function findRootId(nodes: UINode[], targetKey: string): number | undefined {
+  for (const n of nodes) {
+    if (n.target_type === 'root') {
+      if (n.key === targetKey || containsKey(n.children ?? [], targetKey)) {
+        return n.id;
+      }
+    }
+  }
+  return undefined;
+}
+
+function containsKey(nodes: UINode[], key: string): boolean {
+  return nodes.some((n) => n.key === key || containsKey(n.children ?? [], key));
+}
 
 export default TabSubnetTree;

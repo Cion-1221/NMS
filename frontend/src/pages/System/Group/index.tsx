@@ -6,10 +6,17 @@ import { ExclamationCircleFilled, PlusOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { listGroups, createGroup, updateGroup, deleteGroup } from '../../../api/system';
 import { SysGroup } from '../../../types/system';
+import { useT } from '../../../i18n';
 
 const { confirm } = Modal;
 
+const isAdmin = (g: SysGroup) => {
+  try { return (JSON.parse(g.permissions) as string[]).includes('admin'); }
+  catch { return false; }
+};
+
 const SystemGroupPage: React.FC = () => {
+  const t = useT();
   const [groups, setGroups] = useState<SysGroup[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -24,43 +31,28 @@ const SystemGroupPage: React.FC = () => {
 
   const fetchData = async () => {
     setLoading(true);
-    try {
-      const res = await listGroups();
-      setGroups(res.data);
-    } catch {
-      message.error('用户组数据加载失败');
-    } finally {
-      setLoading(false);
-    }
+    try { const r = await listGroups(); setGroups(r.data); }
+    catch { message.error('Failed to load groups'); }
+    finally { setLoading(false); }
   };
 
   useEffect(() => { fetchData(); }, []);
 
-  const isAdmin = (g: SysGroup) => {
-    try { return (JSON.parse(g.permissions) as string[]).includes('admin'); }
-    catch { return false; }
-  };
-
-  // ── 新建 ──────────────────────────────────────────────────────────────────
   const handleCreate = async () => {
-    let values: any;
-    try { values = await createForm.validateFields(); } catch { return; }
-    const permissions = JSON.stringify(values.is_admin ? ['admin'] : []);
+    let v: any;
+    try { v = await createForm.validateFields(); } catch { return; }
+    const perms = JSON.stringify(v.is_admin ? ['admin'] : []);
     setCreating(true);
     try {
-      await createGroup({ name: values.name, permissions });
-      message.success('用户组创建成功');
+      await createGroup({ name: v.name, permissions: perms });
+      message.success(t('sys.group.createOk'));
       setCreateOpen(false);
       createForm.resetFields();
       fetchData();
-    } catch (err: any) {
-      message.error(err?.response?.data?.error ?? '创建失败');
-    } finally {
-      setCreating(false);
-    }
+    } catch (err: any) { message.error(err?.response?.data?.error ?? 'Create failed'); }
+    finally { setCreating(false); }
   };
 
-  // ── 编辑 ──────────────────────────────────────────────────────────────────
   const openEdit = (g: SysGroup) => {
     setEditTarget(g);
     editForm.setFieldsValue({ name: g.name, is_admin: isAdmin(g) });
@@ -68,112 +60,91 @@ const SystemGroupPage: React.FC = () => {
   };
 
   const handleEdit = async () => {
-    let values: any;
-    try { values = await editForm.validateFields(); } catch { return; }
+    let v: any;
+    try { v = await editForm.validateFields(); } catch { return; }
     if (!editTarget) return;
-    const permissions = JSON.stringify(values.is_admin ? ['admin'] : []);
+    const perms = JSON.stringify(v.is_admin ? ['admin'] : []);
     setEditing(true);
     try {
-      await updateGroup(editTarget.id, { name: values.name, permissions });
-      message.success('用户组已更新');
+      await updateGroup(editTarget.id, { name: v.name, permissions: perms });
+      message.success(t('sys.group.editOk'));
       setEditOpen(false);
       editForm.resetFields();
       fetchData();
-    } catch (err: any) {
-      message.error(err?.response?.data?.error ?? '更新失败');
-    } finally {
-      setEditing(false);
-    }
+    } catch (err: any) { message.error(err?.response?.data?.error ?? 'Update failed'); }
+    finally { setEditing(false); }
   };
 
-  // ── 删除 ──────────────────────────────────────────────────────────────────
   const handleDelete = (g: SysGroup) => {
     confirm({
-      title: `确认删除用户组 "${g.name}"？`,
-      icon: <ExclamationCircleFilled style={{ color: '#ff4d4f' }} />,
-      content: '组内不能有用户，否则将拒绝删除。',
-      okText: '确认删除', okType: 'danger', cancelText: '取消',
+      title:   t('sys.group.delTitle', { name: g.name }),
+      icon:    <ExclamationCircleFilled style={{ color: '#ff4d4f' }} />,
+      content: t('sys.group.delBody'),
+      okText:  t('common.delete'),
+      okType:  'danger',
+      cancelText: t('common.cancel'),
       onOk: async () => {
-        try {
-          await deleteGroup(g.id);
-          message.success('用户组已删除');
-          fetchData();
-        } catch (err: any) {
-          message.error(err?.response?.data?.error ?? '删除失败');
-        }
+        try { await deleteGroup(g.id); message.success(t('sys.group.delOk')); fetchData(); }
+        catch (err: any) { message.error(err?.response?.data?.error ?? 'Delete failed'); }
       },
     });
   };
 
   const columns: ColumnsType<SysGroup> = [
-    { title: 'ID', dataIndex: 'id', key: 'id', width: 70 },
-    { title: '用户组名称', dataIndex: 'name', key: 'name', render: (v) => <strong>{v}</strong> },
+    { title: t('common.id'),       dataIndex: 'id',   key: 'id',   width: 60 },
+    { title: t('sys.group.name'),  dataIndex: 'name', key: 'name', render: (v) => <strong>{v}</strong> },
     {
-      title: '权限级别', key: 'permission',
+      title:  t('sys.group.level'),
+      key:    'level',
       render: (_, g) => isAdmin(g)
-        ? <Badge status="error" text={<Tag color="red">管理员组</Tag>} />
-        : <Badge status="default" text={<Tag>普通用户组</Tag>} />,
+        ? <Badge status="error"   text={<Tag color="red">{t('sys.group.admin')}</Tag>} />
+        : <Badge status="default" text={<Tag>{t('sys.group.regular')}</Tag>} />,
     },
     {
-      title: '操作', key: 'action',
+      title:  t('common.actions'),
+      key:    'action',
       render: (_, g) => (
         <Space>
-          <Button size="small" type="link" onClick={() => openEdit(g)}>编辑</Button>
-          <Button size="small" type="text" danger onClick={() => handleDelete(g)}>删除</Button>
+          <Button size="small" type="link" onClick={() => openEdit(g)}>{t('common.edit')}</Button>
+          <Button size="small" type="text" danger onClick={() => handleDelete(g)}>{t('common.delete')}</Button>
         </Space>
       ),
     },
   ];
 
+  const groupForm = (form: any, initial?: { is_admin?: boolean }) => (
+    <Form form={form} layout="vertical" style={{ marginTop: 16 }} initialValues={{ is_admin: false, ...initial }}>
+      <Form.Item label={t('sys.group.name')} name="name" rules={[{ required: true, min: 2, max: 100 }]}>
+        <Input />
+      </Form.Item>
+      <Form.Item label={t('sys.group.isAdmin')} name="is_admin" valuePropName="checked"
+        extra={t('sys.group.adminHint')}>
+        <Switch checkedChildren={t('sys.group.admin')} unCheckedChildren={t('sys.group.regular')} />
+      </Form.Item>
+    </Form>
+  );
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>用户组管理</Typography.Title>
+        <Typography.Title level={4} style={{ margin: 0 }}>{t('sys.group.title')}</Typography.Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-          新建用户组
+          {t('sys.group.create')}
         </Button>
       </div>
 
       <Table columns={columns} dataSource={groups} rowKey="id" loading={loading} pagination={{ pageSize: 10 }} />
 
-      {/* 新建用户组 Modal */}
-      <Modal title="新建用户组" open={createOpen} onOk={handleCreate}
-        onCancel={() => { setCreateOpen(false); createForm.resetFields(); }}
-        okText="创建" cancelText="取消" confirmLoading={creating} width={440}
-      >
-        <Form form={createForm} layout="vertical" style={{ marginTop: 16 }}
-          initialValues={{ is_admin: false }}
-        >
-          <Form.Item label="用户组名称" name="name"
-            rules={[{ required: true, min: 2, max: 100, message: '组名 2-100 位' }]}
-          >
-            <Input placeholder="例如：ops、devops、read-only" />
-          </Form.Item>
-          <Form.Item label="管理员权限" name="is_admin" valuePropName="checked"
-            extra="开启后该组成员将拥有完整管理权限（创建/修改用户、管理用户组等）"
-          >
-            <Switch checkedChildren="管理员组" unCheckedChildren="普通用户组" />
-          </Form.Item>
-        </Form>
+      <Modal title={t('sys.group.create')} open={createOpen}
+        onOk={handleCreate} onCancel={() => { setCreateOpen(false); createForm.resetFields(); }}
+        okText={t('common.create')} cancelText={t('common.cancel')} confirmLoading={creating} width={440}>
+        {groupForm(createForm)}
       </Modal>
 
-      {/* 编辑用户组 Modal */}
-      <Modal title={`编辑用户组：${editTarget?.name}`} open={editOpen}
+      <Modal title={t('sys.group.editTitle', { name: editTarget?.name ?? '' })} open={editOpen}
         onOk={handleEdit} onCancel={() => { setEditOpen(false); editForm.resetFields(); }}
-        okText="保存" cancelText="取消" confirmLoading={editing} width={440}
-      >
-        <Form form={editForm} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item label="用户组名称" name="name"
-            rules={[{ required: true, min: 2, max: 100, message: '组名 2-100 位' }]}
-          >
-            <Input />
-          </Form.Item>
-          <Form.Item label="管理员权限" name="is_admin" valuePropName="checked"
-            extra="撤销最后一个管理员组的权限时，系统会自动拒绝"
-          >
-            <Switch checkedChildren="管理员组" unCheckedChildren="普通用户组" />
-          </Form.Item>
-        </Form>
+        okText={t('common.save')} cancelText={t('common.cancel')} confirmLoading={editing} width={440}>
+        {groupForm(editForm, { is_admin: editTarget ? isAdmin(editTarget) : false })}
       </Modal>
     </div>
   );

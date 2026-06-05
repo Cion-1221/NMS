@@ -1,5 +1,5 @@
 import client from './client';
-import { AuthUser, LoginResp, RefreshResp, ChangePasswordResp } from '../types/auth';
+import { AuthUser, ChangePasswordResp, LoginResp, RefreshResp } from '../types/auth';
 
 export const login = (username: string, password: string) =>
   client.post<LoginResp>('/auth/login', { username, password });
@@ -13,13 +13,15 @@ export const changePassword = (oldPassword: string, newPassword: string) =>
     new_password: newPassword,
   });
 
-/** 用 Refresh Token 换取新的 Access Token（不走 JWT 中间件）*/
 export const refreshToken = (token: string) =>
   client.post<RefreshResp>('/auth/refresh', { refresh_token: token });
 
-/** 更新当前用户的会话令牌有效期（1-720 小时）*/
 export const updateTokenSettings = (tokenLifetimeHours: number) =>
   client.put<{ message: string; token_lifetime_hours: number }>(
     '/auth/settings',
     { token_lifetime_hours: tokenLifetimeHours },
   );
+
+/** Update UI preferences: theme and/or language */
+export const updateProfile = (data: { theme?: string; language?: string }) =>
+  client.put<AuthUser>('/auth/profile', data);

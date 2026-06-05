@@ -3,26 +3,34 @@ import { Button, Card, Form, Input, message, Typography } from 'antd';
 import { LockOutlined, UserOutlined } from '@ant-design/icons';
 import { login as loginApi } from '../../api/auth';
 import { useAuth } from '../../contexts/AuthContext';
+import { useAppContext } from '../../contexts/AppContext';
+import { useT } from '../../i18n';
 
 const { Title, Text } = Typography;
 
 const LoginPage: React.FC = () => {
-  const { login } = useAuth();
+  const { login }         = useAuth();
+  const { resolvedTheme } = useAppContext();
+  const t                 = useT();
   const [loading, setLoading] = useState(false);
 
   const handleFinish = async (values: { username: string; password: string }) => {
     setLoading(true);
     try {
       const res = await loginApi(values.username, values.password);
-      // 将完整 Token 包存入 AuthContext（含 refresh_token + expires_at）
       login(res.data);
     } catch (err: any) {
-      const msg = err?.response?.data?.error ?? '登录失败，请检查网络';
-      message.error(msg);
+      message.error(err?.response?.data?.error ?? t('auth.login.errCred'));
     } finally {
       setLoading(false);
     }
   };
+
+  const isDark = resolvedTheme === 'dark';
+
+  const bg = isDark
+    ? 'linear-gradient(135deg, #0a0a0a 0%, #111c30 100%)'
+    : 'linear-gradient(135deg, #e8f0fe 0%, #f0f4ff 100%)';
 
   return (
     <div
@@ -31,51 +39,57 @@ const LoginPage: React.FC = () => {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'linear-gradient(135deg, #141414 0%, #1d2b45 100%)',
+        background: bg,
+        padding: '16px',
       }}
     >
       <Card
-        style={{ width: 380, borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}
+        style={{
+          width: '100%',
+          maxWidth: 400,
+          borderRadius: 16,
+          boxShadow: isDark
+            ? '0 8px 40px rgba(0,0,0,0.6)'
+            : '0 8px 40px rgba(0,0,0,0.12)',
+        }}
         variant="borderless"
       >
-        {/* Logo */}
+        {/* Brand */}
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
           <div
             style={{
-              width: 56, height: 56, borderRadius: 12,
-              background: 'linear-gradient(135deg, #1677ff, #0958d9)',
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              marginBottom: 12,
+              width: 60,
+              height: 60,
+              borderRadius: 14,
+              background: 'linear-gradient(135deg,#1677ff,#0950d9)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: 14,
             }}
           >
-            <span style={{ color: '#fff', fontSize: 24, fontWeight: 'bold' }}>N</span>
+            <span style={{ color: '#fff', fontSize: 26, fontWeight: 900, fontFamily: 'monospace' }}>N</span>
           </div>
-          <Title level={3} style={{ margin: 0 }}>NMS 网络管理系统</Title>
-          <Text type="secondary" style={{ fontSize: 13 }}>Network Management System</Text>
+          <Title level={3} style={{ margin: 0 }}>NMS</Title>
+          <Text type="secondary">{t('auth.login.subtitle')}</Text>
         </div>
 
-        <Form layout="vertical" onFinish={handleFinish} autoComplete="off">
-          <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
-            <Input
-              size="large"
-              prefix={<UserOutlined style={{ color: '#bfbfbf' }} />}
-              placeholder="用户名"
-            />
+        <Form layout="vertical" onFinish={handleFinish} autoComplete="off" size="large">
+          <Form.Item name="username" rules={[{ required: true, message: `${t('auth.login.username')} is required` }]}>
+            <Input prefix={<UserOutlined />} placeholder={t('auth.login.username')} />
           </Form.Item>
+
           <Form.Item
             name="password"
-            rules={[{ required: true, message: '请输入密码' }]}
+            rules={[{ required: true, message: `${t('auth.login.password')} is required` }]}
             style={{ marginBottom: 24 }}
           >
-            <Input.Password
-              size="large"
-              prefix={<LockOutlined style={{ color: '#bfbfbf' }} />}
-              placeholder="密码"
-            />
+            <Input.Password prefix={<LockOutlined />} placeholder={t('auth.login.password')} />
           </Form.Item>
+
           <Form.Item style={{ marginBottom: 0 }}>
-            <Button type="primary" htmlType="submit" size="large" block loading={loading}>
-              登 录
+            <Button type="primary" htmlType="submit" block loading={loading}>
+              {t('auth.login.btn')}
             </Button>
           </Form.Item>
         </Form>

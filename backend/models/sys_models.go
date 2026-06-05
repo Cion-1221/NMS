@@ -5,7 +5,6 @@ import (
 	"time"
 )
 
-// SysGroup 系统用户组
 type SysGroup struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	Name        string    `gorm:"type:varchar(100);uniqueIndex;not null" json:"name"`
@@ -16,7 +15,6 @@ type SysGroup struct {
 
 func (SysGroup) TableName() string { return "sys_groups" }
 
-// IsAdmin 判断此用户组是否拥有管理员权限
 func (g *SysGroup) IsAdmin() bool {
 	var perms []string
 	if err := json.Unmarshal([]byte(g.Permissions), &perms); err != nil {
@@ -30,7 +28,6 @@ func (g *SysGroup) IsAdmin() bool {
 	return false
 }
 
-// SysUser 系统用户
 type SysUser struct {
 	ID                 uint      `gorm:"primaryKey" json:"id"`
 	Username           string    `gorm:"type:varchar(100);uniqueIndex;not null" json:"username"`
@@ -38,15 +35,16 @@ type SysUser struct {
 	GroupID            uint      `gorm:"not null;index" json:"group_id"`
 	Group              SysGroup  `gorm:"foreignKey:GroupID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"group,omitempty"`
 	MustChangePassword bool      `gorm:"not null;default:true" json:"must_change_password"`
-	// TokenLifetimeHours 该用户的会话令牌有效期（小时），0 = 使用系统默认 24h
 	TokenLifetimeHours int       `gorm:"not null;default:24" json:"token_lifetime_hours"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	// UI preferences (stored per-user)
+	Theme    string `gorm:"type:varchar(20);not null;default:'system'" json:"theme"`
+	Language string `gorm:"type:varchar(10);not null;default:'en'" json:"language"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (SysUser) TableName() string { return "sys_users" }
 
-// SysRefreshToken 刷新令牌表（SHA-256 哈希存储，不存明文）
 type SysRefreshToken struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
 	UserID    uint      `gorm:"not null;index" json:"user_id"`

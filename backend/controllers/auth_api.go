@@ -76,6 +76,8 @@ func buildUserInfo(user *models.SysUser, isAdmin bool) gin.H {
 		"is_admin":             isAdmin,
 		"must_change_password": user.MustChangePassword,
 		"token_lifetime_hours": user.TokenLifetimeHours,
+		"theme":                user.Theme,
+		"language":             user.Language,
 	}
 }
 
@@ -317,6 +319,56 @@ func UpdateTokenSettings(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// UpdateProfile PUT /api/v1/auth/profile（更新 UI 偏好设置：主题、语言）
+func UpdateProfile(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		claims := c.MustGet(middleware.CtxUserKey).(*middleware.Claims)
+
+		var req struct {
+			Theme    *string `json:"theme"`
+			Language *string `json:"language"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+			return
+		}
+
+		updates := map[string]interface{}{}
+		if req.Theme != nil {
+			valid := map[string]bool{"light": true, "dark": true, "system": true}
+			if !valid[*req.Theme] {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid theme value, must be light|dark|system"})
+				return
+			}
+			updates["theme"] = *req.Theme
+		}
+		if req.Language != nil {
+			valid := map[string]bool{"en": true, "zh": true}
+			if !valid[*req.Language] {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid language value, must be en|zh"})
+				return
+			}
+			updates["language"] = *req.Language
+		}
+		if len(updates) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "No fields to update"})
+			return
+		}
+
+		var user models.SysUser
+		if err := db.Preload("Group").First(&user, claims.UserID).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+			return
+		}
+		if err := db.Model(&user).Updates(updates).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Update failed"})
+			return
+		}
+		db.Preload("Group").First(&user, claims.UserID)
+		c.JSON(http.StatusOK, buildUserInfo(&user, user.Group.IsAdmin()))
+	}
+}
+
 // RegisterAuthRoutes 注册认证相关路由
 func RegisterAuthRoutes(r *gin.Engine, db *gorm.DB, cfg AuthConfig) {
 	authMW := middleware.JWTAuth(cfg.JWTSecret)
@@ -333,5 +385,6 @@ func RegisterAuthRoutes(r *gin.Engine, db *gorm.DB, cfg AuthConfig) {
 		auth.GET("/me", GetMe(db))
 		auth.POST("/change-password", ChangePassword(db, cfg))
 		auth.PUT("/settings", UpdateTokenSettings(db))
+		auth.PUT("/profile", UpdateProfile(db))
 	}
 }

@@ -1,18 +1,16 @@
 import React, { useState } from 'react';
 import { Avatar, Dropdown, Layout, Menu, Space, Typography } from 'antd';
 import {
-  ClockCircleOutlined,
   ClusterOutlined,
   LogoutOutlined,
-  LockOutlined,
   SettingOutlined,
   TeamOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import ChangePasswordModal from '../components/ChangePasswordModal';
-import SessionSettingsModal from '../components/SessionSettingsModal';
+import { useT } from '../i18n';
+import ProfileModal from '../components/ProfileModal';
 
 const { Header, Content, Sider } = Layout;
 const { Text } = Typography;
@@ -21,51 +19,45 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
-  const [changePwdOpen, setChangePwdOpen] = useState(false);
-  const [sessionOpen, setSessionOpen] = useState(false);
+  const t = useT();
+  const [profileOpen, setProfileOpen] = useState(false);
 
-  const currentPath = location.pathname;
-  const defaultOpenKeys = currentPath.startsWith('/system') ? ['system'] : ['network_server'];
+  const currentPath  = location.pathname;
+  const defaultOpen  = currentPath.startsWith('/system') ? ['system'] : ['network_server'];
 
   const sidebarItems = [
     {
-      key: 'network_server',
-      icon: <ClusterOutlined />,
-      label: 'Network Server',
-      children: [{ key: '/ipam', label: 'IPAM 地址管理' }],
+      key:      'network_server',
+      icon:     <ClusterOutlined />,
+      label:    t('nav.networkServer'),
+      children: [{ key: '/ipam', label: t('nav.ipam') }],
     },
     ...(user?.is_admin
       ? [{
-          key: 'system',
-          icon: <SettingOutlined />,
-          label: 'System',
+          key:      'system',
+          icon:     <SettingOutlined />,
+          label:    t('nav.system'),
           children: [
-            { key: '/system/users',  icon: <UserOutlined />, label: 'User' },
-            { key: '/system/groups', icon: <TeamOutlined />, label: 'Group' },
+            { key: '/system/users',  icon: <UserOutlined />, label: t('nav.users') },
+            { key: '/system/groups', icon: <TeamOutlined />, label: t('nav.groups') },
           ],
         }]
       : []),
   ];
 
-  const userMenuItems = [
+  const dropdownItems = [
     {
-      key: 'change-pwd',
-      icon: <LockOutlined />,
-      label: '修改密码',
-      onClick: () => setChangePwdOpen(true),
-    },
-    {
-      key: 'session',
-      icon: <ClockCircleOutlined />,
-      label: '会话时长设置',
-      onClick: () => setSessionOpen(true),
+      key:     'profile',
+      icon:    <UserOutlined />,
+      label:   t('profile.title'),
+      onClick: () => setProfileOpen(true),
     },
     { type: 'divider' as const },
     {
-      key: 'logout',
-      icon: <LogoutOutlined />,
-      label: '退出登录',
-      danger: true,
+      key:     'logout',
+      icon:    <LogoutOutlined />,
+      label:   t('auth.logout'),
+      danger:  true,
       onClick: () => logout(),
     },
   ];
@@ -77,18 +69,18 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
           <div
             style={{
               height: 40, margin: '12px 16px', borderRadius: 6,
-              background: 'rgba(255,255,255,0.15)',
+              background: 'rgba(255,255,255,0.12)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: '#fff', fontWeight: 700, fontSize: 14, letterSpacing: 1,
+              color: '#fff', fontWeight: 700, fontSize: 15, letterSpacing: 1,
             }}
           >
-            NMS 网络管理
+            {t('nav.brand')}
           </div>
           <Menu
             theme="dark"
             mode="inline"
             selectedKeys={[currentPath]}
-            defaultOpenKeys={defaultOpenKeys}
+            defaultOpenKeys={defaultOpen}
             items={sidebarItems}
             onSelect={({ key }) => navigate(key)}
           />
@@ -97,32 +89,34 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         <Layout>
           <Header
             style={{
-              background: '#fff', padding: '0 24px',
-              boxShadow: '0 1px 4px rgba(0,21,41,.08)',
-              display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+              background: 'inherit',
+              padding: '0 24px',
+              boxShadow: '0 1px 4px rgba(0,0,0,.08)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-end',
             }}
           >
-            <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
+            <Dropdown menu={{ items: dropdownItems }} placement="bottomRight" trigger={['click']}>
               <Space style={{ cursor: 'pointer', userSelect: 'none' }}>
                 <Avatar size="small" icon={<UserOutlined />} style={{ background: '#1677ff' }} />
                 <Text style={{ fontSize: 14 }}>{user?.username}</Text>
                 {user?.is_admin && (
-                  <Text type="secondary" style={{ fontSize: 12 }}>管理员</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>{t('auth.admin')}</Text>
                 )}
               </Space>
             </Dropdown>
           </Header>
 
           <Content style={{ margin: 16 }}>
-            <div style={{ padding: 24, minHeight: 360, background: '#fff', borderRadius: 8 }}>
+            <div style={{ padding: 24, minHeight: 360, borderRadius: 8 }}>
               {children}
             </div>
           </Content>
         </Layout>
       </Layout>
 
-      <ChangePasswordModal open={changePwdOpen} forced={false} onClose={() => setChangePwdOpen(false)} />
-      <SessionSettingsModal open={sessionOpen} onClose={() => setSessionOpen(false)} />
+      <ProfileModal open={profileOpen} onClose={() => setProfileOpen(false)} />
     </>
   );
 };
