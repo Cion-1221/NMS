@@ -35,11 +35,19 @@ func bigIntToIP(i *big.Int, is4 bool) (netip.Addr, error) {
 	if is4 {
 		var b [4]byte
 		i.FillBytes(b[:])
-		return netip.AddrFromSlice(b[:])
+		addr, ok := netip.AddrFromSlice(b[:])
+		if !ok {
+			return netip.Addr{}, fmt.Errorf("无效的 IPv4 地址字节序列")
+		}
+		return addr, nil
 	}
 	var b [16]byte
 	i.FillBytes(b[:])
-	return netip.AddrFromSlice(b[:])
+	addr, ok := netip.AddrFromSlice(b[:])
+	if !ok {
+		return netip.Addr{}, fmt.Errorf("无效的 IPv6 地址字节序列")
+	}
+	return addr, nil
 }
 
 func CalculateSplitSubnets(cidr string, targetBits int) ([]string, error) {
