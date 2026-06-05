@@ -149,7 +149,7 @@ func GetSubnetTree(db *gorm.DB) gin.HandlerFunc {
 		rootPrefixID := c.Param("id")
 		var subnets []models.Subnet
 
-		if err := db.Where("root_prefix_id = ?", rootPrefixID).Order("cidr asc").Find(&subnets).Error; err != nil {
+		if err := db.Where("root_prefix_id = ?", rootPrefixID).Order("id asc").Find(&subnets).Error; err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "查询树失败: " + err.Error()})
 			return
 		}

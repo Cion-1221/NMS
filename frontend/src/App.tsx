@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { ConfigProvider, Spin, theme as antdTheme } from 'antd';
 import enUS from 'antd/locale/en_US';
@@ -17,6 +17,13 @@ import ChangePasswordModal from './components/ChangePasswordModal';
 
 const ThemedShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { resolvedTheme, language } = useAppContext();
+
+  useEffect(() => {
+    document.title = language === 'zh'
+      ? 'NMS - 网络管理系统'
+      : 'NMS - Network Management System';
+  }, [language]);
+
   return (
     <ConfigProvider
       theme={{ algorithm: resolvedTheme === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm }}
