@@ -33,8 +33,6 @@ interface UINode {
   remark?:     string;
 }
 
-interface Props { onCount?: (n: number) => void; }
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function mapSubnets(subnets: SubnetNode[], is_v4: boolean): UINode[] {
@@ -76,7 +74,7 @@ function filterTree(
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-const TabSubnetTree: React.FC<Props> = ({ onCount }) => {
+const TabSubnetTree: React.FC = () => {
   const t = useT();
 
   const [roots, setRoots]       = useState<RootPrefix[]>([]);
@@ -123,7 +121,6 @@ const TabSubnetTree: React.FC<Props> = ({ onCount }) => {
           children: [],
         }));
         setTreeData(initial);
-        onCount?.(initial.length);
       } catch {
         message.error('Failed to load root prefixes');
       } finally {
@@ -266,30 +263,30 @@ const TabSubnetTree: React.FC<Props> = ({ onCount }) => {
 
   const columns: ColumnsType<UINode> = [
     {
-      title: t('ipam.root.cidr'), dataIndex: 'cidr', key: 'cidr', width: 200,
+      title: t('ipam.root.cidr'), dataIndex: 'cidr', key: 'cidr',
       render: (v: string, r: UINode) =>
         r.level === 'Root' ? <strong style={{ fontSize: 15 }}>{v}</strong> : v,
     },
     {
-      title: t('ipam.subnet.level'), dataIndex: 'level', key: 'level', width: 65,
+      title: t('ipam.subnet.level'), dataIndex: 'level', key: 'level',
       render: (l: string) => (
         <Tag color={l === 'Root' ? 'purple' : l === 'L1' ? 'blue' : 'cyan'}>{l}</Tag>
       ),
     },
-    { title: t('ipam.root.group'), key: 'group', width: 120, render: (_, r) => r.group?.name || '—' },
-    { title: t('ipam.root.type'),  key: 'type',  width: 120, render: (_, r) => r.type?.name  || '—' },
+    { title: t('ipam.root.group'), key: 'group', render: (_, r) => r.group?.name || '—' },
+    { title: t('ipam.root.type'),  key: 'type',  render: (_, r) => r.type?.name  || '—' },
     {
-      title: t('ipam.root.vrf'), key: 'vrf', width: 140,
+      title: t('ipam.root.vrf'), key: 'vrf',
       render: (_, r) => r.vrf ? `${r.vrf.name}${r.vrf.rd ? ` (${r.vrf.rd})` : ''}` : '—',
     },
     {
-      title: t('ipam.root.remark'), key: 'remark', width: 160, ellipsis: true,
+      title: t('ipam.root.remark'), key: 'remark', ellipsis: true, width: 200,
       render: (_, r) => r.remark
         ? <Tooltip title={r.remark}>{r.remark}</Tooltip>
         : '—',
     },
     {
-      title: t('common.actions'), key: 'action', width: 200, fixed: 'right',
+      title: t('common.actions'), key: 'action', width: 190,
       render: (_: unknown, r: UINode) => (
         <Space size={0}>
           <Button type="link" size="small" onClick={() => openSplit(r)}>
@@ -370,7 +367,6 @@ const TabSubnetTree: React.FC<Props> = ({ onCount }) => {
         locale={{ emptyText: roots.length === 0
           ? 'No root prefixes found — create one in the Root Prefixes tab'
           : t('common.noData') }}
-        scroll={{ x: 1040 }}
       />
 
       {/* Split Modal */}

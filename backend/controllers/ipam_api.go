@@ -64,6 +64,21 @@ func sortSubnetsByIP(subnets []models.Subnet) {
 	})
 }
 
+func sortRootsByIP(roots []models.RootPrefix) {
+	sort.Slice(roots, func(i, j int) bool {
+		pi, errI := netip.ParsePrefix(roots[i].CIDR)
+		pj, errJ := netip.ParsePrefix(roots[j].CIDR)
+		if errI != nil || errJ != nil {
+			return roots[i].CIDR < roots[j].CIDR
+		}
+		c := pi.Addr().Compare(pj.Addr())
+		if c != 0 {
+			return c < 0
+		}
+		return pi.Bits() < pj.Bits()
+	})
+}
+
 // ── IPAM Group CRUD ────────────────────────────────────────────────────────────
 
 func ListIPAMGroups(db *gorm.DB) gin.HandlerFunc {
@@ -353,7 +368,8 @@ func CreateRootPrefix(db *gorm.DB) gin.HandlerFunc {
 func ListRootPrefixes(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var roots []models.RootPrefix
-		db.Preload("Group").Preload("Type").Preload("VRF").Order("created_at desc").Find(&roots)
+		db.Preload("Group").Preload("Type").Preload("VRF").Find(&roots)
+		sortRootsByIP(roots)
 		c.JSON(http.StatusOK, roots)
 	}
 }

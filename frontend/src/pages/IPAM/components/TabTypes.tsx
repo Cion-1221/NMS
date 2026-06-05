@@ -7,9 +7,8 @@ import type { IPAMType } from '../../../types/ipam';
 import { useT } from '../../../i18n';
 
 const { confirm } = Modal;
-interface Props { onCount?: (n: number) => void; }
 
-const TabTypes: React.FC<Props> = ({ onCount }) => {
+const TabTypes: React.FC = () => {
   const t = useT();
   const [data, setData]       = useState<IPAMType[]>([]);
   const [loading, setLoading] = useState(false);
@@ -27,7 +26,6 @@ const TabTypes: React.FC<Props> = ({ onCount }) => {
   };
 
   useEffect(() => { loadData(); }, []);
-  useEffect(() => { onCount?.(data.length); }, [data.length]);
 
   const filtered = useMemo(() => {
     if (!search) return data;

@@ -20,9 +20,7 @@ const RESOURCE_OPTIONS = [
   'root_prefix', 'subnet', 'group', 'type', 'vrf', 'audit_log',
 ].map((r) => ({ value: r, label: r }));
 
-interface Props { onCount?: (n: number) => void; }
-
-const TabAuditLog: React.FC<Props> = ({ onCount }) => {
+const TabAuditLog: React.FC = () => {
   const t = useT();
 
   const [data, setData]         = useState<IPAMAuditLog[]>([]);
@@ -47,7 +45,6 @@ const TabAuditLog: React.FC<Props> = ({ onCount }) => {
       });
       setData(r.data.items ?? []);
       setTotal(r.data.total);
-      onCount?.(r.data.total);
     } catch {
       message.error('Failed to load audit logs');
     } finally {

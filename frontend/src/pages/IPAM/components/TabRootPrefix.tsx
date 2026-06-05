@@ -15,9 +15,7 @@ import { cidrMatchesSearch } from '../../../utils/cidr';
 
 const { confirm } = Modal;
 
-interface Props { onCount?: (n: number) => void; }
-
-const TabRootPrefix: React.FC<Props> = ({ onCount }) => {
+const TabRootPrefix: React.FC = () => {
   const t = useT();
   const [data, setData]       = useState<RootPrefix[]>([]);
   const [loading, setLoading] = useState(false);
@@ -63,8 +61,6 @@ const TabRootPrefix: React.FC<Props> = ({ onCount }) => {
     return true;
   });
 
-  // Report total (unfiltered) count to parent tab label
-  useEffect(() => { onCount?.(data.length); }, [data.length]);
 
   const openCreate = () => {
     setModalMode('create'); form.resetFields();
@@ -132,29 +128,29 @@ const TabRootPrefix: React.FC<Props> = ({ onCount }) => {
   }));
 
   const columns: ColumnsType<RootPrefix> = [
-    { title: t('common.id'), dataIndex: 'id', key: 'id', width: 60 },
+    { title: t('common.id'),      dataIndex: 'id',         key: 'id' },
     {
-      title: t('ipam.root.ipver'), dataIndex: 'ip_version', key: 'ip_version', width: 85,
+      title: t('ipam.root.ipver'), dataIndex: 'ip_version', key: 'ip_version',
       render: (v: number) => <Tag color={v === 4 ? 'blue' : 'green'}>IPv{v}</Tag>,
     },
     {
-      title: t('ipam.root.cidr'), dataIndex: 'cidr', key: 'cidr', width: 180,
+      title: t('ipam.root.cidr'), dataIndex: 'cidr', key: 'cidr',
       render: (v: string) => <strong>{v}</strong>,
     },
-    { title: t('ipam.root.group'), key: 'group', width: 120, render: (_, r) => r.group?.name || '—' },
-    { title: t('ipam.root.type'),  key: 'type',  width: 120, render: (_, r) => r.type?.name  || '—' },
+    { title: t('ipam.root.group'), key: 'group', render: (_, r) => r.group?.name || '—' },
+    { title: t('ipam.root.type'),  key: 'type',  render: (_, r) => r.type?.name  || '—' },
     {
-      title: t('ipam.root.vrf'), key: 'vrf', width: 150,
+      title: t('ipam.root.vrf'), key: 'vrf',
       render: (_, r) => r.vrf ? `${r.vrf.name}${r.vrf.rd ? ` (${r.vrf.rd})` : ''}` : '—',
     },
     {
-      title: t('ipam.root.remark'), key: 'remark', width: 180, ellipsis: true,
+      title: t('ipam.root.remark'), key: 'remark', ellipsis: true, width: 200,
       render: (_, r) => r.remark
         ? <Tooltip title={r.remark}>{r.remark}</Tooltip>
         : '—',
     },
     {
-      title: t('common.actions'), key: 'action', width: 130, fixed: 'right',
+      title: t('common.actions'), key: 'action', width: 120,
       render: (_, r: RootPrefix) => (
         <Space size={4}>
           <Button type="link" size="small" onClick={() => openEdit(r)}>{t('ipam.root.editBtn')}</Button>
@@ -221,7 +217,6 @@ const TabRootPrefix: React.FC<Props> = ({ onCount }) => {
           showQuickJumper: true,
           showTotal: (total, range) => `${range[0]}-${range[1]} / ${total}`,
         }}
-        scroll={{ x: 1050 }}
       />
 
       <Modal
