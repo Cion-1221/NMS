@@ -66,7 +66,7 @@ func sortSubnetsByIP(subnets []models.Subnet) {
 
 // ── IPAM Group CRUD ────────────────────────────────────────────────────────────
 
-func ListGroups(db *gorm.DB) gin.HandlerFunc {
+func ListIPAMGroups(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var groups []models.IPAMGroup
 		db.Order("name asc").Find(&groups)
@@ -74,7 +74,7 @@ func ListGroups(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-func CreateGroup(db *gorm.DB) gin.HandlerFunc {
+func CreateIPAMGroup(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
 			Name        string `json:"name" binding:"required"`
@@ -94,7 +94,7 @@ func CreateGroup(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-func UpdateGroup(db *gorm.DB) gin.HandlerFunc {
+func UpdateIPAMGroup(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, err := parseIDParam(c, "id")
 		if err != nil {
@@ -123,7 +123,7 @@ func UpdateGroup(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-func DeleteGroup(db *gorm.DB) gin.HandlerFunc {
+func DeleteIPAMGroup(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, err := parseIDParam(c, "id")
 		if err != nil {
@@ -755,10 +755,10 @@ func RegisterIPAMRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc) {
 		api.PUT("/subnets/:id", UpdateSubnet(db))
 
 		// Lookup Tables
-		api.GET("/groups", ListGroups(db))
-		api.POST("/groups", CreateGroup(db))
-		api.PUT("/groups/:id", UpdateGroup(db))
-		api.DELETE("/groups/:id", DeleteGroup(db))
+		api.GET("/groups", ListIPAMGroups(db))
+		api.POST("/groups", CreateIPAMGroup(db))
+		api.PUT("/groups/:id", UpdateIPAMGroup(db))
+		api.DELETE("/groups/:id", DeleteIPAMGroup(db))
 
 		api.GET("/types", ListIPAMTypes(db))
 		api.POST("/types", CreateIPAMType(db))
