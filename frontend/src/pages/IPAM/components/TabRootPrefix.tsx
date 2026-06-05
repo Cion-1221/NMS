@@ -11,15 +11,23 @@ import {
 } from '../../../api/ipam';
 import type { RootPrefix, IPAMGroup, IPAMType, IPAMVRF } from '../../../types/ipam';
 import { useT } from '../../../i18n';
+import { cidrMatchesSearch } from '../../../utils/cidr';
 
 const { confirm } = Modal;
 
-const TabRootPrefix: React.FC = () => {
+interface Props { onCount?: (n: number) => void; }
+
+const TabRootPrefix: React.FC<Props> = ({ onCount }) => {
   const t = useT();
-  const [data, setData]           = useState<RootPrefix[]>([]);
-  const [loading, setLoading]     = useState(false);
-  const [searchText, setSearch]   = useState('');
-  const [filterIPv, setFilterIPv] = useState<number | undefined>();
+  const [data, setData]       = useState<RootPrefix[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // Per-field filters
+  const [filterCIDR,    setFilterCIDR]    = useState('');
+  const [filterGroupId, setFilterGroupId] = useState<number | undefined>();
+  const [filterTypeId,  setFilterTypeId]  = useState<number | undefined>();
+  const [filterVrfId,   setFilterVrfId]   = useState<number | undefined>();
+  const [filterIPv,     setFilterIPv]     = useState<number | undefined>();
 
   const [groups, setGroups] = useState<IPAMGroup[]>([]);
   const [types,  setTypes]  = useState<IPAMType[]>([]);
@@ -46,23 +54,17 @@ const TabRootPrefix: React.FC = () => {
 
   useEffect(() => { fetchList(); fetchLookups(); }, []);
 
-  // Unified full-text filter across all text fields
   const filtered = data.filter((r) => {
-    if (filterIPv && r.ip_version !== filterIPv) return false;
-    if (searchText) {
-      const q = searchText.toLowerCase();
-      const haystack = [
-        r.cidr,
-        r.group?.name,
-        r.type?.name,
-        r.vrf?.name,
-        r.vrf?.rd,
-        r.remark,
-      ].filter(Boolean).join(' ').toLowerCase();
-      if (!haystack.includes(q)) return false;
-    }
+    if (filterIPv     && r.ip_version !== filterIPv)              return false;
+    if (filterGroupId !== undefined && r.group_id !== filterGroupId) return false;
+    if (filterTypeId  !== undefined && r.type_id  !== filterTypeId)  return false;
+    if (filterVrfId   !== undefined && r.vrf_id   !== filterVrfId)   return false;
+    if (filterCIDR    && !cidrMatchesSearch(r.cidr, filterCIDR))  return false;
     return true;
   });
+
+  // Report total (unfiltered) count to parent tab label
+  useEffect(() => { onCount?.(data.length); }, [data.length]);
 
   const openCreate = () => {
     setModalMode('create'); form.resetFields();
@@ -73,23 +75,21 @@ const TabRootPrefix: React.FC = () => {
   const openEdit = (r: RootPrefix) => {
     setModalMode('edit'); setEditingRecord(r);
     form.setFieldsValue({
-      ip_version: r.ip_version,
-      cidr:       r.cidr,
-      group_id:   r.group_id  ?? undefined,
-      type_id:    r.type_id   ?? undefined,
-      vrf_id:     r.vrf_id    ?? undefined,
-      remark:     r.remark    ?? '',
+      ip_version: r.ip_version, cidr: r.cidr,
+      group_id: r.group_id ?? undefined,
+      type_id:  r.type_id  ?? undefined,
+      vrf_id:   r.vrf_id   ?? undefined,
+      remark:   r.remark   ?? '',
     });
     setIsModalOpen(true);
   };
 
-  const handleDelete = (id: number, _cidr: string) => {
+  const handleDelete = (id: number) => {
     confirm({
-      title:      t('ipam.root.delTitle'),
-      icon:       <ExclamationCircleFilled style={{ color: '#ff4d4f' }} />,
-      content:    t('ipam.root.delBody'),
-      okText:     t('ipam.root.delOk'),
-      okType:     'danger',
+      title: t('ipam.root.delTitle'),
+      icon:  <ExclamationCircleFilled style={{ color: '#ff4d4f' }} />,
+      content: t('ipam.root.delBody'),
+      okText: t('ipam.root.delOk'), okType: 'danger',
       cancelText: t('common.cancel'),
       onOk: async () => {
         try { await deleteRootPrefix(id); message.success(t('ipam.root.delDone')); fetchList(); }
@@ -103,66 +103,62 @@ const TabRootPrefix: React.FC = () => {
       const v = await form.validateFields();
       if (modalMode === 'create') {
         await createRootPrefix({
-          ip_version: v.ip_version,
-          cidr:       v.cidr,
-          group_id:   v.group_id  ?? null,
-          type_id:    v.type_id   ?? null,
-          vrf_id:     v.vrf_id    ?? null,
-          remark:     v.remark    ?? '',
+          ip_version: v.ip_version, cidr: v.cidr,
+          group_id: v.group_id ?? null, type_id: v.type_id ?? null,
+          vrf_id: v.vrf_id ?? null, remark: v.remark ?? '',
         });
         message.success(t('ipam.root.createOk'));
       } else {
         await updateRootPrefix(editingRecord!.id, {
-          group_id: v.group_id ?? null,
-          type_id:  v.type_id  ?? null,
-          vrf_id:   v.vrf_id   ?? null,
-          remark:   v.remark   ?? '',
+          group_id: v.group_id ?? null, type_id: v.type_id ?? null,
+          vrf_id: v.vrf_id ?? null, remark: v.remark ?? '',
         });
         message.success(t('ipam.root.saveOk'));
       }
       setIsModalOpen(false); fetchList();
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'errorFields' in err) return;
-      if (err instanceof AxiosError && err.response?.status === 400) {
-        Modal.error({ title: 'Validation Error', content: err.response.data.error });
-      } else {
-        message.error('Request failed');
-      }
+      if (err instanceof AxiosError && err.response?.status === 400)
+        Modal.error({ title: 'Error', content: err.response.data.error });
+      else message.error('Request failed');
     }
   };
 
   const groupOpts = groups.map((g)  => ({ value: g.id,  label: g.name }));
   const typeOpts  = types.map((tp)  => ({ value: tp.id, label: tp.name }));
-  const vrfOpts   = vrfs.map((v)    => ({ value: v.id,  label: v.rd ? `${v.name} (${v.rd})` : v.name }));
+  const vrfOpts   = vrfs.map((v)    => ({
+    value: v.id,
+    label: v.rd ? `${v.name} (${v.rd})` : v.name,
+  }));
 
   const columns: ColumnsType<RootPrefix> = [
     { title: t('common.id'), dataIndex: 'id', key: 'id', width: 60 },
     {
-      title: t('ipam.root.ipver'), dataIndex: 'ip_version', key: 'ip_version', width: 90,
+      title: t('ipam.root.ipver'), dataIndex: 'ip_version', key: 'ip_version', width: 85,
       render: (v: number) => <Tag color={v === 4 ? 'blue' : 'green'}>IPv{v}</Tag>,
     },
     {
       title: t('ipam.root.cidr'), dataIndex: 'cidr', key: 'cidr', width: 180,
       render: (v: string) => <strong>{v}</strong>,
     },
-    { title: t('ipam.root.group'), key: 'group', width: 110, render: (_, r) => r.group?.name || '—' },
-    { title: t('ipam.root.type'),  key: 'type',  width: 110, render: (_, r) => r.type?.name  || '—' },
+    { title: t('ipam.root.group'), key: 'group', width: 120, render: (_, r) => r.group?.name || '—' },
+    { title: t('ipam.root.type'),  key: 'type',  width: 120, render: (_, r) => r.type?.name  || '—' },
     {
-      title: t('ipam.root.vrf'), key: 'vrf', width: 130,
+      title: t('ipam.root.vrf'), key: 'vrf', width: 150,
       render: (_, r) => r.vrf ? `${r.vrf.name}${r.vrf.rd ? ` (${r.vrf.rd})` : ''}` : '—',
     },
     {
-      title: t('ipam.root.remark'), key: 'remark', ellipsis: true,
+      title: t('ipam.root.remark'), key: 'remark', width: 180, ellipsis: true,
       render: (_, r) => r.remark
-        ? <Tooltip title={r.remark}><span>{r.remark}</span></Tooltip>
+        ? <Tooltip title={r.remark}>{r.remark}</Tooltip>
         : '—',
     },
     {
-      title: t('common.actions'), key: 'action', width: 160,
+      title: t('common.actions'), key: 'action', width: 130, fixed: 'right',
       render: (_, r: RootPrefix) => (
-        <Space>
+        <Space size={4}>
           <Button type="link" size="small" onClick={() => openEdit(r)}>{t('ipam.root.editBtn')}</Button>
-          <Button type="text" size="small" danger onClick={() => handleDelete(r.id, r.cidr)}>{t('common.delete')}</Button>
+          <Button type="text" size="small" danger onClick={() => handleDelete(r.id)}>{t('common.delete')}</Button>
         </Space>
       ),
     },
@@ -170,21 +166,42 @@ const TabRootPrefix: React.FC = () => {
 
   return (
     <div>
+      {/* Per-field search bar */}
       <Space wrap style={{ marginBottom: 16 }}>
         <Input
           prefix={<SearchOutlined />}
-          placeholder="Search CIDR / Group / Type / VRF / Remark…"
-          value={searchText}
-          onChange={(e) => setSearch(e.target.value)}
+          placeholder="CIDR (e.g. 10.0.0.0/8)"
+          value={filterCIDR}
+          onChange={(e) => setFilterCIDR(e.target.value)}
           allowClear
-          style={{ width: 280 }}
+          style={{ width: 200 }}
+        />
+        <Select
+          placeholder={t('ipam.root.group')}
+          value={filterGroupId}
+          onChange={setFilterGroupId}
+          allowClear style={{ width: 140 }}
+          options={groupOpts}
+        />
+        <Select
+          placeholder={t('ipam.root.type')}
+          value={filterTypeId}
+          onChange={setFilterTypeId}
+          allowClear style={{ width: 130 }}
+          options={typeOpts}
+        />
+        <Select
+          placeholder="VRF"
+          value={filterVrfId}
+          onChange={setFilterVrfId}
+          allowClear style={{ width: 150 }}
+          options={vrfOpts}
         />
         <Select
           placeholder={t('ipam.root.ipver')}
           value={filterIPv}
           onChange={setFilterIPv}
-          allowClear
-          style={{ width: 120 }}
+          allowClear style={{ width: 110 }}
           options={[{ value: 4, label: 'IPv4' }, { value: 6, label: 'IPv6' }]}
         />
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
@@ -204,7 +221,7 @@ const TabRootPrefix: React.FC = () => {
           showQuickJumper: true,
           showTotal: (total, range) => `${range[0]}-${range[1]} / ${total}`,
         }}
-        scroll={{ x: 1000 }}
+        scroll={{ x: 1050 }}
       />
 
       <Modal
@@ -212,10 +229,8 @@ const TabRootPrefix: React.FC = () => {
         open={isModalOpen}
         onOk={handleSubmit}
         onCancel={() => setIsModalOpen(false)}
-        okText={t('common.save')}
-        cancelText={t('common.cancel')}
-        width={520}
-        destroyOnClose
+        okText={t('common.save')} cancelText={t('common.cancel')}
+        width={520} destroyOnClose
       >
         <Form form={form} layout="vertical">
           <Form.Item label={t('ipam.root.ipver')} name="ip_version" rules={[{ required: true }]}>

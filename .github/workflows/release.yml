@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 👈 极其重要：必须拉取完整的 Git 历史，否则找不到上一个 Tag
 
       # ── 前端构建 ────────────────────────────────────────────────────────────
       - name: Set up Node.js
@@ -20,7 +22,7 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Build frontend
+       Lord- Build frontend
         working-directory: ./frontend
         run: |
           npm install
@@ -41,24 +43,44 @@ jobs:
           go test ./...
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../nms-server main.go
 
+      # ── 自动动态提取 Commit 历史 ─────────────────────────────────────────────
+      - name: Generate Custom Changelog
+        id: changelog
+        run: |
+          echo "CHANGELOG_TEXT<<EOF" >> $GITHUB_ENV
+          # 检查是否存在上一个 Tag，如果存在就提取两个 Tag 之间的所有单个 commit 记录
+          if git describe --tags --abbrev=0 HEAD^ >/dev/null 2>&1; then
+            LAST_TAG=$(git describe --tags --abbrev=0 HEAD^)
+            git log ${LAST_TAG}..HEAD --oneline --pretty=format:"* %s (%h)" >> $GITHUB_ENV
+          else
+            # 如果是第一次发版找不到前任 Tag，则兜底打印最近 10 条 commit
+            git log -n 10 --oneline --pretty=format:"* %s (%h)" >> $GITHUB_ENV
+          fi
+          echo "" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
       # ── 发布 Release ────────────────────────────────────────────────────────
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          generate_release_notes: false # 👈 关闭 GitHub 自带的鸡肋对比页
           files: |
             dist.tar.gz
             nms-server
           body: |
-            ## 部署说明
+            ## 📥 部署说明
 
             | 文件 | 说明 |
             |------|------|
             | `nms-server` | Linux amd64 后端二进制（含认证/IPAM/System 模块） |
-            | `dist.tar.gz` | 前端静态资源压缩包，解压后交由 Nginx 托管 |
+            | `dist.tar.gz` | 前端静态资源压缩包，解压后交由 Nginx 或 Caddy 托管 |
 
             **默认账号：** `admin` / `admin`（首次登录强制修改密码）
 
             详细部署步骤请参阅 [README.md](https://github.com/${{ github.repository }}/blob/main/README.md)
+            
+            ---
+            ## 🚀 本次更新内容 (Changelog)
+            ${{ env.CHANGELOG_TEXT }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

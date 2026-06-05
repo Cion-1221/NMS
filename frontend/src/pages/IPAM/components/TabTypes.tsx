@@ -1,17 +1,19 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Form, Input, Modal, Space, Table, message } from 'antd';
-import { ExclamationCircleFilled, PlusOutlined } from '@ant-design/icons';
+import { ExclamationCircleFilled, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { getIPAMTypes, createIPAMType, updateIPAMType, deleteIPAMType } from '../../../api/ipam';
 import type { IPAMType } from '../../../types/ipam';
 import { useT } from '../../../i18n';
 
 const { confirm } = Modal;
+interface Props { onCount?: (n: number) => void; }
 
-const TabTypes: React.FC = () => {
+const TabTypes: React.FC<Props> = ({ onCount }) => {
   const t = useT();
   const [data, setData]       = useState<IPAMType[]>([]);
   const [loading, setLoading] = useState(false);
+  const [search, setSearch]   = useState('');
   const [open, setOpen]       = useState(false);
   const [mode, setMode]       = useState<'create' | 'edit'>('create');
   const [editing, setEditing] = useState<IPAMType | null>(null);
@@ -25,12 +27,18 @@ const TabTypes: React.FC = () => {
   };
 
   useEffect(() => { loadData(); }, []);
+  useEffect(() => { onCount?.(data.length); }, [data.length]);
 
-  const openCreate = () => {
-    setMode('create'); form.resetFields(); setOpen(true);
-  };
+  const filtered = useMemo(() => {
+    if (!search) return data;
+    const q = search.toLowerCase();
+    return data.filter((tp) =>
+      tp.name.toLowerCase().includes(q) || tp.description?.toLowerCase().includes(q),
+    );
+  }, [data, search]);
 
-  const openEdit = (r: IPAMType) => {
+  const openCreate = () => { setMode('create'); form.resetFields(); setOpen(true); };
+  const openEdit   = (r: IPAMType) => {
     setMode('edit'); setEditing(r);
     form.setFieldsValue({ name: r.name, description: r.description });
     setOpen(true);
@@ -38,11 +46,8 @@ const TabTypes: React.FC = () => {
 
   const handleDelete = (r: IPAMType) => {
     confirm({
-      title:      t('ipam.type.delTitle'),
-      icon:       <ExclamationCircleFilled style={{ color: '#ff4d4f' }} />,
-      content:    t('ipam.type.delBody'),
-      okText:     t('ipam.type.delOk'),
-      okType:     'danger',
+      title: t('ipam.type.delTitle'), icon: <ExclamationCircleFilled style={{ color: '#ff4d4f' }} />,
+      content: t('ipam.type.delBody'), okText: t('ipam.type.delOk'), okType: 'danger',
       cancelText: t('common.cancel'),
       onOk: async () => {
         try { await deleteIPAMType(r.id); message.success(t('ipam.type.delDone')); loadData(); }
@@ -54,25 +59,21 @@ const TabTypes: React.FC = () => {
   const handleSubmit = async () => {
     const values = await form.validateFields();
     try {
-      if (mode === 'create') {
-        await createIPAMType(values); message.success(t('ipam.type.createOk'));
-      } else {
-        await updateIPAMType(editing!.id, values); message.success(t('ipam.type.saveOk'));
-      }
+      if (mode === 'create') { await createIPAMType(values); message.success(t('ipam.type.createOk')); }
+      else { await updateIPAMType(editing!.id, values); message.success(t('ipam.type.saveOk')); }
       setOpen(false); loadData();
     } catch { message.error('Request failed'); }
   };
 
   const columns: ColumnsType<IPAMType> = [
-    { title: t('common.id'),       dataIndex: 'id',          key: 'id', width: 70 },
-    { title: t('ipam.type.name'),  dataIndex: 'name',        key: 'name' },
-    { title: t('ipam.type.desc'),  dataIndex: 'description', key: 'description', render: (v) => v || '—' },
+    { title: t('common.id'),      dataIndex: 'id',          key: 'id',   width: 70 },
+    { title: t('ipam.type.name'), dataIndex: 'name',        key: 'name', width: 200 },
+    { title: t('ipam.type.desc'), dataIndex: 'description', key: 'description', ellipsis: true,
+      render: (v) => v || '—' },
     {
-      title:  t('common.actions'),
-      key:    'action',
-      width:  150,
+      title: t('common.actions'), key: 'action', width: 140, fixed: 'right',
       render: (_, r) => (
-        <Space>
+        <Space size={4}>
           <Button type="link" size="small" onClick={() => openEdit(r)}>{t('common.edit')}</Button>
           <Button type="text" size="small" danger onClick={() => handleDelete(r)}>{t('common.delete')}</Button>
         </Space>
@@ -82,22 +83,22 @@ const TabTypes: React.FC = () => {
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
+      <Space style={{ marginBottom: 16 }}>
+        <Input prefix={<SearchOutlined />} placeholder={`${t('ipam.type.name')} / ${t('ipam.type.desc')}`}
+          value={search} onChange={(e) => setSearch(e.target.value)} allowClear style={{ width: 260 }} />
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>{t('ipam.type.add')}</Button>
-      </div>
-      <Table columns={columns} dataSource={data} rowKey="id" loading={loading}
+      </Space>
+      <Table columns={columns} dataSource={filtered} rowKey="id" loading={loading}
         pagination={{
-          defaultPageSize: 20,
-          pageSizeOptions: ['10', '20', '50', '100'],
-          showSizeChanger: true,
-          showQuickJumper: true,
+          defaultPageSize: 20, pageSizeOptions: ['10', '20', '50', '100'],
+          showSizeChanger: true, showQuickJumper: true,
           showTotal: (total, range) => `${range[0]}-${range[1]} / ${total}`,
-        }} />
-      <Modal
-        title={mode === 'create' ? t('ipam.type.add') : t('ipam.type.edit')}
+        }}
+        scroll={{ x: 600 }}
+      />
+      <Modal title={mode === 'create' ? t('ipam.type.add') : t('ipam.type.edit')}
         open={open} onOk={handleSubmit} onCancel={() => setOpen(false)}
-        okText={t('common.save')} cancelText={t('common.cancel')} destroyOnClose
-      >
+        okText={t('common.save')} cancelText={t('common.cancel')} destroyOnClose>
         <Form form={form} layout="vertical">
           <Form.Item label={t('ipam.type.name')} name="name" rules={[{ required: true }]}>
             <Input />

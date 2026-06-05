@@ -76,9 +76,13 @@ export const deleteVRF = (id: number) =>
 
 // ── Audit Logs ─────────────────────────────────────────────────────────────────
 
-export const getAuditLogs = (page: number, pageSize: number) =>
+export const getAuditLogs = (
+  page: number,
+  pageSize: number,
+  filters?: { username?: string; action?: string; resource_type?: string },
+) =>
   client.get<{ total: number; items: IPAMAuditLog[]; page: number; page_size: number }>(
-    '/ipam/audit-logs', { params: { page, page_size: pageSize } }
+    '/ipam/audit-logs', { params: { page, page_size: pageSize, ...filters } }
   );
 
 export const purgeAuditLogs = (days: number) =>

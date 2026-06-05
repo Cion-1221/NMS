@@ -720,10 +720,19 @@ func ListAuditLogs(db *gorm.DB) gin.HandlerFunc {
 		if pageSize < 1 || pageSize > 100 {
 			pageSize = 20
 		}
-		var total int64
-		var logs []models.IPAMAuditLog
 		query := db.Model(&models.IPAMAuditLog{}).Order("created_at desc")
+		if u := c.Query("username"); u != "" {
+			query = query.Where("username LIKE ?", "%"+u+"%")
+		}
+		if a := c.Query("action"); a != "" {
+			query = query.Where("action = ?", a)
+		}
+		if rt := c.Query("resource_type"); rt != "" {
+			query = query.Where("resource_type = ?", rt)
+		}
+		var total int64
 		query.Count(&total)
+		var logs []models.IPAMAuditLog
 		query.Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs)
 		c.JSON(http.StatusOK, gin.H{"total": total, "items": logs, "page": page, "page_size": pageSize})
 	}

@@ -99,7 +99,7 @@ const t = {
   'ipam.root.delBody':     { en: 'Deleting a root prefix will permanently remove ALL L1/L2 subnets beneath it. This cannot be undone.', zh: '删除根前缀将级联清空其所有 L1/L2 子网，且绝对不可恢复！' },
   'ipam.root.delOk':       { en: 'Delete permanently', zh: '确认彻底删除' },
   'ipam.root.delDone':     { en: 'Root prefix and all derived subnets deleted', zh: '已成功删除及清理级联数据' },
-  'ipam.root.editBtn':     { en: 'Edit attributes', zh: '编辑附加属性' },
+  'ipam.root.editBtn':     { en: 'Edit', zh: '编辑' },
   'ipam.root.saveOk':      { en: 'Saved', zh: '保存成功' },
   'ipam.root.createOk':    { en: 'Root prefix created', zh: '创建成功' },
 
