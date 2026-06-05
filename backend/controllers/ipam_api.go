@@ -1,15 +1,26 @@
 package controllers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 
-	"ipam-backend/core"
-	"ipam-backend/models"
+	"nms-backend/core"
+	"nms-backend/models"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+func parseIDParam(c *gin.Context, name string) (uint, error) {
+	id, err := strconv.ParseUint(c.Param(name), 10, 64)
+	if err != nil || id == 0 {
+		return 0, fmt.Errorf("无效的 ID 参数")
+	}
+	return uint(id), nil
+}
 
 func CreateRootPrefix(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -27,6 +38,10 @@ func CreateRootPrefix(db *gorm.DB) gin.HandlerFunc {
 		prefix, err := core.ValidateStrictCIDR(req.CIDR)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if prefix.Addr().Is4() && req.IPVersion != 4 || prefix.Addr().Is6() && req.IPVersion != 6 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "IP 版本与 CIDR 地址族不一致"})
 			return
 		}
 
@@ -77,8 +92,43 @@ func UpdateRootPrefix(db *gorm.DB) gin.HandlerFunc {
 
 func DeleteRootPrefix(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		id := c.Param("id")
-		if err := db.Where("id = ?", id).Delete(&models.RootPrefix{}).Error; err != nil {
+		id, err := parseIDParam(c, "id")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		err = db.Transaction(func(tx *gorm.DB) error {
+			var root models.RootPrefix
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&root, id).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return err
+				}
+				return fmt.Errorf("查询根前缀失败: %w", err)
+			}
+
+			var subnets []models.Subnet
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("root_prefix_id = ?", root.ID).
+				Find(&subnets).Error; err != nil {
+				return fmt.Errorf("锁定根前缀派生子网失败: %w", err)
+			}
+
+			if err := tx.Where("root_prefix_id = ?", root.ID).Delete(&models.Subnet{}).Error; err != nil {
+				return fmt.Errorf("清理根前缀下子网失败: %w", err)
+			}
+
+			if err := tx.Delete(&root).Error; err != nil {
+				return fmt.Errorf("删除根前缀失败: %w", err)
+			}
+
+			return nil
+		})
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "根前缀不存在"})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "删除失败: " + err.Error()})
 			return
 		}
@@ -165,9 +215,9 @@ func SplitSubnet(db *gorm.DB) gin.HandlerFunc {
 				if err := tx.First(&subnet, req.TargetID).Error; err != nil {
 					return fmt.Errorf("指定的子网不存在")
 				}
-				
+
 				parentCIDR, rootPrefixID, ipVersion = subnet.CIDR, subnet.RootPrefixID, subnet.IPVersion
-				
+
 				if subnet.Level == "L1" {
 					newLevel = "L2"
 					newParentID = &subnet.ID
@@ -245,6 +295,9 @@ func MergeSubnets(db *gorm.DB) gin.HandlerFunc {
 				if s.Level != baseLevel {
 					return fmt.Errorf("所选子网不属于同一级别，禁止合并")
 				}
+				if s.RootPrefixID != baseRootID {
+					return fmt.Errorf("所选子网不属于同一个根前缀，禁止合并")
+				}
 				if (s.ParentID == nil && baseParentID != nil) ||
 					(s.ParentID != nil && baseParentID == nil) ||
 					(s.ParentID != nil && baseParentID != nil && *s.ParentID != *baseParentID) {
@@ -291,8 +344,9 @@ func MergeSubnets(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-func RegisterIPAMRoutes(r *gin.Engine, db *gorm.DB) {
+func RegisterIPAMRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc) {
 	api := r.Group("/api/v1/ipam")
+	api.Use(authMW)
 	{
 		api.POST("/root-prefixes", CreateRootPrefix(db))
 		api.GET("/root-prefixes", ListRootPrefixes(db))

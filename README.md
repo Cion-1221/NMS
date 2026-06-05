@@ -1,218 +1,156 @@
-# 🌐 NMS Enterprise System (网络管理系统 - IPAM 模块)
+# 🌐 NMS Enterprise System（网络管理系统）
 
-本项目是一个企业级生产标准的**网络管理系统 (NMS)**。现阶段已完成核心的 **IP 地址管理 (IPAM) 模块**，完美支持 **IPv4 与 IPv6 双栈计算**，采用彻底的前后端分离与模块化架构设计，便于未来横向扩展其他 NMS 业务组件（如设备台账、网络拓扑等）。
+企业级生产标准的**网络管理系统 (NMS)**，采用彻底的前后端分离与模块化架构。现已完成：
+
+- ✅ **IPAM 模块**：IP 地址管理（IPv4 / IPv6 双栈，根前缀 CRUD + L1/L2 子网拆分/合并）
+- ✅ **System 模块**：用户 & 用户组权限管理，JWT 认证，首次登录强制改密
+
+---
 
 ## ✨ 核心特性
 
-- 🔒 **严格标准化输入**：利用 Go 原生 `net/netip` 深度拦截不标准的含主机位网络地址输入。
-- ⚡ **高性能树形重组**：后端的内存级 O(N) 一次性遍历，将扁平数据高效还原为顶级嵌套树。
-- 🛡️ **安全的网段重组与合并**：支持从 L1 至 L2 级别的"覆盖拆分"，合并时自动执行严格的 2 次幂相邻网段校验与 Re-parenting（节点智能重归属）。
-- 🪵 **生产级基础设施**：内置 Viper 配置热加载与 `slog + lumberjack` 安全日志按大小/时间轮转切割。
-- 🧩 **NMS 模块化防冲突**：所有 GORM 数据表均带 `ipam_` 模块前缀，数据库统一为 `nms_db`，安全共存于 NMS 大基座。
+| 特性 | 说明 |
+|------|------|
+| 🔐 **JWT 认证** | Bearer Token 保护全部 API，24 小时有效期 |
+| 🔒 **首次登录强制改密** | 默认账号 `admin/admin`，登录后必须立即修改，后端双重拦截 |
+| 👥 **细粒度权限** | `admin` 组拥有完整管理权；其他组仅限自助改密 |
+| 🛡️ **严格 CIDR 校验** | Go `net/netip` 深度拦截含主机位的非标准地址 |
+| ⚡ **O(N) 树形重组** | 内存级一次遍历将扁平数据还原为 Root→L1→L2 嵌套树 |
+| 🧩 **业务约束** | 严禁单独删除 L1/L2 子网；仅允许通过 Split/Merge 生成与重组 |
+| 📦 **安全级联删除** | 删除根前缀时，同一事务 + FOR UPDATE 行锁彻底清理所有衍生子网 |
+| 🪵 **生产级日志** | `slog + lumberjack` 结构化 JSON 日志，按大小/天数自动轮转 |
+| 🧱 **模块化前缀** | `ipam_` / `sys_` 表前缀，安全共存于 `nms_db` 统一数据库 |
 
 ---
 
-## 📋 前置环境依赖
+## 📋 前置环境依赖（本地开发）
 
-在开始部署前，请确保目标主机已安装以下软件：
+| 依赖 | 版本 | 说明 |
+|------|------|------|
+| **Go** | ≥ 1.26 | 后端编译，本地开发需要 |
+| **Node.js** | ≥ 22 LTS | 前端编译，npm 随附 |
+| **MySQL** | ≥ 8.0 | 生产/开发数据库 |
+| **Git** | 最新版 | 代码管理与 push |
+| **Nginx** | ≥ 1.18 | 生产部署：前端静态托管 + API 反代 |
 
-| 依赖 | 最低版本 | 说明 |
-|------|---------|------|
-| **Go** | ≥ 1.21 | 后端编译，需支持 `log/slog` 标准库 |
-| **Node.js** | ≥ 18 LTS | 前端编译运行时 |
-| **npm** | ≥ 9 | 前端包管理器（随 Node.js 一同安装） |
-| **MySQL / MariaDB** | ≥ 8.0 / ≥ 10.5 | 生产数据库 |
-| **Nginx** | ≥ 1.18 | 生产环境前端静态托管与反向代理（可选，开发环境不需要） |
+> 💡 **仅需发布不需本地调试时**：只需安装 Git，推送代码后 GitHub Actions 自动完成编译。
 
 ---
 
-## 📂 完整目录树结构
+## 📂 完整目录结构
 
 ```text
 NMS/
-├── README.md                     # 本文档
+├── README.md
+├── .github/
+│   └── workflows/
+│       └── release.yml            # CI：打 v* tag 自动编译并发布 Release
 │
-├── backend/                      # Go + Gin + GORM 后端服务
-│   ├── .gitignore                # Go 编译产物与敏感文件过滤
-│   ├── go.mod                    # Go 模块声明 (module: ipam-backend)
-│   ├── go.sum                    # 依赖校验锁定文件
-│   ├── config.example.yaml       # 配置模板 (部署时 cp 为 config.yaml)
-│   ├── main.go                   # 服务总入口：日志初始化、DB 连接、路由挂载
-│   ├── core/                     # 核心算法层 (纯计算，零 IO 依赖)
-│   │   └── ipam_calc.go          # CIDR 校验、子网拆分、合并算法
-│   ├── models/                   # 数据模型层
-│   │   └── ipam_models.go        # GORM 模型定义 (表名: ipam_root_prefixes, ipam_subnets)
-│   └── controllers/              # 路由控制层
-│       └── ipam_api.go           # RESTful API：CRUD、树形组装、拆分合并事务
+├── backend/                       # Go 后端
+│   ├── go.mod / go.sum
+│   ├── config.example.yaml        # 配置模板（部署时复制为 config.yaml）
+│   ├── main.go                    # 服务入口：配置/DB/迁移/Seed/路由
+│   ├── core/
+│   │   └── ipam_calc.go           # 纯算法：CIDR 校验、拆分、合并
+│   ├── models/
+│   │   ├── ipam_models.go         # IPAM 数据模型（ipam_root_prefixes, ipam_subnets）
+│   │   └── sys_models.go          # System 数据模型（sys_groups, sys_users）
+│   ├── middleware/
+│   │   └── auth.go                # JWT 认证中间件 + AdminRequired
+│   └── controllers/
+│       ├── ipam_api.go            # IPAM REST API（受 JWT 保护）
+│       ├── auth_api.go            # 登录 / 改密 / 当前用户
+│       ├── system_api.go          # 用户 & 用户组 CRUD（仅管理员）
+│       └── seed.go                # 数据库初始化（幂等写入默认 admin）
 │
-└── frontend/                     # React + TypeScript + Vite 前端应用
-    ├── .gitignore                # Node 依赖与构建产物过滤
-    ├── package.json              # 依赖声明与脚本 (dev / build / preview)
-    ├── vite.config.ts            # Vite 配置 (含 /api 开发代理)
+└── frontend/                      # React + TypeScript 前端
+    ├── package.json
+    ├── vite.config.ts
     └── src/
-        ├── api/                  # Axios 请求封装 (按模块隔离)
-        │   └── ipam.ts           # IPAM 模块全部 API 调用
-        ├── types/                # TypeScript 强类型契约
-        │   └── ipam.ts           # RootPrefix、SubnetNode 等接口定义
-        ├── layouts/              # 全局骨架布局
-        │   └── MainLayout.tsx    # 侧边栏 + 顶栏 + 内容区骨架
-        └── pages/                # 业务页面视图
-            └── IPAM/             # IPAM 独立业务包
-                ├── index.tsx     # IPAM 页面入口 (Tab 切换容器)
-                └── components/
-                    ├── TabRootPrefix.tsx   # Tab1: 根前缀 CRUD 与防呆拦截
-                    └── TabSubnetTree.tsx   # Tab2: 树形网段拆分 / 合并交互
+        ├── api/
+        │   ├── client.ts          # 共享 Axios 实例（自动携带 Token + 401 处理）
+        │   ├── auth.ts            # 登录 / 改密 API
+        │   ├── ipam.ts            # IPAM API
+        │   └── system.ts          # 用户 / 用户组 API
+        ├── types/
+        │   ├── auth.ts            # AuthUser、LoginResp 等
+        │   ├── ipam.ts            # RootPrefix、SubnetNode 等
+        │   └── system.ts          # SysUser、SysGroup 等
+        ├── contexts/
+        │   └── AuthContext.tsx    # 全局认证状态（localStorage 持久化）
+        ├── components/
+        │   └── ChangePasswordModal.tsx  # 自愿/强制改密 Modal
+        ├── layouts/
+        │   └── MainLayout.tsx     # 侧边栏（含 System 菜单）+ 顶栏用户信息
+        └── pages/
+            ├── Login/             # 登录页
+            ├── IPAM/              # IPAM 页面（Root Prefix + Subnet Tree）
+            └── System/
+                ├── User/          # 用户管理（管理员可见）
+                └── Group/         # 用户组管理（管理员可见）
 ```
 
 ---
 
-## 🚀 生产部署指南 (基于 Debian 13)
+## 🚀 生产部署指南（Debian 12/13 · Ubuntu 24/26）
 
-### 1. 准备 MySQL 数据库环境
-
-连接您的 Debian 13 云主机，执行以下 CLI 命令安装并初始化 NMS 统一数据库：
+### 1. 准备 MySQL 数据库
 
 ```bash
-sudo apt update
-sudo apt install default-mysql-server -y
-sudo systemctl enable --now mariadb
+# Debian / Ubuntu 通用安装
+sudo apt update && sudo apt install -y default-mysql-server
+sudo systemctl enable --now mysql
 
-# 登录本地数据库执行授权
-sudo mysql
-```
-
-进入 MySQL 终端后执行以下 SQL：
-
-```sql
--- 创建 NMS 统一数据库 (所有模块共享此库)
-CREATE DATABASE nms_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- 创建 NMS 专用服务账号
-CREATE USER 'nms_user'@'localhost' IDENTIFIED BY 'StrongPassword123!';
+sudo mysql <<'EOF'
+CREATE DATABASE IF NOT EXISTS nms_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'nms_user'@'localhost' IDENTIFIED BY 'StrongPassword123!';
 GRANT ALL PRIVILEGES ON nms_db.* TO 'nms_user'@'localhost';
 FLUSH PRIVILEGES;
-EXIT;
+EOF
 ```
 
-> ⚠️ **安全提醒**：请务必将 `StrongPassword123!` 替换为您自己的强密码，并妥善保存。
+### 2. 部署后端二进制
 
----
-
-### 2. 后端部署 (Backend)
+从 [GitHub Releases](../../releases) 下载 `nms-server`，上传到服务器：
 
 ```bash
-cd backend
+# 创建部署目录
+sudo mkdir -p /opt/nms/backend && cd /opt/nms/backend
+sudo chmod +x nms-server
 
-# 1. 下载 Go 依赖
-go mod tidy
-
-# 2. 编译为独立二进制文件
-go build -o nms-server .
-
-# 3. 准备配置文件 (基于模板创建)
+# 复制配置模板并编辑
 cp config.example.yaml config.yaml
 nano config.yaml
-# ↑ 修改 database 下的 password 为您的实际数据库密码
 ```
 
-**`config.yaml` 配置项说明：**
+**`config.yaml` 完整示例：**
 
 ```yaml
 server:
-  port: 8080              # 后端 HTTP 监听端口
+  port: 8080
 
 database:
-  host: "127.0.0.1"       # 数据库地址
-  port: 3306              # MySQL 端口
-  user: "nms_user"        # 数据库用户名
-  password: "YourPassword" # ← 替换为真实密码
-  dbname: "nms_db"         # NMS 统一数据库名
+  host: "127.0.0.1"
+  port: 3306
+  user: "nms_user"
+  password: "StrongPassword123!"   # ← 替换为真实密码
+  dbname: "nms_db"
+
+jwt:
+  # ⚠️ 必须替换为随机字符串（至少 32 位），切勿泄露
+  secret: "REPLACE_WITH_RANDOM_SECRET_AT_LEAST_32_CHARS"
+  # Refresh Token 有效期（天）；Access Token 有效期由用户在"会话时长设置"中自定义（默认 24h）
+  refresh_token_days: 7
 ```
 
-**启动服务：**
+> **服务首次启动会自动建表并写入默认账号 `admin/admin`（MustChangePassword=true）。**
+
+### 3. 配置 systemd 服务常驻
 
 ```bash
-# 方式 A：nohup 简易后台 (适合测试)
-nohup ./nms-server > /dev/null 2>&1 &
-
-# 方式 B：systemd 服务常驻 (推荐生产使用，见下方)
-```
-
-> 💡 **日志说明**：服务启动后，结构化 JSON 日志将自动写入 `logs/ipam.log`，按 **10MB 大小** 自动切割，保留 **5 个备份**，最长 **7 天**，确保磁盘安全。
-
----
-
-### 3. 前端编译构建 (Frontend)
-
-```bash
-cd frontend
-
-# 1. 安装依赖
-npm install
-
-# 2A. 本地联调开发 (热更新，自动代理 /api → 后端 8080)
-npm run dev
-# → 浏览器访问 http://localhost:5173
-
-# 2B. 生产上线打包
-npm run build
-# → 产物输出到 dist/ 目录，交由 Nginx 托管
-```
-
----
-
-### 4. Nginx 生产配置 (前端静态托管 + API 反向代理)
-
-将构建出的 `dist/` 目录部署到服务器后，创建以下 Nginx 站点配置：
-
-```bash
-sudo nano /etc/nginx/sites-available/nms
-```
-
-```nginx
-server {
-    listen 80;
-    server_name your-domain.com;  # ← 替换为您的域名或 IP
-
-    # 前端静态文件托管
-    root /var/www/nms/dist;
-    index index.html;
-
-    # SPA 路由回退：所有前端路由交给 index.html 处理
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    # API 反向代理：将 /api 请求转发到 Go 后端
-    location /api/ {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-```bash
-# 启用站点并重载 Nginx
-sudo ln -s /etc/nginx/sites-available/nms /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
-```
-
----
-
-### 5. Systemd 服务文件 (推荐生产常驻方式)
-
-创建一个 systemd service 单元，让 `nms-server` 开机自启、崩溃自动重启：
-
-```bash
-sudo nano /etc/systemd/system/nms-backend.service
-```
-
-```ini
+sudo tee /etc/systemd/system/nms-backend.service <<'EOF'
 [Unit]
-Description=NMS Backend Server (IPAM Module)
+Description=NMS Backend Server
 After=network.target mysql.service
 
 [Service]
@@ -227,77 +165,212 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-```
+EOF
 
-```bash
-# 启用并启动服务
 sudo systemctl daemon-reload
 sudo systemctl enable --now nms-backend
-
-# 查看服务状态
 sudo systemctl status nms-backend
-
-# 查看实时日志
-sudo journalctl -u nms-backend -f
 ```
 
-> 💡 **路径提示**：请将 `WorkingDirectory` 和 `ExecStart` 中的路径替换为您服务器上的实际部署路径。`config.yaml` 必须位于 `WorkingDirectory` 同级目录中。
+### 4. 部署前端 + Nginx
 
----
+```bash
+# 安装 Nginx
+sudo apt install -y nginx
 
-## 🌐 前端本地开发跨域代理 (Proxy)
+# 解压前端静态包
+sudo mkdir -p /var/www/nms
+cd /var/www/nms
+sudo tar -zxvf /path/to/dist.tar.gz   # 解压后产生 dist/ 目录
+```
 
-开发时由于前后端端口不同（前端 `5173` / 后端 `8080`），Vite 会将 `/api` 的请求透明代理到后端，实现**零 CORS 侵入**的完美联调。
+**步骤 A — HTTP 基础配置（可立即上线，无域名时使用 IP）：**
 
-`vite.config.ts` 核心配置：
+```bash
+sudo tee /etc/nginx/sites-available/nms <<'EOF'
+server {
+    listen 80;
+    server_name 你的服务器IP或域名;
 
-```typescript
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    port: 5173,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:8080',
-        changeOrigin: true
-      }
+    # 前端静态资源（支持 React Router 刷新不 404）
+    location / {
+        root /var/www/nms/dist;
+        index index.html;
+        try_files $uri $uri/ /index.html;
     }
-  }
-})
+
+    # API 反向代理
+    location /api/ {
+        proxy_pass         http://127.0.0.1:8080;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+}
+EOF
+
+sudo ln -sf /etc/nginx/sites-available/nms /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
 ```
+
+**步骤 B — 升级 HTTPS（推荐生产必选，需要已绑定域名）：**
+
+```bash
+# 1. 安装 Certbot
+sudo apt install -y certbot python3-certbot-nginx
+
+# 2. 自动获取 Let's Encrypt 证书并修改 Nginx 配置（替换 your-domain.com 为真实域名）
+sudo certbot --nginx -d your-domain.com
+
+# Certbot 会自动：
+#   - 申请免费 TLS 证书
+#   - 在 Nginx 配置中注入 ssl_certificate 等指令
+#   - 添加 HTTP → HTTPS 301 重定向
+#   - 配置 systemd timer 自动续期（可用 sudo systemctl status certbot.timer 确认）
+```
+
+升级后 Nginx 配置将类似：
+
+```nginx
+# HTTP → HTTPS 强制重定向
+server {
+    listen 80;
+    server_name your-domain.com;
+    return 301 https://$host$request_uri;
+}
+
+# HTTPS 主服务
+server {
+    listen 443 ssl;
+    server_name your-domain.com;
+
+    ssl_certificate     /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+    include             /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+
+    location / {
+        root /var/www/nms/dist;
+        index index.html;
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/ {
+        proxy_pass         http://127.0.0.1:8080;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+> 💡 **证书自动续期验证**：`sudo certbot renew --dry-run`
+> 证书默认每 90 天自动更新一次，Certbot 安装时已通过 systemd timer 完成配置。
 
 ---
 
-## 🗂️ API 接口速查表
+## 🛠️ 本地开发指南
 
-所有接口前缀：`/api/v1/ipam`
+### 后端
+
+```bash
+cd backend
+go mod tidy
+cp config.example.yaml config.yaml
+# 编辑 config.yaml 填入本地数据库连接和 JWT secret
+go run main.go        # 监听 :8080，自动建表+写入默认 admin
+```
+
+### 前端
+
+```bash
+cd frontend
+npm install
+npm run dev           # 监听 :5173，/api 请求自动代理到 :8080
+```
+
+访问 http://localhost:5173，使用 `admin` / `admin` 登录，首次登录会强制修改密码。
+
+---
+
+## 👤 用户与权限
+
+| 角色 | 默认账号 | 权限 |
+|------|---------|------|
+| **管理员（admin 组）** | `admin` / `admin` | 查看全部内容；创建/编辑/删除所有用户；重置任意用户密码；管理用户组 |
+| **普通用户（其他组）** | 由管理员创建 | 查看 IPAM 数据；仅可自助修改自己的密码（需提供旧密码） |
+
+**首次登录流程：**
+1. 用 `admin` / `admin` 登录 → 后端签发 `must_change_password=true` 的 Access Token + Refresh Token
+2. 前端检测到标志 → 显示强制改密页面（无法跳过）
+3. 输入旧密码 `admin` + 新密码（≥ 8 位）→ 修改成功
+4. 后端签发新 Token 对（`must_change_password=false`）→ 自动进入系统
+
+**Token 静默刷新机制：**
+- **Access Token** 有效期：用户自定义（1-720 小时），默认 **24 小时**
+- **Refresh Token** 有效期：服务器配置（`refresh_token_days`），默认 **7 天**
+- 前端在 Access Token 过期前 **5 分钟**自动调用 `/auth/refresh`，无感知换取新 Token 对（Token 旋转）
+- 用户可在右上角菜单 → **会话时长设置** 中调整 Access Token 有效期
+
+---
+
+## 🗂️ API 接口速查
+
+**认证接口**（Base: `/api/v1/auth`；`/login` 和 `/refresh` 无需 JWT，其余需要）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/root-prefixes` | 创建根前缀（含 CIDR 严格校验） |
-| `GET` | `/root-prefixes` | 获取全部根前缀列表 |
-| `PUT` | `/root-prefixes/:id` | 更新根前缀（仅允许修改 Group、Type） |
-| `DELETE` | `/root-prefixes/:id` | 删除根前缀（级联删除所有子网） |
-| `GET` | `/subnet-tree/:root_prefix_id` | 获取指定根前缀下的完整层级树 |
-| `POST` | `/subnets/split` | 拆分/重新拆分子网（支持 L1→L2、L2→L2） |
-| `POST` | `/subnets/merge` | 合并相邻子网（含 2 次幂校验 + Re-parenting） |
+| `POST` | `/login` | 登录，返回 access_token + refresh_token + expires_at + user |
+| `POST` | `/refresh` | 用 Refresh Token 静默换取新 Token 对（Token 旋转） |
+| `GET` | `/me` | 获取当前登录用户信息 |
+| `POST` | `/change-password` | 自助改密（需提供旧密码），返回新 Token 对 |
+| `PUT` | `/settings` | 更新当前用户的会话令牌有效期（1-720 小时） |
+
+**IPAM 接口**（Base: `/api/v1/ipam`，全部需要 JWT）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/root-prefixes` | 创建根前缀（严格 CIDR 校验） |
+| `GET` | `/root-prefixes` | 获取所有根前缀 |
+| `PUT` | `/root-prefixes/:id` | 更新根前缀（仅 Group / Type） |
+| `DELETE` | `/root-prefixes/:id` | 删除根前缀（事务级联清理所有子网） |
+| `GET` | `/root-prefixes/:id/tree` | 获取 L1→L2 完整层级树 |
+| `POST` | `/split` | 拆分/重新拆分子网 |
+| `POST` | `/merge` | 合并子网（2ⁿ 校验 + Re-parenting） |
+
+**System 接口**（Base: `/api/v1/system`，全部需要 JWT + 管理员权限）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/users` | 用户列表 |
+| `POST` | `/users` | 创建用户（初始密码 + 首次强制改密） |
+| `PUT` | `/users/:id` | 修改用户分组 / 重置密码 |
+| `DELETE` | `/users/:id` | 删除用户（不能删最后一个管理员） |
+| `GET` | `/groups` | 用户组列表 |
+| `POST` | `/groups` | 创建用户组 |
+| `PUT` | `/groups/:id` | 修改用户组（名称 / 权限） |
+| `DELETE` | `/groups/:id` | 删除用户组（组内有用户时拒绝） |
+
+**健康检查**
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/health` | 服务存活检测（无需认证） |
 
 ---
 
-## 🧩 模块化架构说明
+## 🧩 模块化架构
 
-本项目采用 **NMS 统一基座** 设计理念，所有模块共享 `nms_db` 数据库，通过**表名前缀**隔离命名空间：
+所有模块共享 `nms_db` 数据库，通过**表名前缀**隔离命名空间：
 
-| 模块 | 表前缀 | 当前表名 | 状态 |
-|------|--------|---------|------|
+| 模块 | 表前缀 | 当前表 | 状态 |
+|------|--------|--------|------|
 | **IPAM** | `ipam_` | `ipam_root_prefixes`, `ipam_subnets` | ✅ 已完成 |
+| **System** | `sys_` | `sys_groups`, `sys_users`, `sys_refresh_tokens` | ✅ 已完成 |
 | 设备台账 | `device_` | — | 🔜 规划中 |
 | 网络拓扑 | `topo_` | — | 🔜 规划中 |
-
-新增模块时，只需遵循相同的 `模块名_` 表前缀约定，即可安全共存，无任何冲突风险。
 
 ---
 

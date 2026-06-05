@@ -1,6 +1,5 @@
-name: Build and Release NMS Server
+name: Build and Release NMS
 
-# 触发条件：当你向 GitHub 推送以 "v" 开头的标签（如 v1.0.0）时，自动触发编译
 on:
   push:
     tags:
@@ -8,33 +7,57 @@ on:
 
 jobs:
   build:
-    name: Build Binary for Debian
-    runs-on: ubuntu-latest # 使用 GitHub 提供的 Linux 云服务器作为编译机
+    name: Build frontend and backend
+    runs-on: ubuntu-latest
 
     steps:
-      # 1. 检出（拉取）代码到云服务器
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. 在云端安装并配置 Go 环境
+      # ── 前端构建 ────────────────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Build frontend
+        working-directory: ./frontend
+        run: |
+          npm install
+          npm run build
+          tar -czf ../dist.tar.gz dist
+
+      # ── 后端构建 ────────────────────────────────────────────────────────────
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22' # 匹配你编写后端代码时的 Go 版本
+          go-version: '1.26'
+          cache-dependency-path: backend/go.sum
 
-      # 3. 编译针对 Linux (Debian) 系统的独立二进制文件
-      - name: Build Backend Binary
+      - name: Build backend
+        working-directory: ./backend
         run: |
-          cd backend
           go mod tidy
-          # CGO_ENABLED=0 确保编译出的二进制文件是完全静态链接的，不依赖系统底层库，完美兼容 Debian 13
-          # GOOS=linux GOARCH=amd64 确保编译出的是 64位 Linux 可执行文件
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o nms-server main.go
+          go test ./...
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../nms-server main.go
 
-      # 4. 将编译好的二进制文件发布到 GitHub Releases 页面
+      # ── 发布 Release ────────────────────────────────────────────────────────
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: backend/nms-server # 告诉 GitHub 把这个编译好的文件作为附件上传
+          files: |
+            dist.tar.gz
+            nms-server
+          body: |
+            ## 部署说明
+
+            | 文件 | 说明 |
+            |------|------|
+            | `nms-server` | Linux amd64 后端二进制（含认证/IPAM/System 模块） |
+            | `dist.tar.gz` | 前端静态资源压缩包，解压后交由 Nginx 托管 |
+
+            **默认账号：** `admin` / `admin`（首次登录强制修改密码）
+
+            详细部署步骤请参阅 [README.md](https://github.com/${{ github.repository }}/blob/main/README.md)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 自动调取 GitHub 内置的权限令牌
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

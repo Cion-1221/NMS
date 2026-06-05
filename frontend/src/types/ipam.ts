@@ -4,8 +4,8 @@ export interface RootPrefix {
   cidr: string;
   group: string;
   type: string;
-  CreatedAt: string;
-  UpdatedAt: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface SubnetNode {

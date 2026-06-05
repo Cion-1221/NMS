@@ -4,7 +4,7 @@
 *.dll
 *.so
 *.dylib
-ipam-server
+nms-server
 
 logs/
 config.yaml
