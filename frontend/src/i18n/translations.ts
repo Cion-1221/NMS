@@ -77,6 +77,10 @@ const t = {
   'ipam.title':            { en: 'IP Address Management (IPAM)', zh: 'IP 地址管理 (IPAM)' },
   'ipam.tab.roots':        { en: 'Root Prefixes', zh: '根前缀' },
   'ipam.tab.subnets':      { en: 'Subnets', zh: '子网' },
+  'ipam.tab.groups':       { en: 'Groups', zh: '分组' },
+  'ipam.tab.types':        { en: 'Types', zh: '类型' },
+  'ipam.tab.vrf':          { en: 'VRF', zh: 'VRF' },
+  'ipam.tab.audit':        { en: 'Audit Log', zh: '操作日志' },
 
   // Root Prefixes
   'ipam.root.add':         { en: 'Add Root Prefix', zh: '新建根前缀' },
@@ -84,6 +88,7 @@ const t = {
   'ipam.root.ipver':       { en: 'IP Version', zh: 'IP 版本' },
   'ipam.root.group':       { en: 'Group', zh: '业务分组' },
   'ipam.root.type':        { en: 'Type', zh: '类型' },
+  'ipam.root.vrf':         { en: 'VRF', zh: 'VRF' },
   'ipam.root.search.cidr': { en: 'Search CIDR…', zh: '搜索 CIDR…' },
   'ipam.root.search.group':{ en: 'Filter by group…', zh: '按分组筛选…' },
   'ipam.root.newTitle':    { en: 'New Root Prefix', zh: '新建根前缀' },
@@ -114,6 +119,59 @@ const t = {
   'ipam.subnet.noSubnets': { en: 'No subnets — click Split to start', zh: '暂无子网，点击拆分开始创建' },
   'ipam.subnet.splitOk':   { en: 'Split successful', zh: '拆分成功' },
   'ipam.subnet.mergeOk':   { en: 'Merge successful', zh: '合并成功' },
+  'ipam.subnet.editTitle': { en: 'Edit Subnet Attributes', zh: '编辑子网属性' },
+  'ipam.subnet.editBtn':   { en: 'Edit', zh: '编辑' },
+  'ipam.subnet.saveOk':    { en: 'Saved', zh: '保存成功' },
+
+  // Groups
+  'ipam.group.add':        { en: 'Add Group', zh: '新增分组' },
+  'ipam.group.edit':       { en: 'Edit Group', zh: '编辑分组' },
+  'ipam.group.name':       { en: 'Name', zh: '名称' },
+  'ipam.group.desc':       { en: 'Description', zh: '描述' },
+  'ipam.group.createOk':   { en: 'Group created', zh: '分组创建成功' },
+  'ipam.group.saveOk':     { en: 'Saved', zh: '保存成功' },
+  'ipam.group.delTitle':   { en: 'Delete Group', zh: '删除分组' },
+  'ipam.group.delBody':    { en: 'This will clear this group from all prefixes and subnets that reference it.', zh: '删除后，引用此分组的所有前缀和子网将自动清除分组关联。' },
+  'ipam.group.delOk':      { en: 'Delete', zh: '删除' },
+  'ipam.group.delDone':    { en: 'Group deleted', zh: '分组已删除' },
+
+  // Types
+  'ipam.type.add':         { en: 'Add Type', zh: '新增类型' },
+  'ipam.type.edit':        { en: 'Edit Type', zh: '编辑类型' },
+  'ipam.type.name':        { en: 'Name', zh: '名称' },
+  'ipam.type.desc':        { en: 'Description', zh: '描述' },
+  'ipam.type.createOk':    { en: 'Type created', zh: '类型创建成功' },
+  'ipam.type.saveOk':      { en: 'Saved', zh: '保存成功' },
+  'ipam.type.delTitle':    { en: 'Delete Type', zh: '删除类型' },
+  'ipam.type.delBody':     { en: 'This will clear this type from all prefixes and subnets that reference it.', zh: '删除后，引用此类型的所有前缀和子网将自动清除类型关联。' },
+  'ipam.type.delOk':       { en: 'Delete', zh: '删除' },
+  'ipam.type.delDone':     { en: 'Type deleted', zh: '类型已删除' },
+
+  // VRF
+  'ipam.vrf.add':          { en: 'Add VRF', zh: '新增 VRF' },
+  'ipam.vrf.edit':         { en: 'Edit VRF', zh: '编辑 VRF' },
+  'ipam.vrf.name':         { en: 'Name', zh: '名称' },
+  'ipam.vrf.rd':           { en: 'Route Distinguisher', zh: '路由区分值 (RD)' },
+  'ipam.vrf.desc':         { en: 'Description', zh: '描述' },
+  'ipam.vrf.createOk':     { en: 'VRF created', zh: 'VRF 创建成功' },
+  'ipam.vrf.saveOk':       { en: 'Saved', zh: '保存成功' },
+  'ipam.vrf.delTitle':     { en: 'Delete VRF', zh: '删除 VRF' },
+  'ipam.vrf.delBody':      { en: 'This will clear this VRF from all prefixes and subnets that reference it.', zh: '删除后，引用此 VRF 的所有前缀和子网将自动清除 VRF 关联。' },
+  'ipam.vrf.delOk':        { en: 'Delete', zh: '删除' },
+  'ipam.vrf.delDone':      { en: 'VRF deleted', zh: 'VRF 已删除' },
+
+  // Audit Log
+  'ipam.audit.operator':   { en: 'Operator', zh: '操作人员' },
+  'ipam.audit.action':     { en: 'Action', zh: '操作' },
+  'ipam.audit.resource':   { en: 'Resource', zh: '资源类型' },
+  'ipam.audit.resourceId': { en: 'ID', zh: 'ID' },
+  'ipam.audit.detail':     { en: 'Detail', zh: '详情' },
+  'ipam.audit.time':       { en: 'Time', zh: '操作时间' },
+  'ipam.audit.retain':     { en: 'Retain last', zh: '保留最近' },
+  'ipam.audit.days':       { en: 'days', zh: '天的日志' },
+  'ipam.audit.purge':      { en: 'Purge Old Logs', zh: '清理过期日志' },
+  'ipam.audit.purgeOk':    { en: 'Purged successfully', zh: '清理完成' },
+  'ipam.audit.purgeConfirm': { en: 'Permanently delete logs older than {days} days?', zh: '将永久删除 {days} 天之前的操作记录，确认？' },
 
   // ── System ──────────────────────────────────────────────────────────────────
   'sys.user.title':      { en: 'User Management', zh: '用户管理' },

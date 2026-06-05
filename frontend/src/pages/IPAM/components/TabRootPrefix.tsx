@@ -5,48 +5,57 @@ import {
 import { ExclamationCircleFilled, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { AxiosError } from 'axios';
 import type { ColumnsType } from 'antd/es/table';
-import { getRootPrefixes, createRootPrefix, updateRootPrefix, deleteRootPrefix } from '../../../api/ipam';
-import { RootPrefix } from '../../../types/ipam';
+import {
+  getRootPrefixes, createRootPrefix, updateRootPrefix, deleteRootPrefix,
+  getGroups, getIPAMTypes, getVRFs,
+} from '../../../api/ipam';
+import type { RootPrefix, IPAMGroup, IPAMType, IPAMVRF } from '../../../types/ipam';
 import { useT } from '../../../i18n';
 
 const { confirm } = Modal;
 
 const TabRootPrefix: React.FC = () => {
   const t = useT();
-  const [data, setData]         = useState<RootPrefix[]>([]);
-  const [loading, setLoading]   = useState(false);
+  const [data, setData]               = useState<RootPrefix[]>([]);
+  const [loading, setLoading]         = useState(false);
   const [searchCIDR, setSearchCIDR]   = useState('');
   const [searchGroup, setSearchGroup] = useState('');
   const [filterIPv, setFilterIPv]     = useState<number | undefined>();
 
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMode, setModalMode]     = useState<'create' | 'edit'>('create');
+  const [groups, setGroups]   = useState<IPAMGroup[]>([]);
+  const [types, setTypes]     = useState<IPAMType[]>([]);
+  const [vrfs, setVRFs]       = useState<IPAMVRF[]>([]);
+
+  const [isModalOpen, setIsModalOpen]     = useState(false);
+  const [modalMode, setModalMode]         = useState<'create' | 'edit'>('create');
   const [editingRecord, setEditingRecord] = useState<RootPrefix | null>(null);
   const [form] = Form.useForm();
 
   const fetchList = async () => {
     setLoading(true);
-    try {
-      const res = await getRootPrefixes();
-      setData(res.data);
-    } catch {
-      message.error('Failed to load root prefixes');
-    } finally {
-      setLoading(false);
-    }
+    try { const res = await getRootPrefixes(); setData(res.data); }
+    catch { message.error('Failed to load root prefixes'); }
+    finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchList(); }, []);
+  const fetchLookups = async () => {
+    try {
+      const [g, tp, v] = await Promise.all([getGroups(), getIPAMTypes(), getVRFs()]);
+      setGroups(g.data);
+      setTypes(tp.data);
+      setVRFs(v.data);
+    } catch { /* non-critical */ }
+  };
 
-  // ── Client-side search / filter ────────────────────────────────────────────
+  useEffect(() => { fetchList(); fetchLookups(); }, []);
+
   const filtered = data.filter((r) => {
-    if (searchCIDR  && !r.cidr.includes(searchCIDR.trim()))   return false;
-    if (searchGroup && !(r.group ?? '').toLowerCase().includes(searchGroup.toLowerCase())) return false;
-    if (filterIPv   && r.ip_version !== filterIPv)             return false;
+    if (searchCIDR  && !r.cidr.includes(searchCIDR.trim()))                           return false;
+    if (searchGroup && !(r.group?.name ?? '').toLowerCase().includes(searchGroup.toLowerCase())) return false;
+    if (filterIPv   && r.ip_version !== filterIPv)                                    return false;
     return true;
   });
 
-  // ── Modal helpers ──────────────────────────────────────────────────────────
   const openCreate = () => {
     setModalMode('create');
     form.resetFields();
@@ -57,7 +66,13 @@ const TabRootPrefix: React.FC = () => {
   const openEdit = (r: RootPrefix) => {
     setModalMode('edit');
     setEditingRecord(r);
-    form.setFieldsValue({ ip_version: r.ip_version, cidr: r.cidr, group: r.group, type: r.type });
+    form.setFieldsValue({
+      ip_version: r.ip_version,
+      cidr:       r.cidr,
+      group_id:   r.group_id  ?? undefined,
+      type_id:    r.type_id   ?? undefined,
+      vrf_id:     r.vrf_id    ?? undefined,
+    });
     setIsModalOpen(true);
   };
 
@@ -70,13 +85,8 @@ const TabRootPrefix: React.FC = () => {
       okType:     'danger',
       cancelText: t('common.cancel'),
       onOk: async () => {
-        try {
-          await deleteRootPrefix(id);
-          message.success(t('ipam.root.delDone'));
-          fetchList();
-        } catch {
-          message.error('Delete failed');
-        }
+        try { await deleteRootPrefix(id); message.success(t('ipam.root.delDone')); fetchList(); }
+        catch { message.error('Delete failed'); }
       },
     });
   };
@@ -85,10 +95,20 @@ const TabRootPrefix: React.FC = () => {
     try {
       const values = await form.validateFields();
       if (modalMode === 'create') {
-        await createRootPrefix(values);
+        await createRootPrefix({
+          ip_version: values.ip_version,
+          cidr:       values.cidr,
+          group_id:   values.group_id  ?? null,
+          type_id:    values.type_id   ?? null,
+          vrf_id:     values.vrf_id    ?? null,
+        });
         message.success(t('ipam.root.createOk'));
       } else {
-        await updateRootPrefix(editingRecord!.id, { group: values.group, type: values.type });
+        await updateRootPrefix(editingRecord!.id, {
+          group_id: values.group_id ?? null,
+          type_id:  values.type_id  ?? null,
+          vrf_id:   values.vrf_id   ?? null,
+        });
         message.success(t('ipam.root.saveOk'));
       }
       setIsModalOpen(false);
@@ -103,8 +123,12 @@ const TabRootPrefix: React.FC = () => {
     }
   };
 
+  const groupOpts  = groups.map((g) => ({ value: g.id,  label: g.name }));
+  const typeOpts   = types.map((tp) => ({ value: tp.id, label: tp.name }));
+  const vrfOpts    = vrfs.map((v)  => ({ value: v.id,   label: v.rd ? `${v.name} (${v.rd})` : v.name }));
+
   const columns: ColumnsType<RootPrefix> = [
-    { title: t('common.id'), dataIndex: 'id', key: 'id', width: 70 },
+    { title: t('common.id'),    dataIndex: 'id',         key: 'id',  width: 70 },
     {
       title:     t('ipam.root.ipver'),
       dataIndex: 'ip_version',
@@ -118,8 +142,9 @@ const TabRootPrefix: React.FC = () => {
       key:       'cidr',
       render:    (v: string) => <strong>{v}</strong>,
     },
-    { title: t('ipam.root.group'), dataIndex: 'group', key: 'group' },
-    { title: t('ipam.root.type'),  dataIndex: 'type',  key: 'type'  },
+    { title: t('ipam.root.group'), key: 'group', render: (_, r) => r.group?.name  || '—' },
+    { title: t('ipam.root.type'),  key: 'type',  render: (_, r) => r.type?.name   || '—' },
+    { title: t('ipam.root.vrf'),   key: 'vrf',   render: (_, r) => r.vrf ? `${r.vrf.name}${r.vrf.rd ? ` (${r.vrf.rd})` : ''}` : '—' },
     {
       title:  t('common.actions'),
       key:    'action',
@@ -135,7 +160,6 @@ const TabRootPrefix: React.FC = () => {
 
   return (
     <div>
-      {/* Search bar */}
       <Space wrap style={{ marginBottom: 16 }}>
         <Input
           prefix={<SearchOutlined />}
@@ -172,6 +196,7 @@ const TabRootPrefix: React.FC = () => {
         rowKey="id"
         loading={loading}
         pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (total) => `${total} items` }}
+        scroll={{ x: 900 }}
       />
 
       <Modal
@@ -181,7 +206,7 @@ const TabRootPrefix: React.FC = () => {
         onCancel={() => setIsModalOpen(false)}
         okText={t('common.save')}
         cancelText={t('common.cancel')}
-        width={500}
+        width={520}
       >
         <Form form={form} layout="vertical">
           <Form.Item label={t('ipam.root.ipver')} name="ip_version" rules={[{ required: true }]}>
@@ -197,11 +222,14 @@ const TabRootPrefix: React.FC = () => {
           >
             <Input disabled={modalMode === 'edit'} placeholder="e.g. 10.0.0.0/8 or 2001:db8::/32" />
           </Form.Item>
-          <Form.Item label={t('ipam.root.group')} name="group">
-            <Input placeholder="e.g. Production, Office" />
+          <Form.Item label={t('ipam.root.group')} name="group_id">
+            <Select allowClear placeholder="—" options={groupOpts} />
           </Form.Item>
-          <Form.Item label={t('ipam.root.type')} name="type">
-            <Input placeholder="e.g. Internal, DMZ" />
+          <Form.Item label={t('ipam.root.type')} name="type_id">
+            <Select allowClear placeholder="—" options={typeOpts} />
+          </Form.Item>
+          <Form.Item label={t('ipam.root.vrf')} name="vrf_id">
+            <Select allowClear placeholder="—" options={vrfOpts} />
           </Form.Item>
         </Form>
       </Modal>

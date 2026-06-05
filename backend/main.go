@@ -107,8 +107,12 @@ func main() {
 
 	// 自动迁移：IPAM 模块 + System 模块
 	if err := db.AutoMigrate(
+		&models.IPAMGroup{},
+		&models.IPAMType{},
+		&models.IPAMVRF{},
 		&models.RootPrefix{},
 		&models.Subnet{},
+		&models.IPAMAuditLog{},
 		&models.SysGroup{},
 		&models.SysUser{},
 		&models.SysRefreshToken{},

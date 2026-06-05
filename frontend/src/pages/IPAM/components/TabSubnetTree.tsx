@@ -1,12 +1,15 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, Button, Form, Input, message, Modal, Select, Space, Table, Tag,
+  Alert, Button, Form, Modal, Input, message, Select, Space, Table, Tag,
 } from 'antd';
 import { SearchOutlined } from '@ant-design/icons';
 import { AxiosError } from 'axios';
 import type { ColumnsType } from 'antd/es/table';
-import { getRootPrefixes, getSubnetTree, mergeSubnets, splitSubnet } from '../../../api/ipam';
-import { RootPrefix, SubnetNode } from '../../../types/ipam';
+import {
+  getRootPrefixes, getSubnetTree, mergeSubnets, splitSubnet, updateSubnet,
+  getGroups, getIPAMTypes, getVRFs,
+} from '../../../api/ipam';
+import type { RootPrefix, SubnetNode, IPAMGroup, IPAMType, IPAMVRF } from '../../../types/ipam';
 import { useT } from '../../../i18n';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -19,8 +22,13 @@ interface UINode {
   target_type: 'root' | 'subnet';
   is_v4:       boolean;
   children?:   UINode[];
-  /** true while we are loading this root's children for the first time */
   _loading?:   boolean;
+  group_id?:   number | null;
+  group?:      { id: number; name: string } | null;
+  type_id?:    number | null;
+  type?:       { id: number; name: string } | null;
+  vrf_id?:     number | null;
+  vrf?:        { id: number; name: string; rd?: string } | null;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -33,18 +41,17 @@ function mapSubnets(subnets: SubnetNode[], is_v4: boolean): UINode[] {
     level:       s.level,
     target_type: 'subnet',
     is_v4,
+    group_id:    s.group_id,
+    group:       s.group ?? null,
+    type_id:     s.type_id,
+    type:        s.type ?? null,
+    vrf_id:      s.vrf_id,
+    vrf:         s.vrf ?? null,
     children:    s.children?.length ? mapSubnets(s.children, is_v4) : undefined,
   }));
 }
 
-function collectParentKeys(nodes: UINode[]): string[] {
-  return nodes.flatMap((n) =>
-    n.children?.length ? [n.key, ...collectParentKeys(n.children)] : [],
-  );
-}
 
-/** Recursively filter tree — keep node if its CIDR contains the search string,
- *  OR if any of its descendants do. */
 function filterTree(nodes: UINode[], q: string): UINode[] {
   if (!q) return nodes;
   return nodes.reduce<UINode[]>((acc, n) => {
@@ -65,23 +72,30 @@ const TabSubnetTree: React.FC = () => {
   const [treeData, setTreeData] = useState<UINode[]>([]);
   const [loading, setLoading]   = useState(false);
 
-  // Controlled expansion
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  const [searchCIDR, setSearchCIDR]     = useState('');
 
-  // Search
-  const [searchCIDR, setSearchCIDR] = useState('');
+  // Lookup data for dropdowns
+  const [groups, setGroups] = useState<IPAMGroup[]>([]);
+  const [types,  setTypes]  = useState<IPAMType[]>([]);
+  const [vrfs,   setVRFs]   = useState<IPAMVRF[]>([]);
 
   // Split modal
-  const [splitOpen, setSplitOpen]   = useState(false);
-  const [splitNode, setSplitNode]   = useState<UINode | null>(null);
-  const [splitForm]                 = Form.useForm();
+  const [splitOpen, setSplitOpen] = useState(false);
+  const [splitNode, setSplitNode] = useState<UINode | null>(null);
+  const [splitForm]               = Form.useForm();
 
   // Merge modal
   const [mergeOpen, setMergeOpen]         = useState(false);
   const [mergeParent, setMergeParent]     = useState<UINode | null>(null);
   const [mergeSelected, setMergeSelected] = useState<React.Key[]>([]);
 
-  // ── Initial load: all roots as top-level rows (no children yet) ────────────
+  // Edit subnet attributes modal
+  const [editOpen, setEditOpen]   = useState(false);
+  const [editNode, setEditNode]   = useState<UINode | null>(null);
+  const [editForm]                = Form.useForm();
+
+  // ── Initial load ─────────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -95,7 +109,13 @@ const TabSubnetTree: React.FC = () => {
           level:       'Root',
           target_type: 'root' as const,
           is_v4:       r.ip_version === 4,
-          children:    [], // placeholder so antd shows the expand arrow
+          group_id:    r.group_id,
+          group:       r.group ?? null,
+          type_id:     r.type_id,
+          type:        r.type ?? null,
+          vrf_id:      r.vrf_id,
+          vrf:         r.vrf ?? null,
+          children:    [],
         }));
         setTreeData(initial);
       } catch {
@@ -104,10 +124,14 @@ const TabSubnetTree: React.FC = () => {
         setLoading(false);
       }
     })();
+    // Load lookups for edit modal
+    Promise.all([getGroups(), getIPAMTypes(), getVRFs()]).then(([g, tp, v]) => {
+      setGroups(g.data); setTypes(tp.data); setVRFs(v.data);
+    }).catch(() => {});
   }, []);
 
-  // ── Refresh ONE root's subtree ─────────────────────────────────────────────
-  const reloadRootSubtree = useCallback(async (rootId: number) => {
+  // ── Refresh ONE root's subtree ────────────────────────────────────────────────
+  const reloadRootSubtree = useCallback(async (rootId: number, expandKey?: string) => {
     const root = roots.find((r) => r.id === rootId);
     if (!root) return;
     const res = await getSubnetTree(rootId);
@@ -119,14 +143,15 @@ const TabSubnetTree: React.FC = () => {
           : n,
       ),
     );
-    // Auto-expand the refreshed root
+    // Only expand the specific root and the operated node — don't expand everything
     setExpandedKeys((prev) => {
-      const childKeys = collectParentKeys(children).concat(`root-${rootId}`);
-      return Array.from(new Set([...prev, ...childKeys]));
+      const toAdd = new Set<string>([`root-${rootId}`]);
+      if (expandKey) toAdd.add(expandKey);
+      return Array.from(new Set([...prev, ...toAdd]));
     });
   }, [roots]);
 
-  // ── Lazy-load children on first expand ────────────────────────────────────
+  // ── Lazy-load children on first expand ───────────────────────────────────────
   const handleExpand = async (expanded: boolean, record: UINode) => {
     if (!expanded) {
       setExpandedKeys((prev) => prev.filter((k) => k !== record.key));
@@ -135,10 +160,8 @@ const TabSubnetTree: React.FC = () => {
     setExpandedKeys((prev) => Array.from(new Set([...prev, record.key])));
 
     if (record.target_type === 'root') {
-      // Only fetch if children are still the empty placeholder
       const current = treeData.find((n) => n.key === record.key);
       if (current && current.children?.length === 0) {
-        // Mark as loading
         setTreeData((prev) =>
           prev.map((n) => n.key === record.key ? { ...n, _loading: true } : n),
         );
@@ -154,7 +177,7 @@ const TabSubnetTree: React.FC = () => {
     }
   };
 
-  // ── Mask options for split modal ───────────────────────────────────────────
+  // ── Mask options for split modal ──────────────────────────────────────────────
   const maskOptions = (() => {
     if (!splitNode) return [];
     const parts = splitNode.cidr.split('/');
@@ -171,11 +194,9 @@ const TabSubnetTree: React.FC = () => {
     return opts;
   })();
 
-  // ── Split ──────────────────────────────────────────────────────────────────
+  // ── Split ─────────────────────────────────────────────────────────────────────
   const openSplit = (node: UINode) => {
-    setSplitNode(node);
-    splitForm.resetFields();
-    setSplitOpen(true);
+    setSplitNode(node); splitForm.resetFields(); setSplitOpen(true);
   };
 
   const handleSplitSubmit = async () => {
@@ -187,7 +208,7 @@ const TabSubnetTree: React.FC = () => {
       message.success(t('ipam.subnet.splitOk'));
       setSplitOpen(false);
       const affectedRoot = findRootId(treeData, splitNode.key);
-      if (affectedRoot) await reloadRootSubtree(affectedRoot);
+      if (affectedRoot) await reloadRootSubtree(affectedRoot, splitNode.key);
     } catch (err: any) {
       if (err instanceof AxiosError && err.response?.data?.error)
         Modal.error({ title: 'Split rejected', content: err.response.data.error });
@@ -195,11 +216,9 @@ const TabSubnetTree: React.FC = () => {
     }
   };
 
-  // ── Merge ──────────────────────────────────────────────────────────────────
+  // ── Merge ─────────────────────────────────────────────────────────────────────
   const openMerge = (node: UINode) => {
-    setMergeParent(node);
-    setMergeSelected([]);
-    setMergeOpen(true);
+    setMergeParent(node); setMergeSelected([]); setMergeOpen(true);
   };
 
   const handleMergeSubmit = async () => {
@@ -210,7 +229,7 @@ const TabSubnetTree: React.FC = () => {
       message.success(t('ipam.subnet.mergeOk'));
       setMergeOpen(false);
       const affectedRoot = mergeParent ? findRootId(treeData, mergeParent.key) : undefined;
-      if (affectedRoot) await reloadRootSubtree(affectedRoot);
+      if (affectedRoot) await reloadRootSubtree(affectedRoot, mergeParent?.key);
     } catch (err: any) {
       if (err instanceof AxiosError && err.response?.data?.error)
         Modal.error({ title: 'Merge rejected', content: err.response.data.error });
@@ -218,7 +237,40 @@ const TabSubnetTree: React.FC = () => {
     }
   };
 
-  // ─── Columns ────────────────────────────────────────────────────────────────
+  // ── Edit subnet attributes ────────────────────────────────────────────────────
+  const openEdit = (node: UINode) => {
+    setEditNode(node);
+    editForm.setFieldsValue({
+      group_id: node.group_id ?? undefined,
+      type_id:  node.type_id  ?? undefined,
+      vrf_id:   node.vrf_id   ?? undefined,
+    });
+    setEditOpen(true);
+  };
+
+  const handleEditSubmit = async () => {
+    if (!editNode) return;
+    const values = await editForm.validateFields();
+    try {
+      await updateSubnet(editNode.id, {
+        group_id: values.group_id ?? null,
+        type_id:  values.type_id  ?? null,
+        vrf_id:   values.vrf_id   ?? null,
+      });
+      message.success(t('ipam.subnet.saveOk'));
+      setEditOpen(false);
+      const affectedRoot = findRootId(treeData, editNode.key);
+      if (affectedRoot) await reloadRootSubtree(affectedRoot);
+    } catch {
+      message.error('Update failed');
+    }
+  };
+
+  // ─── Columns ─────────────────────────────────────────────────────────────────
+  const groupOpts = groups.map((g)  => ({ value: g.id,  label: g.name }));
+  const typeOpts  = types.map((tp)  => ({ value: tp.id, label: tp.name }));
+  const vrfOpts   = vrfs.map((v)    => ({ value: v.id,  label: v.rd ? `${v.name} (${v.rd})` : v.name }));
+
   const columns: ColumnsType<UINode> = [
     {
       title:     t('ipam.root.cidr'),
@@ -233,15 +285,33 @@ const TabSubnetTree: React.FC = () => {
       title:     t('ipam.subnet.level'),
       dataIndex: 'level',
       key:       'level',
-      width:     90,
+      width:     80,
       render:    (l: string) => (
         <Tag color={l === 'Root' ? 'purple' : l === 'L1' ? 'blue' : 'cyan'}>{l}</Tag>
       ),
     },
     {
+      title:  t('ipam.root.group'),
+      key:    'group',
+      width:  120,
+      render: (_, r) => r.group?.name || '—',
+    },
+    {
+      title:  t('ipam.root.type'),
+      key:    'type',
+      width:  120,
+      render: (_, r) => r.type?.name || '—',
+    },
+    {
+      title:  t('ipam.root.vrf'),
+      key:    'vrf',
+      width:  120,
+      render: (_, r) => r.vrf ? `${r.vrf.name}${r.vrf.rd ? ` (${r.vrf.rd})` : ''}` : '—',
+    },
+    {
       title:  t('common.actions'),
       key:    'action',
-      width:  210,
+      width:  240,
       render: (_: unknown, r: UINode) => (
         <Space>
           <Button type="link" size="small" onClick={() => openSplit(r)}>
@@ -252,12 +322,16 @@ const TabSubnetTree: React.FC = () => {
               {t('ipam.subnet.merge')}
             </Button>
           )}
+          {r.target_type === 'subnet' && (
+            <Button type="link" size="small" onClick={() => openEdit(r)}>
+              {t('ipam.subnet.editBtn')}
+            </Button>
+          )}
         </Space>
       ),
     },
   ];
 
-  // Apply CIDR search filter
   const visibleData = searchCIDR ? filterTree(treeData, searchCIDR.trim()) : treeData;
 
   return (
@@ -282,14 +356,15 @@ const TabSubnetTree: React.FC = () => {
         loading={loading}
         expandable={{
           expandedRowKeys: expandedKeys,
-          onExpand:              handleExpand,
-          indentSize:            20,
-          expandRowByClick:      false,
+          onExpand:        handleExpand,
+          indentSize:      20,
+          expandRowByClick: false,
         }}
         pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (n) => `${n} root prefixes` }}
         locale={{ emptyText: roots.length === 0
           ? 'No root prefixes found — create one in the Root Prefixes tab'
           : t('common.noData') }}
+        scroll={{ x: 900 }}
       />
 
       {/* Split Modal */}
@@ -337,7 +412,7 @@ const TabSubnetTree: React.FC = () => {
         <Table
           rowSelection={{ selectedRowKeys: mergeSelected, onChange: setMergeSelected }}
           columns={[
-            { title: 'CIDR', dataIndex: 'cidr', key: 'cidr', render: (v: string) => <strong>{v}</strong> },
+            { title: 'CIDR',  dataIndex: 'cidr',  key: 'cidr',  render: (v: string) => <strong>{v}</strong> },
             { title: 'Level', dataIndex: 'level', key: 'level', width: 80 },
           ]}
           dataSource={mergeParent?.children ?? []}
@@ -345,6 +420,34 @@ const TabSubnetTree: React.FC = () => {
           pagination={false}
           size="small"
         />
+      </Modal>
+
+      {/* Edit Subnet Attributes Modal */}
+      <Modal
+        title={t('ipam.subnet.editTitle')}
+        open={editOpen}
+        onOk={handleEditSubmit}
+        onCancel={() => setEditOpen(false)}
+        okText={t('common.save')}
+        cancelText={t('common.cancel')}
+        destroyOnClose
+        width={420}
+      >
+        <p style={{ marginBottom: 12 }}>
+          <strong>{editNode?.cidr}</strong>&nbsp;
+          <Tag color={editNode?.level === 'L1' ? 'blue' : 'cyan'}>{editNode?.level}</Tag>
+        </p>
+        <Form form={editForm} layout="vertical">
+          <Form.Item label={t('ipam.root.group')} name="group_id">
+            <Select allowClear placeholder="—" options={groupOpts} />
+          </Form.Item>
+          <Form.Item label={t('ipam.root.type')} name="type_id">
+            <Select allowClear placeholder="—" options={typeOpts} />
+          </Form.Item>
+          <Form.Item label={t('ipam.root.vrf')} name="vrf_id">
+            <Select allowClear placeholder="—" options={vrfOpts} />
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   );
