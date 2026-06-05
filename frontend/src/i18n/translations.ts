@@ -89,6 +89,7 @@ const t = {
   'ipam.root.group':       { en: 'Group', zh: '业务分组' },
   'ipam.root.type':        { en: 'Type', zh: '类型' },
   'ipam.root.vrf':         { en: 'VRF', zh: 'VRF' },
+  'ipam.root.remark':      { en: 'Remark', zh: '备注' },
   'ipam.root.search.cidr': { en: 'Search CIDR…', zh: '搜索 CIDR…' },
   'ipam.root.search.group':{ en: 'Filter by group…', zh: '按分组筛选…' },
   'ipam.root.newTitle':    { en: 'New Root Prefix', zh: '新建根前缀' },

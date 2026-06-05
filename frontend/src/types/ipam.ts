@@ -30,6 +30,7 @@ export interface RootPrefix {
   type?: IPAMType | null;
   vrf_id?: number | null;
   vrf?: IPAMVRF | null;
+  remark?: string;
   created_at: string;
   updated_at: string;
 }
@@ -45,6 +46,7 @@ export interface SubnetNode {
   type?: IPAMType | null;
   vrf_id?: number | null;
   vrf?: IPAMVRF | null;
+  remark?: string;
   children: SubnetNode[];
 }
 
@@ -64,10 +66,12 @@ export interface CreateRootPrefixReq {
   group_id?: number | null;
   type_id?: number | null;
   vrf_id?: number | null;
+  remark?: string;
 }
 
 export interface UpdateRootPrefixReq {
   group_id?: number | null;
   type_id?: number | null;
   vrf_id?: number | null;
+  remark?: string;
 }

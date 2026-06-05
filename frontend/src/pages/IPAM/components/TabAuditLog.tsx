@@ -34,7 +34,7 @@ const TabAuditLog: React.FC = () => {
   const [loading, setLoading]   = useState(false);
   const [retainDays, setRetainDays] = useState<number>(90);
 
-  const fetch = async (p = page, ps = pageSize) => {
+  const loadLogs = async (p = page, ps = pageSize) => {
     setLoading(true);
     try {
       const r = await getAuditLogs(p, ps);
@@ -47,10 +47,10 @@ const TabAuditLog: React.FC = () => {
     }
   };
 
-  useEffect(() => { fetch(); }, []);
+  useEffect(() => { loadLogs(); }, []);
 
   const handleTableChange = (p: number, ps: number) => {
-    setPage(p); setPageSize(ps); fetch(p, ps);
+    setPage(p); setPageSize(ps); loadLogs(p, ps);
   };
 
   const handlePurge = () => {
@@ -64,7 +64,7 @@ const TabAuditLog: React.FC = () => {
         try {
           const r = await purgeAuditLogs(retainDays);
           message.success(`${t('ipam.audit.purgeOk')} (${r.data.deleted} rows)`);
-          fetch(1, pageSize);
+          loadLogs(1, pageSize);
           setPage(1);
         } catch {
           message.error('Purge failed');
@@ -146,13 +146,14 @@ const TabAuditLog: React.FC = () => {
         rowKey="id"
         loading={loading}
         pagination={{
-          current:        page,
-          pageSize:       pageSize,
-          total:          total,
+          current:         page,
+          pageSize:        pageSize,
+          total:           total,
+          pageSizeOptions: ['10', '20', '50', '100'],
           showSizeChanger: true,
-          pageSizeOptions: ['20', '50', '100'],
-          showTotal:      (n) => `${n} records`,
-          onChange:       handleTableChange,
+          showQuickJumper: true,
+          showTotal:       (total2, range) => `${range[0]}-${range[1]} / ${total2}`,
+          onChange:        handleTableChange,
         }}
         scroll={{ x: 900 }}
       />

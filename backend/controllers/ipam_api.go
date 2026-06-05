@@ -316,6 +316,7 @@ func CreateRootPrefix(db *gorm.DB) gin.HandlerFunc {
 			GroupID   *uint  `json:"group_id"`
 			TypeID    *uint  `json:"type_id"`
 			VRFID     *uint  `json:"vrf_id"`
+			Remark    string `json:"remark"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
@@ -336,6 +337,7 @@ func CreateRootPrefix(db *gorm.DB) gin.HandlerFunc {
 			GroupID:   req.GroupID,
 			TypeID:    req.TypeID,
 			VRFID:     req.VRFID,
+			Remark:    req.Remark,
 		}
 		if err := db.Create(&root).Error; err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
@@ -364,9 +366,10 @@ func UpdateRootPrefix(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		var req struct {
-			GroupID *uint `json:"group_id"`
-			TypeID  *uint `json:"type_id"`
-			VRFID   *uint `json:"vrf_id"`
+			GroupID *uint  `json:"group_id"`
+			TypeID  *uint  `json:"type_id"`
+			VRFID   *uint  `json:"vrf_id"`
+			Remark  string `json:"remark"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -381,6 +384,7 @@ func UpdateRootPrefix(db *gorm.DB) gin.HandlerFunc {
 			"group_id": req.GroupID,
 			"type_id":  req.TypeID,
 			"vrf_id":   req.VRFID,
+			"remark":   req.Remark,
 		}).Error; err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
 			return
@@ -434,6 +438,7 @@ type SubnetNode struct {
 	Type     *models.IPAMType  `json:"type,omitempty"`
 	VRFID    *uint             `json:"vrf_id"`
 	VRF      *models.IPAMVRF   `json:"vrf,omitempty"`
+	Remark   string            `json:"remark"`
 	Children []SubnetNode      `json:"children"`
 }
 
@@ -457,6 +462,7 @@ func GetSubnetTree(db *gorm.DB) gin.HandlerFunc {
 					GroupID: s.GroupID, Group: s.Group,
 					TypeID: s.TypeID, Type: s.Type,
 					VRFID: s.VRFID, VRF: s.VRF,
+					Remark: s.Remark,
 					Children: []SubnetNode{},
 				})
 			}
@@ -470,6 +476,7 @@ func GetSubnetTree(db *gorm.DB) gin.HandlerFunc {
 					GroupID: s.GroupID, Group: s.Group,
 					TypeID: s.TypeID, Type: s.Type,
 					VRFID: s.VRFID, VRF: s.VRF,
+					Remark: s.Remark,
 				}
 				if children, ok := childrenMap[s.ID]; ok {
 					node.Children = children
@@ -493,9 +500,10 @@ func UpdateSubnet(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		var req struct {
-			GroupID *uint `json:"group_id"`
-			TypeID  *uint `json:"type_id"`
-			VRFID   *uint `json:"vrf_id"`
+			GroupID *uint  `json:"group_id"`
+			TypeID  *uint  `json:"type_id"`
+			VRFID   *uint  `json:"vrf_id"`
+			Remark  string `json:"remark"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -510,6 +518,7 @@ func UpdateSubnet(db *gorm.DB) gin.HandlerFunc {
 			"group_id": req.GroupID,
 			"type_id":  req.TypeID,
 			"vrf_id":   req.VRFID,
+			"remark":   req.Remark,
 		}).Error; err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
 			return

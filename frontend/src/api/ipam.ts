@@ -29,7 +29,7 @@ export const splitSubnet = (data: { target_type: 'root' | 'subnet'; target_id: n
 export const mergeSubnets = (data: { subnet_ids: number[] }) =>
   client.post('/ipam/merge', data);
 
-export const updateSubnet = (id: number, data: { group_id?: number | null; type_id?: number | null; vrf_id?: number | null }) =>
+export const updateSubnet = (id: number, data: { group_id?: number | null; type_id?: number | null; vrf_id?: number | null; remark?: string }) =>
   client.put(`/ipam/subnets/${id}`, data);
 
 // ── Groups ─────────────────────────────────────────────────────────────────────
@@ -82,4 +82,4 @@ export const getAuditLogs = (page: number, pageSize: number) =>
   );
 
 export const purgeAuditLogs = (days: number) =>
-  client.delete('/ipam/audit-logs', { params: { days } });
+  client.delete<{ deleted: number }>('/ipam/audit-logs', { params: { days } });

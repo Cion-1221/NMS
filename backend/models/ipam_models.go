@@ -58,6 +58,7 @@ type RootPrefix struct {
 	Type      *IPAMType  `gorm:"foreignKey:TypeID" json:"type,omitempty"`
 	VRFID     *uint      `gorm:"index" json:"vrf_id"`
 	VRF       *IPAMVRF   `gorm:"foreignKey:VRFID" json:"vrf,omitempty"`
+	Remark    string     `gorm:"type:varchar(500)" json:"remark"`
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 }
@@ -78,6 +79,7 @@ type Subnet struct {
 	Type         *IPAMType  `gorm:"foreignKey:TypeID" json:"type,omitempty"`
 	VRFID        *uint      `gorm:"index" json:"vrf_id"`
 	VRF          *IPAMVRF   `gorm:"foreignKey:VRFID" json:"vrf,omitempty"`
+	Remark       string     `gorm:"type:varchar(500)" json:"remark"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 }

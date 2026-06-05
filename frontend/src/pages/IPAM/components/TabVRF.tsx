@@ -17,14 +17,14 @@ const TabVRF: React.FC = () => {
   const [editing, setEditing] = useState<IPAMVRF | null>(null);
   const [form] = Form.useForm();
 
-  const fetch = async () => {
+  const loadData = async () => {
     setLoading(true);
     try { const r = await getVRFs(); setData(r.data); }
     catch { message.error('Failed to load VRFs'); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { fetch(); }, []);
+  useEffect(() => { loadData(); }, []);
 
   const openCreate = () => {
     setMode('create'); form.resetFields(); setOpen(true);
@@ -45,7 +45,7 @@ const TabVRF: React.FC = () => {
       okType:     'danger',
       cancelText: t('common.cancel'),
       onOk: async () => {
-        try { await deleteVRF(r.id); message.success(t('ipam.vrf.delDone')); fetch(); }
+        try { await deleteVRF(r.id); message.success(t('ipam.vrf.delDone')); loadData(); }
         catch { message.error('Delete failed'); }
       },
     });
@@ -59,7 +59,7 @@ const TabVRF: React.FC = () => {
       } else {
         await updateVRF(editing!.id, values); message.success(t('ipam.vrf.saveOk'));
       }
-      setOpen(false); fetch();
+      setOpen(false); loadData();
     } catch { message.error('Request failed'); }
   };
 
@@ -87,7 +87,13 @@ const TabVRF: React.FC = () => {
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>{t('ipam.vrf.add')}</Button>
       </div>
       <Table columns={columns} dataSource={data} rowKey="id" loading={loading}
-        pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (n) => `${n} items` }} />
+        pagination={{
+          defaultPageSize: 20,
+          pageSizeOptions: ['10', '20', '50', '100'],
+          showSizeChanger: true,
+          showQuickJumper: true,
+          showTotal: (total, range) => `${range[0]}-${range[1]} / ${total}`,
+        }} />
       <Modal
         title={mode === 'create' ? t('ipam.vrf.add') : t('ipam.vrf.edit')}
         open={open} onOk={handleSubmit} onCancel={() => setOpen(false)}
