@@ -22,7 +22,7 @@ jobs:
         with:
           node-version: '24'
 
-       Lord- Build frontend
+      - name: Build frontend
         working-directory: ./frontend
         run: |
           npm install
