@@ -59,7 +59,7 @@ const PreferencesTab: React.FC = () => {
     setSaving(true);
     try {
       // Persist theme + language to server
-      const updatedUser = await updateProfile({ theme, language });
+      await updateProfile({ theme, language });
       // Persist session duration
       await updateTokenSettings(sessionHours);
       // Refresh client-side user so AppContext picks up new values on next login

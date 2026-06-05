@@ -61,7 +61,7 @@ const TabRootPrefix: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleDelete = (id: number, cidr: string) => {
+  const handleDelete = (id: number, _cidr: string) => {
     confirm({
       title:      t('ipam.root.delTitle'),
       icon:       <ExclamationCircleFilled style={{ color: '#ff4d4f' }} />,

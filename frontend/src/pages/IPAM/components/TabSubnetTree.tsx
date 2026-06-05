@@ -186,14 +186,6 @@ const TabSubnetTree: React.FC = () => {
       await splitSubnet({ target_type: splitNode.target_type, target_id: splitNode.id, target_bits: v.target_bits });
       message.success(t('ipam.subnet.splitOk'));
       setSplitOpen(false);
-      // Reload only the affected root
-      const rootId = splitNode.target_type === 'root'
-        ? splitNode.id
-        : roots.find((r) => treeData.find((n) =>
-            n.id === r.id && n.target_type === 'root' &&
-            JSON.stringify(n).includes(`"id":${splitNode.id}`)
-          ))?.id;
-      // Simpler: re-read by traversing current treeData
       const affectedRoot = findRootId(treeData, splitNode.key);
       if (affectedRoot) await reloadRootSubtree(affectedRoot);
     } catch (err: any) {
@@ -289,7 +281,7 @@ const TabSubnetTree: React.FC = () => {
         rowKey="key"
         loading={loading}
         expandable={{
-          expandedRowKeys,
+          expandedRowKeys: expandedKeys,
           onExpand:              handleExpand,
           indentSize:            20,
           expandRowByClick:      false,
