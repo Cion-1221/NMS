@@ -9,6 +9,11 @@ jobs:
   build:
     name: Build frontend and backend
     runs-on: ubuntu-latest
+    # Opt into Node.js 24 for all action runtimes before GitHub forces it on 2026-09-16.
+    # (actions/checkout@v4 and actions/setup-node@v4 still ship with a Node 20 runtime;
+    # this variable upgrades them without requiring a major action version bump.)
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
     steps:
       - name: Checkout code
@@ -72,7 +77,7 @@ jobs:
 
             | 文件 | 说明 |
             |------|------|
-            | `nms-server` | Linux amd64 后端二进制（含认证/IPAM/System 模块） |
+            | `nms-server` | Linux amd64 后端二进制（含认证/IPAM/Devices/System 模块） |
             | `dist.tar.gz` | 前端静态资源压缩包，解压后交由 Nginx 或 Caddy 托管 |
 
             **默认账号：** `admin` / `admin`（首次登录强制修改密码）
