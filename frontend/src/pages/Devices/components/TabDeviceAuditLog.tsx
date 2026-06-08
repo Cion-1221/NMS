@@ -1,0 +1,174 @@
+import React, { useEffect, useState } from 'react';
+import { Button, Input, InputNumber, Modal, Select, Space, Table, Tag, Tooltip, message } from 'antd';
+import { DeleteOutlined, SearchOutlined } from '@ant-design/icons';
+import type { ColumnsType } from 'antd/es/table';
+import { getDeviceAuditLogs, purgeDeviceAuditLogs } from '../../../api/device';
+import type { DeviceAuditLog } from '../../../types/device';
+import { useT } from '../../../i18n';
+
+const ACTION_COLOR: Record<string, string> = {
+  create_device: 'green',  update_device: 'blue',   delete_device: 'red',
+  create_site:   'green',  update_site:   'blue',   delete_site:   'red',
+  create_pop:    'green',  update_pop:    'blue',   delete_pop:    'red',
+  create_role:   'green',  update_role:   'blue',   delete_role:   'red',
+  create_vendor: 'green',  update_vendor: 'blue',   delete_vendor: 'red',
+  purge_audit:   'orange',
+};
+
+const ACTION_OPTIONS  = Object.keys(ACTION_COLOR).map(a => ({ value: a, label: a }));
+const RESOURCE_OPTIONS = ['device', 'site', 'pop', 'role', 'vendor', 'audit_log']
+  .map(r => ({ value: r, label: r }));
+
+const TabDeviceAuditLog: React.FC = () => {
+  const t = useT();
+
+  const [data, setData]         = useState<DeviceAuditLog[]>([]);
+  const [total, setTotal]       = useState(0);
+  const [page, setPage]         = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [loading, setLoading]   = useState(false);
+  const [retainDays, setRetainDays] = useState<number>(90);
+
+  const [filterUser,     setFilterUser]     = useState('');
+  const [filterAction,   setFilterAction]   = useState<string | undefined>();
+  const [filterResource, setFilterResource] = useState<string | undefined>();
+
+  const loadLogs = async (
+    p = page, ps = pageSize,
+    u = filterUser, a = filterAction, rt = filterResource,
+  ) => {
+    setLoading(true);
+    try {
+      const r = await getDeviceAuditLogs(p, ps, {
+        username:      u  || undefined,
+        action:        a  || undefined,
+        resource_type: rt || undefined,
+      });
+      setData(r.data.items ?? []);
+      setTotal(r.data.total);
+    } catch (err: unknown) {
+      message.error(err instanceof Error ? err.message : 'Failed to load audit logs');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadLogs(); }, []);
+
+  const handleSearch = () => { setPage(1); loadLogs(1, pageSize, filterUser, filterAction, filterResource); };
+
+  const handleTableChange = (p: number, ps: number) => {
+    setPage(p); setPageSize(ps);
+    loadLogs(p, ps, filterUser, filterAction, filterResource);
+  };
+
+  const handlePurge = () => {
+    Modal.confirm({
+      title:      t('device.audit.purge'),
+      content:    t('device.audit.purgeConfirm', { days: retainDays }),
+      okType:     'danger',
+      okText:     t('device.audit.purge'),
+      cancelText: t('common.cancel'),
+      onOk: async () => {
+        try {
+          const r = await purgeDeviceAuditLogs(retainDays);
+          message.success(`${t('device.audit.purgeOk')} (${r.data.deleted} rows)`);
+          loadLogs(1, pageSize, filterUser, filterAction, filterResource);
+          setPage(1);
+        } catch (err: unknown) { message.error(err instanceof Error ? err.message : 'Purge failed'); }
+      },
+    });
+  };
+
+  const columns: ColumnsType<DeviceAuditLog> = [
+    {
+      title: t('device.audit.time'), dataIndex: 'created_at', key: 'created_at', width: 170,
+      render: (v: string) => new Date(v).toLocaleString(),
+    },
+    {
+      title: t('device.audit.operator'), dataIndex: 'username', key: 'username', width: 120,
+      render: (v: string) => <strong>{v}</strong>,
+    },
+    {
+      title: t('device.audit.action'), dataIndex: 'action', key: 'action', width: 160,
+      render: (v: string) => <Tag color={ACTION_COLOR[v] ?? 'default'}>{v}</Tag>,
+    },
+    {
+      title: t('device.audit.resource'), dataIndex: 'resource_type', key: 'resource_type', width: 100,
+    },
+    {
+      title: t('device.audit.resourceId'), dataIndex: 'resource_id', key: 'resource_id', width: 70,
+      render: (v) => v ?? '—',
+    },
+    {
+      title: t('device.audit.detail'), dataIndex: 'detail', key: 'detail', ellipsis: true,
+      render: (v: string) => (
+        <Tooltip title={v} placement="topLeft"><span>{v}</span></Tooltip>
+      ),
+    },
+  ];
+
+  return (
+    <div>
+      {/* Filter row */}
+      <Space wrap style={{ marginBottom: 16 }}>
+        <Input
+          prefix={<SearchOutlined />}
+          placeholder={t('device.audit.operator')}
+          value={filterUser}
+          onChange={e => setFilterUser(e.target.value)}
+          onPressEnter={handleSearch}
+          allowClear style={{ width: 160 }}
+        />
+        <Select
+          placeholder={t('device.audit.action')}
+          value={filterAction}
+          onChange={setFilterAction}
+          allowClear style={{ width: 180 }}
+          options={ACTION_OPTIONS}
+        />
+        <Select
+          placeholder={t('device.audit.resource')}
+          value={filterResource}
+          onChange={setFilterResource}
+          allowClear style={{ width: 140 }}
+          options={RESOURCE_OPTIONS}
+        />
+        <Button type="primary" onClick={handleSearch}>{t('common.search')}</Button>
+      </Space>
+
+      <Table
+        columns={columns}
+        dataSource={data}
+        rowKey="id"
+        loading={loading}
+        pagination={{
+          current:         page,
+          pageSize:        pageSize,
+          total:           total,
+          pageSizeOptions: ['10', '20', '50', '100'],
+          showSizeChanger: true,
+          showQuickJumper: true,
+          showTotal:       (n, range) => `${range[0]}-${range[1]} / ${n}`,
+          onChange:        handleTableChange,
+        }}
+        scroll={{ x: 900 }}
+      />
+
+      {/* Purge control */}
+      <Space style={{ marginTop: 16 }} wrap>
+        <span style={{ fontWeight: 500 }}>{t('device.audit.retain')}</span>
+        <InputNumber
+          min={1} max={3650} value={retainDays}
+          onChange={v => setRetainDays(v ?? 90)}
+          addonAfter={t('device.audit.days')} style={{ width: 180 }}
+        />
+        <Button danger icon={<DeleteOutlined />} onClick={handlePurge}>
+          {t('device.audit.purge')}
+        </Button>
+      </Space>
+    </div>
+  );
+};
+
+export default TabDeviceAuditLog;

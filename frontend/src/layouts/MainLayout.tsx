@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Avatar, Dropdown, Layout, Menu, Space, Typography } from 'antd';
 import {
   ClusterOutlined,
+  DesktopOutlined,
   LogoutOutlined,
   SettingOutlined,
   TeamOutlined,
@@ -22,15 +23,25 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
   const t = useT();
   const [profileOpen, setProfileOpen] = useState(false);
 
-  const currentPath  = location.pathname;
-  const defaultOpen  = currentPath.startsWith('/system') ? ['system'] : ['network_server'];
+  const currentPath = location.pathname;
+  const defaultOpen = currentPath.startsWith('/system')
+    ? ['system']
+    : currentPath.startsWith('/devices')
+      ? ['devices']
+      : ['network_services'];
 
   const sidebarItems = [
     {
-      key:      'network_server',
+      key:      'network_services',
       icon:     <ClusterOutlined />,
-      label:    t('nav.networkServer'),
+      label:    t('nav.networkServices'),
       children: [{ key: '/ipam', label: t('nav.ipam') }],
+    },
+    {
+      key:      'devices',
+      icon:     <DesktopOutlined />,
+      label:    t('nav.devices'),
+      children: [{ key: '/devices', label: t('nav.deviceList') }],
     },
     ...(user?.is_admin
       ? [{

@@ -105,14 +105,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 自动迁移：IPAM 模块 + System 模块
+	// 自动迁移：IPAM 模块 + Device 模块 + System 模块
+	// 迁移顺序：lookup 表必须先于引用它们的主表
 	if err := db.AutoMigrate(
+		// IPAM
 		&models.IPAMGroup{},
 		&models.IPAMType{},
 		&models.IPAMVRF{},
 		&models.RootPrefix{},
 		&models.Subnet{},
 		&models.IPAMAuditLog{},
+		// Device
+		&models.DeviceSite{},
+		&models.DevicePoP{},
+		&models.DeviceRole{},
+		&models.DeviceVendor{},
+		&models.Device{},
+		&models.DeviceAuditLog{},
+		// System
 		&models.SysGroup{},
 		&models.SysUser{},
 		&models.SysRefreshToken{},
@@ -145,6 +155,7 @@ func main() {
 	// 注册各模块路由
 	controllers.RegisterAuthRoutes(r, db, authCfg)
 	controllers.RegisterIPAMRoutes(r, db, authMW)
+	controllers.RegisterDeviceRoutes(r, db, authMW)
 	controllers.RegisterSystemRoutes(r, db, authMW)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Server.Port)

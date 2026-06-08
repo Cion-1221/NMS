@@ -9,6 +9,7 @@ import { AppProvider, useAppContext } from './contexts/AppContext';
 import { MainLayout } from './layouts/MainLayout';
 import LoginPage from './pages/Login';
 import IPAMPage from './pages/IPAM';
+import DevicesPage from './pages/Devices';
 import SystemUserPage from './pages/System/User';
 import SystemGroupPage from './pages/System/Group';
 import ChangePasswordModal from './components/ChangePasswordModal';
@@ -60,8 +61,9 @@ const AppRouter: React.FC = () => {
   return (
     <MainLayout>
       <Routes>
-        <Route path="/"      element={<Navigate to="/ipam" replace />} />
-        <Route path="/ipam"  element={<IPAMPage />} />
+        <Route path="/"         element={<Navigate to="/ipam" replace />} />
+        <Route path="/ipam"     element={<IPAMPage />} />
+        <Route path="/devices"  element={<DevicesPage />} />
         {user.is_admin && (
           <>
             <Route path="/system/users"  element={<SystemUserPage />} />
