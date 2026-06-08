@@ -366,7 +366,7 @@ const TabSites: React.FC = () => {
         }
       >
         {/* Section 1: site details */}
-        <Divider orientation="start" style={{ marginTop: 0 }}>
+        <Divider titlePlacement="start" style={{ marginTop: 0 }}>
           {t('device.site.infoSection')}
         </Divider>
         <Form form={siteForm} layout="vertical">
@@ -390,7 +390,7 @@ const TabSites: React.FC = () => {
         </div>
 
         {/* Section 2: PoP management */}
-        <Divider orientation="start">{t('device.tab.pops')}</Divider>
+        <Divider titlePlacement="start">{t('device.tab.pops')}</Divider>
         <div style={{ marginBottom: 12 }}>
           <Space>
             <Button type="primary" icon={<PlusOutlined />} size="small" onClick={openPopCreate}>
