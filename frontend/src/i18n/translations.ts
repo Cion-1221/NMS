@@ -14,6 +14,7 @@ const t = {
   // ── Common ──────────────────────────────────────────────────────────────────
   'common.save':        { en: 'Save', zh: '保存' },
   'common.cancel':      { en: 'Cancel', zh: '取消' },
+  'common.refresh':     { en: 'Refresh', zh: '刷新' },
   'common.confirm':     { en: 'Confirm', zh: '确认' },
   'common.delete':      { en: 'Delete', zh: '删除' },
   'common.edit':        { en: 'Edit', zh: '编辑' },
@@ -209,6 +210,9 @@ const t = {
   'device.search.vendor':      { en: 'Filter by vendor…', zh: '按厂商筛选…' },
   'device.popSelectSiteFirst': { en: 'Select a site first', zh: '请先选择站点' },
   'device.ipInvalid':          { en: 'Invalid IP address format', zh: 'IP 地址格式无效' },
+  'device.ipv4Invalid':        { en: 'Invalid IPv4 address (e.g. 192.168.1.1)', zh: '无效的 IPv4 地址（示例：192.168.1.1）' },
+  'device.ipv6Invalid':        { en: 'Invalid IPv6 address (e.g. 2001:db8::1)', zh: '无效的 IPv6 地址（示例：2001:db8::1）' },
+  'device.atLeastOneIP':       { en: 'At least one management IP (IPv4 or IPv6) is required', zh: 'IPv4 与 IPv6 管理地址至少填写一项' },
   'device.mgmtIpV6':           { en: 'Management IP (IPv6)', zh: '管理 IPv6' },
   'device.status':             { en: 'Status', zh: '状态' },
   'device.status.active':      { en: 'Active', zh: '在线/启用' },
@@ -217,10 +221,13 @@ const t = {
   'device.status.planned':     { en: 'Planned', zh: '计划中' },
   'device.search.ipv6':        { en: 'Search IPv6…', zh: '搜索 IPv6…' },
   'device.search.status':      { en: 'Filter by status…', zh: '按状态筛选…' },
+  'device.lookupsError':       { en: 'Filter options failed to load — displayed data may be stale. Click Refresh to retry.', zh: '筛选数据加载失败，当前显示的可能是旧数据，请点击「刷新」重试。' },
 
   // Sites
-  'device.site.add':      { en: 'Add Site', zh: '新增站点' },
-  'device.site.edit':     { en: 'Edit Site', zh: '编辑站点' },
+  'device.site.add':         { en: 'Add Site', zh: '新增站点' },
+  'device.site.edit':        { en: 'Edit Site', zh: '编辑站点' },
+  'device.site.infoSection': { en: 'Site Information', zh: '站点信息' },
+  'device.site.saveSite':    { en: 'Save Site', zh: '保存站点信息' },
   'device.site.name':     { en: 'Site Name', zh: '站点名称' },
   'device.site.region':   { en: 'Region', zh: '区域' },
   'device.site.address':  { en: 'Address', zh: '地址' },

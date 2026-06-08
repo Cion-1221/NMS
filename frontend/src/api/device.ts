@@ -20,8 +20,10 @@ export const deleteDeviceSite = (id: number) =>
 
 // ── PoPs ───────────────────────────────────────────────────────────────────────
 
-export const getDevicePoPs = () =>
-  client.get<DevicePoP[]>('/devices/pops');
+// Pass siteId to load only PoPs for a specific site (used by the Site edit drawer).
+// Omit siteId to load all PoPs (used by the Device List filter bar and form).
+export const getDevicePoPs = (siteId?: number) =>
+  client.get<DevicePoP[]>('/devices/pops', siteId != null ? { params: { site_id: siteId } } : undefined);
 
 export const createDevicePoP = (data: { name: string; site_id: number; description?: string }) =>
   client.post<DevicePoP>('/devices/pops', data);

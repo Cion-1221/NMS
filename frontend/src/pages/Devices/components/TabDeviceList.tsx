@@ -1,8 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Button, Form, Input, Modal, Select, Space, Table, Tag, Tooltip, message,
+  Alert, Button, Form, Input, Modal, Select, Space, Table, Tag, Tooltip, message,
 } from 'antd';
-import { ExclamationCircleFilled, PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import {
+  ExclamationCircleFilled, PlusOutlined, ReloadOutlined, SearchOutlined,
+} from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
   getDevices, createDevice, updateDevice, deleteDevice,
@@ -14,7 +16,7 @@ import { useT } from '../../../i18n';
 
 const { confirm } = Modal;
 
-// ── Status config ────────────────────────────────────────────────────────────────
+// ── Status config ─────────────────────────────────────────────────────────────
 const STATUS_COLOR: Record<string, string> = {
   active:      'green',
   offline:     'red',
@@ -24,11 +26,39 @@ const STATUS_COLOR: Record<string, string> = {
 
 const STATUS_VALUES = ['active', 'offline', 'maintenance', 'planned'] as const;
 
-// ── Component ────────────────────────────────────────────────────────────────────
+// ── IP address format helpers (module-level pure functions) ────────────────────
+// These provide fast, synchronous feedback before the request reaches the backend.
+// Go's net/netip.ParseAddr remains the authoritative validator for edge cases.
+
+/** Returns true when v is a syntactically valid IPv4 address (four 0-255 octets). */
+function isValidIPv4(v: string): boolean {
+  const parts = v.split('.');
+  if (parts.length !== 4) return false;
+  return parts.every(p => /^\d{1,3}$/.test(p) && Number(p) <= 255);
+}
+
+/**
+ * Returns true when v looks like a valid IPv6 address.
+ * Handles the full 8-group form and the compressed '::' notation;
+ * rejects inputs that contain more than one '::' sequence.
+ */
+function isValidIPv6(v: string): boolean {
+  if (v === '::') return true;
+  // Multiple '::' sequences are illegal
+  if ((v.match(/::/g) ?? []).length > 1) return false;
+  // Split around the optional '::' and collect all explicit groups
+  const halves = v.split('::');
+  const groups = halves.flatMap(h => (h === '' ? [] : h.split(':')));
+  // '::' compresses at least one group, so max explicit groups drops from 8 to 7
+  const maxGroups = halves.length === 2 ? 7 : 8;
+  if (groups.length > maxGroups) return false;
+  return groups.every(g => /^[0-9a-fA-F]{1,4}$/.test(g));
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
 const TabDeviceList: React.FC = () => {
   const t = useT();
 
-  // Status options built here (after t is available)
   const STATUS_OPTIONS = STATUS_VALUES.map(v => ({
     value: v,
     label: t(`device.status.${v}` as TranslationKey),
@@ -38,12 +68,13 @@ const TabDeviceList: React.FC = () => {
   const [data, setData]       = useState<Device[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // ── Lookup lists (shared: filter-bar + modal) ─────────────────────────────────
+  // ── Lookup lists ─────────────────────────────────────────────────────────────
   const [sites,          setSites]          = useState<DeviceSite[]>([]);
   const [allPoPs,        setAllPoPs]        = useState<DevicePoP[]>([]);
   const [roles,          setRoles]          = useState<DeviceRole[]>([]);
   const [vendors,        setVendors]        = useState<DeviceVendor[]>([]);
   const [lookupsLoading, setLookupsLoading] = useState(false);
+  const [lookupsError,   setLookupsError]   = useState(false);
 
   // ── Table filters ─────────────────────────────────────────────────────────────
   const [filterHostname, setFilterHostname] = useState('');
@@ -88,8 +119,12 @@ const TabDeviceList: React.FC = () => {
       setAllPoPs(p.data);
       setRoles(r.data);
       setVendors(v.data);
-    } catch {
-      // silently ignore lookup failures — filter/modal will still partially work
+      setLookupsError(false); // Clear stale-data banner on successful reload
+    } catch (err: unknown) {
+      // Surface the error so operators know filter options may be stale,
+      // but do NOT block the main device table — it loads independently.
+      setLookupsError(true);
+      message.warning(err instanceof Error ? err.message : '筛选选项加载失败');
     } finally {
       setLookupsLoading(false);
     }
@@ -104,18 +139,19 @@ const TabDeviceList: React.FC = () => {
 
   // ── Derived options ───────────────────────────────────────────────────────────
 
-  // PoP options in the modal: filtered by the currently selected site
+  // PoP options in the modal: filtered by the selected site
   const modalPopOptions = useMemo(() =>
     selectedSiteId
       ? allPoPs.filter(p => p.site_id === selectedSiteId).map(p => ({ value: p.id, label: p.name }))
       : [],
   [allPoPs, selectedSiteId]);
 
-  // PoP options in the filter bar: filtered by site filter (or all)
+  // PoP options in the filter bar: only valid when a site is already selected.
+  // When no site is selected the dropdown is disabled, so this can return [].
   const filterPopOptions = useMemo(() =>
     filterSiteId
       ? allPoPs.filter(p => p.site_id === filterSiteId).map(p => ({ value: p.id, label: p.name }))
-      : allPoPs.map(p => ({ value: p.id, label: p.name })),
+      : [],
   [allPoPs, filterSiteId]);
 
   // Client-side filtered rows
@@ -123,11 +159,11 @@ const TabDeviceList: React.FC = () => {
     if (filterHostname && !d.hostname.toLowerCase().includes(filterHostname.toLowerCase())) return false;
     if (filterIP     && !(d.management_ip   ?? '').includes(filterIP))   return false;
     if (filterIPv6   && !(d.management_ipv6 ?? '').includes(filterIPv6)) return false;
-    if (filterStatus   != null && d.status     !== filterStatus)     return false;
-    if (filterSiteId   != null && d.site_id    !== filterSiteId)     return false;
-    if (filterPopId    != null && d.pop_id     !== filterPopId)      return false;
-    if (filterRoleId   != null && d.role_id    !== filterRoleId)     return false;
-    if (filterVendorId != null && d.vendor_id  !== filterVendorId)   return false;
+    if (filterStatus   != null && d.status     !== filterStatus)    return false;
+    if (filterSiteId   != null && d.site_id    !== filterSiteId)    return false;
+    if (filterPopId    != null && d.pop_id     !== filterPopId)     return false;
+    if (filterRoleId   != null && d.role_id    !== filterRoleId)    return false;
+    if (filterVendorId != null && d.vendor_id  !== filterVendorId)  return false;
     return true;
   }), [data, filterHostname, filterIP, filterIPv6, filterStatus,
        filterSiteId, filterPopId, filterRoleId, filterVendorId]);
@@ -135,7 +171,8 @@ const TabDeviceList: React.FC = () => {
   // ── Filter bar handlers ───────────────────────────────────────────────────────
   const handleFilterSiteChange = (val: number | undefined) => {
     setFilterSiteId(val);
-    setFilterPopId(undefined); // clear PoP filter when site changes
+    // Clear dependent PoP filter whenever site filter changes
+    setFilterPopId(undefined);
   };
 
   // ── Modal helpers ─────────────────────────────────────────────────────────────
@@ -170,6 +207,49 @@ const TabDeviceList: React.FC = () => {
     form.setFieldValue('pop_id', undefined);
   };
 
+  // ── IP field validators ───────────────────────────────────────────────────────
+  // Each validator is memoised with useCallback so Ant Design Form doesn't treat
+  // it as a changed rule on every render (which would force re-validation loops).
+
+  /** Per-field IPv4 format check — empty value passes; "at least one" is separate. */
+  const validateManagementIP = useCallback(
+    (_: unknown, value: string | undefined) => {
+      if (!value) return Promise.resolve();
+      return isValidIPv4(value)
+        ? Promise.resolve()
+        : Promise.reject(new Error(t('device.ipv4Invalid')));
+    },
+    [t],
+  );
+
+  /** Per-field IPv6 format check — empty value passes. */
+  const validateManagementIPv6 = useCallback(
+    (_: unknown, value: string | undefined) => {
+      if (!value) return Promise.resolve();
+      return isValidIPv6(value)
+        ? Promise.resolve()
+        : Promise.reject(new Error(t('device.ipv6Invalid')));
+    },
+    [t],
+  );
+
+  /**
+   * Cross-field rule: at least one of IPv4 / IPv6 must be non-empty.
+   * Placed on both fields so the error clears on either field as soon as
+   * the user fills in the other one.  The `dependencies` prop on each
+   * Form.Item triggers re-validation of the sibling when the current field changes.
+   */
+  const validateAtLeastOneIP = useCallback(
+    () => {
+      const v4 = (form.getFieldValue('management_ip')   as string | undefined) ?? '';
+      const v6 = (form.getFieldValue('management_ipv6') as string | undefined) ?? '';
+      return v4 || v6
+        ? Promise.resolve()
+        : Promise.reject(new Error(t('device.atLeastOneIP')));
+    },
+    [form, t],
+  );
+
   const handleSubmit = async () => {
     const values = await form.validateFields();
     const payload = {
@@ -200,11 +280,11 @@ const TabDeviceList: React.FC = () => {
 
   const handleDelete = (r: Device) => {
     confirm({
-      title:   t('device.delTitle'),
-      icon:    <ExclamationCircleFilled style={{ color: '#ff4d4f' }} />,
-      content: t('device.delBody'),
-      okText:  t('device.delOk'),
-      okType:  'danger',
+      title:      t('device.delTitle'),
+      icon:       <ExclamationCircleFilled style={{ color: '#ff4d4f' }} />,
+      content:    t('device.delBody'),
+      okText:     t('device.delOk'),
+      okType:     'danger',
       cancelText: t('common.cancel'),
       onOk: async () => {
         try {
@@ -259,8 +339,26 @@ const TabDeviceList: React.FC = () => {
     },
   ];
 
+  // ─────────────────────────────────────────────────────────────────────────────
   return (
     <div>
+      {/* ── Lookup-error banner — shown only when filter options could not load ── */}
+      {lookupsError && (
+        <Alert
+          type="warning"
+          showIcon
+          message={t('device.lookupsError')}
+          action={
+            <Button size="small" onClick={() => { void loadLookups(); }}>
+              {t('common.refresh')}
+            </Button>
+          }
+          closable
+          onClose={() => setLookupsError(false)}
+          style={{ marginBottom: 12 }}
+        />
+      )}
+
       {/* ── Filter bar ── */}
       <Space wrap style={{ marginBottom: 16 }}>
         <Input
@@ -298,12 +396,15 @@ const TabDeviceList: React.FC = () => {
           allowClear style={{ width: 140 }}
           options={sites.map(s => ({ value: s.id, label: s.name }))}
         />
+        {/* PoP filter: disabled until a site is chosen, then scoped to that site's PoPs */}
         <Select
-          placeholder={t('device.search.pop')}
+          placeholder={filterSiteId ? t('device.search.pop') : t('device.popSelectSiteFirst')}
           value={filterPopId}
           onChange={setFilterPopId}
-          allowClear style={{ width: 140 }}
-          loading={lookupsLoading}
+          allowClear
+          disabled={!filterSiteId}
+          loading={lookupsLoading && !!filterSiteId}
+          style={{ width: 150 }}
           options={filterPopOptions}
         />
         <Select
@@ -320,6 +421,13 @@ const TabDeviceList: React.FC = () => {
           allowClear style={{ width: 130 }}
           options={vendors.map(v => ({ value: v.id, label: v.name }))}
         />
+        <Button
+          icon={<ReloadOutlined />}
+          onClick={() => { void loadData(); void loadLookups(); }}
+          loading={loading}
+        >
+          {t('common.refresh')}
+        </Button>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
           {t('device.add')}
         </Button>
@@ -361,27 +469,35 @@ const TabDeviceList: React.FC = () => {
             <Input />
           </Form.Item>
 
+          {/* IPv4 — validates format and cross-field "at least one" rule */}
           <Form.Item
             label={t('device.mgmtIp')}
             name="management_ip"
             extra="IPv4, e.g. 192.168.1.1"
+            dependencies={['management_ipv6']}
+            rules={[
+              { validator: validateManagementIP },
+              { validator: validateAtLeastOneIP },
+            ]}
           >
             <Input placeholder="192.168.1.1" />
           </Form.Item>
 
+          {/* IPv6 — validates format and cross-field "at least one" rule */}
           <Form.Item
             label={t('device.mgmtIpV6')}
             name="management_ipv6"
             extra="IPv6, e.g. 2001:db8::1"
+            dependencies={['management_ip']}
+            rules={[
+              { validator: validateManagementIPv6 },
+              { validator: validateAtLeastOneIP },
+            ]}
           >
             <Input placeholder="2001:db8::1" />
           </Form.Item>
 
-          <Form.Item
-            label={t('device.status')}
-            name="status"
-            initialValue="active"
-          >
+          <Form.Item label={t('device.status')} name="status" initialValue="active">
             <Select options={STATUS_OPTIONS} />
           </Form.Item>
 
@@ -403,17 +519,11 @@ const TabDeviceList: React.FC = () => {
           </Form.Item>
 
           <Form.Item label={t('device.role')} name="role_id">
-            <Select
-              allowClear
-              options={roles.map(r => ({ value: r.id, label: r.name }))}
-            />
+            <Select allowClear options={roles.map(r => ({ value: r.id, label: r.name }))} />
           </Form.Item>
 
           <Form.Item label={t('device.vendor')} name="vendor_id">
-            <Select
-              allowClear
-              options={vendors.map(v => ({ value: v.id, label: v.name }))}
-            />
+            <Select allowClear options={vendors.map(v => ({ value: v.id, label: v.name }))} />
           </Form.Item>
 
           <Form.Item label={t('device.remark')} name="remark">

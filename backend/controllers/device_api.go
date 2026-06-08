@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"nms-backend/models"
@@ -35,8 +36,9 @@ func derefStr(s *string) string {
 }
 
 // sortDevicesByIP sorts by ManagementIP (IPv4) first; falls back to ManagementIPv6.
-// Devices with no parseable IP sort last (zero netip.Addr{} is smallest — but since
-// valid addresses are always > Addr{} they naturally sink to the bottom after valid ones).
+// Devices with no parseable IP are pushed to the END of the list.
+// (netip.Addr{} zero-value would otherwise sort before all valid addresses, so we
+// guard against that explicitly.)
 func sortDevicesByIP(devices []models.Device) {
 	getPrimaryAddr := func(d models.Device) netip.Addr {
 		if d.ManagementIP != nil {
@@ -49,11 +51,19 @@ func sortDevicesByIP(devices []models.Device) {
 				return a
 			}
 		}
-		return netip.Addr{} // invalid — sorts after all valid addresses
+		return netip.Addr{} // zero value — signals "no valid IP"
 	}
 	sort.Slice(devices, func(i, j int) bool {
 		ai := getPrimaryAddr(devices[i])
 		aj := getPrimaryAddr(devices[j])
+		// Push no-IP devices to the end (Addr{} is < any valid address, so without
+		// these guards they would sort to the top, which is wrong).
+		if !ai.IsValid() {
+			return false // i has no IP → i belongs after j
+		}
+		if !aj.IsValid() {
+			return true // j has no IP → i belongs before j
+		}
 		return ai.Compare(aj) < 0
 	})
 }
@@ -61,10 +71,21 @@ func sortDevicesByIP(devices []models.Device) {
 // ── Site CRUD ──────────────────────────────────────────────────────────────────
 
 func ListDeviceSites(db *gorm.DB) gin.HandlerFunc {
+	// siteRow extends DeviceSite with a derived PoP count so the Sites table can
+	// display it without a secondary request and warn before deletion.
+	type siteRow struct {
+		models.DeviceSite
+		PopCount int64 `json:"pop_count"`
+	}
 	return func(c *gin.Context) {
-		var sites []models.DeviceSite
-		db.Order("name asc").Find(&sites)
-		c.JSON(http.StatusOK, sites)
+		var rows []siteRow
+		db.Model(&models.DeviceSite{}).
+			Select("device_sites.*, COALESCE(COUNT(device_pops.id), 0) AS pop_count").
+			Joins("LEFT JOIN device_pops ON device_pops.site_id = device_sites.id").
+			Group("device_sites.id").
+			Order("device_sites.name ASC").
+			Scan(&rows)
+		c.JSON(http.StatusOK, rows)
 	}
 }
 
@@ -85,6 +106,10 @@ func CreateDeviceSite(db *gorm.DB) gin.HandlerFunc {
 			Address: req.Address, Description: req.Description,
 		}
 		if err := db.Create(&site).Error; err != nil {
+			if msg := friendlyNameUniqueErr(err, "站点"); msg != "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
 			return
 		}
@@ -120,9 +145,17 @@ func UpdateDeviceSite(db *gorm.DB) gin.HandlerFunc {
 			"name": req.Name, "region": req.Region,
 			"address": req.Address, "description": req.Description,
 		}).Error; err != nil {
+			if msg := friendlyNameUniqueErr(err, "站点"); msg != "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
 			return
 		}
+		// Re-fetch so the response always contains the values actually written to the
+		// database.  GORM's Updates(map) applies to the DB but does not guarantee
+		// that the in-memory struct is updated; a fresh First() call is the safe path.
+		db.First(&site, id)
 		writeDeviceAudit(db, getUsername(c), "update_site", "site", &id,
 			fmt.Sprintf("Updated site %d: %s", id, req.Name))
 		c.JSON(http.StatusOK, site)
@@ -164,7 +197,14 @@ func DeleteDeviceSite(db *gorm.DB) gin.HandlerFunc {
 func ListDevicePoPs(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var pops []models.DevicePoP
-		db.Preload("Site").Order("name asc").Find(&pops)
+		q := db.Preload("Site").Order("name asc")
+		// Optional site_id filter — used when the frontend loads PoPs for a single site
+		if siteIDStr := c.Query("site_id"); siteIDStr != "" {
+			if siteID, err := strconv.Atoi(siteIDStr); err == nil && siteID > 0 {
+				q = q.Where("site_id = ?", siteID)
+			}
+		}
+		q.Find(&pops)
 		c.JSON(http.StatusOK, pops)
 	}
 }
@@ -188,6 +228,10 @@ func CreateDevicePoP(db *gorm.DB) gin.HandlerFunc {
 		}
 		pop := models.DevicePoP{Name: req.Name, SiteID: req.SiteID, Description: req.Description}
 		if err := db.Create(&pop).Error; err != nil {
+			if strings.Contains(err.Error(), "idx_pop_site_name") || strings.Contains(err.Error(), "Duplicate entry") {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "该站点下已存在同名的 PoP 节点，请使用其他名称"})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
 			return
 		}
@@ -245,6 +289,10 @@ func UpdateDevicePoP(db *gorm.DB) gin.HandlerFunc {
 			return nil
 		})
 		if txErr != nil {
+			if strings.Contains(txErr.Error(), "idx_pop_site_name") || strings.Contains(txErr.Error(), "Duplicate entry") {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "该站点下已存在同名的 PoP 节点，请使用其他名称"})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + txErr.Error()})
 			return
 		}
@@ -299,6 +347,10 @@ func CreateDeviceRole(db *gorm.DB) gin.HandlerFunc {
 		}
 		role := models.DeviceRole{Name: req.Name, Description: req.Description}
 		if err := db.Create(&role).Error; err != nil {
+			if msg := friendlyNameUniqueErr(err, "角色"); msg != "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
 			return
 		}
@@ -331,9 +383,14 @@ func UpdateDeviceRole(db *gorm.DB) gin.HandlerFunc {
 		if err := db.Model(&role).Updates(map[string]interface{}{
 			"name": req.Name, "description": req.Description,
 		}).Error; err != nil {
+			if msg := friendlyNameUniqueErr(err, "角色"); msg != "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
 			return
 		}
+		db.First(&role, id) // re-fetch to ensure response reflects applied updates
 		writeDeviceAudit(db, getUsername(c), "update_role", "role", &id,
 			fmt.Sprintf("Updated role %d: %s", id, req.Name))
 		c.JSON(http.StatusOK, role)
@@ -383,6 +440,10 @@ func CreateDeviceVendor(db *gorm.DB) gin.HandlerFunc {
 		}
 		vendor := models.DeviceVendor{Name: req.Name, Description: req.Description}
 		if err := db.Create(&vendor).Error; err != nil {
+			if msg := friendlyNameUniqueErr(err, "厂商"); msg != "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
 			return
 		}
@@ -415,9 +476,14 @@ func UpdateDeviceVendor(db *gorm.DB) gin.HandlerFunc {
 		if err := db.Model(&vendor).Updates(map[string]interface{}{
 			"name": req.Name, "description": req.Description,
 		}).Error; err != nil {
+			if msg := friendlyNameUniqueErr(err, "厂商"); msg != "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
 			return
 		}
+		db.First(&vendor, id) // re-fetch to ensure response reflects applied updates
 		writeDeviceAudit(db, getUsername(c), "update_vendor", "vendor", &id,
 			fmt.Sprintf("Updated vendor %d: %s", id, req.Name))
 		c.JSON(http.StatusOK, vendor)
@@ -488,6 +554,64 @@ func validateAndNormalizeIPs(rawIPv4, rawIPv6 string) (ipv4 *string, ipv6 *strin
 	return ipv4, ipv6, ""
 }
 
+// friendlyDeviceUniqueErr translates MySQL unique-key violations on the devices
+// table into clear, field-specific Chinese messages.
+// Returns "" when the error is NOT a uniqueness conflict (caller falls through to
+// the generic error path).
+// Detection order: IPv6 before IPv4 because "management_ipv6" contains "management_ip"
+// as a substring — checking the longer name first avoids false-positive matching.
+func friendlyDeviceUniqueErr(err error) string {
+	e := err.Error()
+	if !strings.Contains(e, "Duplicate entry") {
+		return ""
+	}
+	switch {
+	case strings.Contains(e, "management_ipv6"):
+		return "该 IPv6 地址已被其他设备使用，请检查后重试"
+	case strings.Contains(e, "management_ip"):
+		return "该 IPv4 地址已被其他设备使用，请检查后重试"
+	case strings.Contains(e, "hostname"):
+		return "主机名已存在，请使用其他名称"
+	default:
+		return ""
+	}
+}
+
+// friendlyNameUniqueErr returns a friendly Chinese error when err is a MySQL unique-key
+// violation on a single-column name index (DeviceSite, DeviceRole, DeviceVendor all use
+// a plain uniqueIndex on their Name field).  entityName is the display label used in the
+// message, e.g. "站点", "角色", "厂商".
+// Returns "" when the error is not a uniqueness conflict.
+func friendlyNameUniqueErr(err error, entityName string) string {
+	if strings.Contains(err.Error(), "Duplicate entry") {
+		return entityName + "名称已存在，请使用其他名称"
+	}
+	return ""
+}
+
+// formatDeviceIPs builds a concise IP summary for audit-log detail strings, including
+// only fields whose pointer is non-nil and non-empty.  This avoids noisy trailing
+// "IPv6: " suffixes when only one address family is configured on a device.
+// Examples:
+//
+//	"IP: 10.0.0.1"
+//	"IPv6: 2001:db8::1"
+//	"IP: 10.0.0.1, IPv6: 2001:db8::1"
+//	"no IP"
+func formatDeviceIPs(ipv4, ipv6 *string) string {
+	parts := make([]string, 0, 2)
+	if ipv4 != nil && *ipv4 != "" {
+		parts = append(parts, "IP: "+*ipv4)
+	}
+	if ipv6 != nil && *ipv6 != "" {
+		parts = append(parts, "IPv6: "+*ipv6)
+	}
+	if len(parts) == 0 {
+		return "no IP"
+	}
+	return strings.Join(parts, ", ")
+}
+
 func CreateDevice(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
@@ -547,13 +671,16 @@ func CreateDevice(db *gorm.DB) gin.HandlerFunc {
 			Remark:         req.Remark,
 		}
 		if err := db.Create(&device).Error; err != nil {
+			if msg := friendlyDeviceUniqueErr(err); msg != "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
 			return
 		}
 		db.Preload("Site").Preload("PoP").Preload("Role").Preload("Vendor").First(&device, device.ID)
 		writeDeviceAudit(db, getUsername(c), "create_device", "device", &device.ID,
-			fmt.Sprintf("Created device %s (IP: %s IPv6: %s)",
-				device.Hostname, derefStr(device.ManagementIP), derefStr(device.ManagementIPv6)))
+			fmt.Sprintf("Created device %s (%s)", device.Hostname, formatDeviceIPs(device.ManagementIP, device.ManagementIPv6)))
 		c.JSON(http.StatusOK, device)
 	}
 }
@@ -638,13 +765,16 @@ func UpdateDevice(db *gorm.DB) gin.HandlerFunc {
 			updates["management_ipv6"] = nil
 		}
 		if err := db.Model(&device).Updates(updates).Error; err != nil {
+			if msg := friendlyDeviceUniqueErr(err); msg != "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
 			return
 		}
 		db.Preload("Site").Preload("PoP").Preload("Role").Preload("Vendor").First(&device, id)
 		writeDeviceAudit(db, getUsername(c), "update_device", "device", &id,
-			fmt.Sprintf("Updated device %s (IP: %s IPv6: %s)",
-				device.Hostname, derefStr(device.ManagementIP), derefStr(device.ManagementIPv6)))
+			fmt.Sprintf("Updated device %s (%s)", device.Hostname, formatDeviceIPs(device.ManagementIP, device.ManagementIPv6)))
 		c.JSON(http.StatusOK, device)
 	}
 }
@@ -666,8 +796,7 @@ func DeleteDevice(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		writeDeviceAudit(db, getUsername(c), "delete_device", "device", &id,
-			fmt.Sprintf("Deleted device %s (IP: %s IPv6: %s)",
-				device.Hostname, derefStr(device.ManagementIP), derefStr(device.ManagementIPv6)))
+			fmt.Sprintf("Deleted device %s (%s)", device.Hostname, formatDeviceIPs(device.ManagementIP, device.ManagementIPv6)))
 		c.JSON(http.StatusOK, gin.H{"message": "success"})
 	}
 }

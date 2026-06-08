@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Form, Input, Modal, Space, Table, message } from 'antd';
-import { ExclamationCircleFilled, PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import { ExclamationCircleFilled, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { getDeviceVendors, createDeviceVendor, updateDeviceVendor, deleteDeviceVendor } from '../../../api/device';
 import type { DeviceVendor } from '../../../types/device';
@@ -95,6 +95,7 @@ const TabVendors: React.FC = () => {
           placeholder={`${t('device.vendor.name')} / ${t('device.vendor.desc')}`}
           value={search} onChange={e => setSearch(e.target.value)} allowClear style={{ width: 260 }}
         />
+        <Button icon={<ReloadOutlined />} onClick={loadData} loading={loading}>{t('common.refresh')}</Button>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>{t('device.vendor.add')}</Button>
       </Space>
       <Table columns={columns} dataSource={filtered} rowKey="id" loading={loading}

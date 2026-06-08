@@ -4,6 +4,8 @@ export interface DeviceSite {
   region?: string;
   address?: string;
   description?: string;
+  /** Derived by the list API via LEFT JOIN COUNT — not present on update/create responses. */
+  pop_count?: number;
   created_at: string;
   updated_at: string;
 }

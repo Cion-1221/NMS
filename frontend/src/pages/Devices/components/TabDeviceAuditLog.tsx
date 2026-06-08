@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Button, Input, InputNumber, Modal, Select, Space, Table, Tag, Tooltip, message } from 'antd';
-import { DeleteOutlined, SearchOutlined } from '@ant-design/icons';
+import { DeleteOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { getDeviceAuditLogs, purgeDeviceAuditLogs } from '../../../api/device';
 import type { DeviceAuditLog } from '../../../types/device';
@@ -15,9 +15,23 @@ const ACTION_COLOR: Record<string, string> = {
   purge_audit:   'orange',
 };
 
-const ACTION_OPTIONS  = Object.keys(ACTION_COLOR).map(a => ({ value: a, label: a }));
-const RESOURCE_OPTIONS = ['device', 'site', 'pop', 'role', 'vendor', 'audit_log']
-  .map(r => ({ value: r, label: r }));
+// ACTION_OPTIONS is the single source of truth: add a new entry to ACTION_COLOR above
+// and it automatically appears in both the color renderer and the filter dropdown.
+const ACTION_OPTIONS = Object.keys(ACTION_COLOR).map(a => ({ value: a, label: a }));
+
+// RESOURCE_OPTIONS is auto-derived from ACTION_COLOR keys so it stays in sync without
+// a separate maintenance step.
+// Derivation rule: "create_device" → "device", "purge_audit" → "audit_log"
+// (purge_* actions have a special mapping because the resource type logged is "audit_log").
+const RESOURCE_OPTIONS = [
+  ...new Set(
+    Object.keys(ACTION_COLOR).map(action => {
+      if (action.startsWith('purge_')) return 'audit_log';
+      const sep = action.indexOf('_');
+      return sep >= 0 ? action.slice(sep + 1) : action;
+    }),
+  ),
+].map(r => ({ value: r, label: r }));
 
 const TabDeviceAuditLog: React.FC = () => {
   const t = useT();
@@ -135,6 +149,9 @@ const TabDeviceAuditLog: React.FC = () => {
           options={RESOURCE_OPTIONS}
         />
         <Button type="primary" onClick={handleSearch}>{t('common.search')}</Button>
+        <Button icon={<ReloadOutlined />} onClick={() => loadLogs()} loading={loading}>
+          {t('common.refresh')}
+        </Button>
       </Space>
 
       <Table
