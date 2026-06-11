@@ -46,7 +46,9 @@ jobs:
         run: |
           go mod tidy
           go test ./...
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../nms-server main.go
+          # 必须编译整个包（.）而不是单个文件（main.go），
+          # 否则 package main 中的其他源文件（如 logger.go）不会参与编译
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../nms-server .
 
       # ── 自动动态提取 Commit 历史 ─────────────────────────────────────────────
       - name: Generate Custom Changelog
