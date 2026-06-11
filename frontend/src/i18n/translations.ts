@@ -339,6 +339,7 @@ const t = {
   'sysset.lockoutMinutes':     { en: 'Lockout duration (minutes)', zh: '锁定时长（分钟）' },
   'sysset.lockoutMinutesHint': { en: 'How long the username + IP stays locked after triggering (1-1440)', zh: '触发锁定后该「用户名 + IP」的封禁时长（1-1440）' },
   'sysset.saveOk':             { en: 'Security settings saved', zh: '安全设置已保存' },
+  'sysset.tab.settings':       { en: 'Protection Settings', zh: '防护配置' },
 
   // Lockout list (manual unlock)
   'sysset.lockouts.title':          { en: 'Active Lockouts', zh: '锁定列表' },

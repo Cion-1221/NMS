@@ -108,7 +108,7 @@ NMS/
             └── System/
                 ├── User/
                 ├── Group/
-                └── Settings/                   # 安全设置（登录防爆破阈值）
+                └── Settings/                   # 安全设置（Tab：防护配置 / 锁定列表）
 ```
 
 ---
