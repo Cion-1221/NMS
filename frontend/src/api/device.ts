@@ -1,6 +1,6 @@
 import client from './client';
 import type {
-  Device, CreateDeviceReq, UpdateDeviceReq,
+  Device, CreateDeviceReq, UpdateDeviceReq, DeviceListParams, DeviceListResp,
   DeviceSite, DevicePoP, DeviceRole, DeviceVendor, DeviceAuditLog,
 } from '../types/device';
 
@@ -64,8 +64,9 @@ export const deleteDeviceVendor = (id: number) =>
 
 // ── Devices ────────────────────────────────────────────────────────────────────
 
-export const getDevices = () =>
-  client.get<Device[]>('/devices');
+// 服务端分页：undefined 的过滤参数会被 axios 自动从 query string 中剔除
+export const getDevices = (params: DeviceListParams) =>
+  client.get<DeviceListResp>('/devices', { params });
 
 export const createDevice = (data: CreateDeviceReq) =>
   client.post<Device>('/devices', data);

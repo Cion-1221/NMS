@@ -4,6 +4,7 @@ import {
   ClusterOutlined,
   DesktopOutlined,
   LogoutOutlined,
+  SafetyCertificateOutlined,
   SettingOutlined,
   TeamOutlined,
   UserOutlined,
@@ -49,8 +50,9 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
           icon:     <SettingOutlined />,
           label:    t('nav.system'),
           children: [
-            { key: '/system/users',  icon: <UserOutlined />, label: t('nav.users') },
-            { key: '/system/groups', icon: <TeamOutlined />, label: t('nav.groups') },
+            { key: '/system/users',    icon: <UserOutlined />,              label: t('nav.users') },
+            { key: '/system/groups',   icon: <TeamOutlined />,              label: t('nav.groups') },
+            { key: '/system/settings', icon: <SafetyCertificateOutlined />, label: t('nav.settings') },
           ],
         }]
       : []),

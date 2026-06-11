@@ -3,6 +3,7 @@ import {
   SysUser, SysGroup,
   CreateUserReq, UpdateUserReq,
   CreateGroupReq, UpdateGroupReq,
+  SecuritySettings,
 } from '../types/system';
 
 // ── 用户管理 ──────────────────────────────────────────────────────────────────
@@ -30,3 +31,10 @@ export const updateGroup = (id: number, data: UpdateGroupReq) =>
 
 export const deleteGroup = (id: number) =>
   client.delete(`/system/groups/${id}`);
+
+// ── 安全设置（登录防爆破）──────────────────────────────────────────────────────
+export const getSecuritySettings = () =>
+  client.get<SecuritySettings>('/system/settings/security');
+
+export const updateSecuritySettings = (data: SecuritySettings) =>
+  client.put<SecuritySettings>('/system/settings/security', data);

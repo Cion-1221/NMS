@@ -100,14 +100,15 @@ NMS/
             ├── Devices/
             │   ├── index.tsx                  # 5 标签页容器（tab key 版本控制，切换强制刷新）
             │   └── components/
-            │       ├── TabDeviceList.tsx       # 设备列表（筛选/排序/CRUD Modal）
+            │       ├── TabDeviceList.tsx       # 设备列表（服务端分页/筛选/CRUD Modal）
             │       ├── TabSites.tsx            # 站点表 + 内嵌 PoP 管理 Drawer
             │       ├── TabRoles.tsx            # 角色 CRUD
             │       ├── TabVendors.tsx          # 厂商 CRUD
             │       └── TabDeviceAuditLog.tsx   # 审计日志（分页/筛选/清理）
             └── System/
                 ├── User/
-                └── Group/
+                ├── Group/
+                └── Settings/                   # 安全设置（登录防爆破阈值）
 ```
 
 ---
@@ -152,15 +153,37 @@ database:
   user: "nms_user"
   password: "StrongPassword123!"   # ← 替换为真实密码
   dbname: "nms_db"
+  # 连接池（可省略）
+  max_open_conns: 25               # 最大并发连接数
+  max_idle_conns: 10               # 最大空闲连接数
+  conn_max_lifetime_minutes: 60    # 连接最长存活（须小于 MySQL wait_timeout）
+  conn_max_idle_time_minutes: 10   # 空闲连接最长保留
 
 jwt:
   # ⚠️ 必须替换为随机字符串（至少 32 位），切勿泄露
   secret: "REPLACE_WITH_RANDOM_SECRET_AT_LEAST_32_CHARS"
   # Refresh Token 有效期（天）
   refresh_token_days: 7
+
+# 审计日志保留（可省略，默认 180 天；0 = 永久保留）
+audit:
+  max_age_days: 180
+
+# 日志（整个 log 块可省略，省略时使用下列默认值）
+log:
+  dir: "logs"          # 日志目录，支持绝对路径（如 /var/log/nms）
+  max_age_days: 30     # 保留最近 N 天，0 = 不限制
+  max_backups: 30      # 最多保留 N 个旧文件，0 = 不限制
+  compress: true       # gzip 压缩历史日志
+  level: "info"        # debug | info | warn | error
+  format: "json"       # json（适合 ELK/Loki） | text（适合直接 grep）
+  stdout: false        # 同时输出到标准输出（Docker / journald 推荐开启）
+  access_log: true     # HTTP 访问日志；Nginx/LB 层已采集时可关闭
 ```
 
 > **服务首次启动会自动建表并写入默认账号 `admin/admin`（MustChangePassword=true）。**
+>
+> 日志按天轮转，文件名格式 `nms-server-2026-06-11.log`，历史文件自动压缩为 `.log.gz` 并按保留策略清理。
 
 ### 3. 配置 systemd 服务常驻
 
@@ -279,6 +302,11 @@ npm run dev           # 监听 :5173，/api 请求自动代理到 :8080
 - 前端在 Access Token 到期前 **5 分钟**自动调用 `/auth/refresh`，无感知换取新 Token 对（Token 旋转）
 - 用户可在右上角菜单 → **会话时长设置** 中调整 Access Token 有效期
 
+**登录防爆破（可在 系统 → 安全设置 中配置）：**
+- 同一「用户名 + IP」在统计窗口内登录失败达到阈值后临时锁定，锁定期间直接返回 429
+- 默认：5 分钟窗口内失败 5 次 → 锁定 15 分钟；阈值、窗口、时长均可由管理员在界面调整
+- 用户不存在与密码错误同样计数，避免通过响应差异枚举用户名
+
 ---
 
 ## 🗂️ API 接口速查
@@ -313,7 +341,7 @@ npm run dev           # 监听 :5173，/api 请求自动代理到 :8080
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/` | 获取全部设备（按 IP 排序，无 IP 设备置末） |
+| `GET` | `/` | 服务端分页查询设备（`?page=&page_size=&hostname=&ip=&ipv6=&status=&site_id=&pop_id=&role_id=&vendor_id=`，按 IP 数值排序，无 IP 设备置末），返回 `{total, items, page, page_size}` |
 | `POST` | `/` | 创建设备（IPv4 / IPv6 至少填一项；Status 默认 active） |
 | `PUT` | `/:id` | 更新设备（同上约束；IP/Hostname 重复返回友好提示） |
 | `DELETE` | `/:id` | 删除设备（硬删除；审计日志保留） |
@@ -373,12 +401,14 @@ npm run dev           # 监听 :5173，/api 请求自动代理到 :8080
 | `POST` | `/groups` | 创建用户组 |
 | `PUT` | `/groups/:id` | 修改用户组（名称 / 权限） |
 | `DELETE` | `/groups/:id` | 删除用户组（组内有用户时拒绝） |
+| `GET` | `/settings/security` | 读取登录安全配置（防爆破阈值） |
+| `PUT` | `/settings/security` | 更新登录安全配置（开关 / 失败次数 / 窗口 / 锁定时长） |
 
 ### 健康检查
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/api/health` | 服务存活检测（无需认证） |
+| `GET` | `/api/health` | 存活 + 数据库连通性检测（无需认证）；DB 故障时返回 503 `{"status":"degraded"}` |
 
 ---
 
@@ -389,7 +419,7 @@ npm run dev           # 监听 :5173，/api 请求自动代理到 :8080
 | 模块 | 表前缀 | 数据表 | 状态 |
 |------|--------|--------|------|
 | **IPAM** | `ipam_` | `ipam_root_prefixes`, `ipam_subnets`, `ipam_groups`, `ipam_types`, `ipam_vrfs`, `ipam_audit_logs` | ✅ 已完成 |
-| **System** | `sys_` | `sys_groups`, `sys_users`, `sys_refresh_tokens` | ✅ 已完成 |
+| **System** | `sys_` | `sys_groups`, `sys_users`, `sys_refresh_tokens`, `sys_settings` | ✅ 已完成 |
 | **Devices** | `device_` | `device_sites`, `device_pops`, `device_roles`, `device_vendors`, `devices`, `device_audit_logs` | ✅ 已完成 |
 | 网络拓扑 | `topo_` | — | 🔜 规划中 |
 

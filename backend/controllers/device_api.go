@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -25,47 +24,6 @@ func writeDeviceAudit(db *gorm.DB, username, action, resourceType string, resour
 		ResourceID:   resourceID,
 		Detail:       detail,
 	}).Error
-}
-
-// derefStr safely dereferences a *string; returns "" for nil.
-func derefStr(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
-// sortDevicesByIP sorts by ManagementIP (IPv4) first; falls back to ManagementIPv6.
-// Devices with no parseable IP are pushed to the END of the list.
-// (netip.Addr{} zero-value would otherwise sort before all valid addresses, so we
-// guard against that explicitly.)
-func sortDevicesByIP(devices []models.Device) {
-	getPrimaryAddr := func(d models.Device) netip.Addr {
-		if d.ManagementIP != nil {
-			if a, err := netip.ParseAddr(*d.ManagementIP); err == nil {
-				return a
-			}
-		}
-		if d.ManagementIPv6 != nil {
-			if a, err := netip.ParseAddr(*d.ManagementIPv6); err == nil {
-				return a
-			}
-		}
-		return netip.Addr{} // zero value — signals "no valid IP"
-	}
-	sort.Slice(devices, func(i, j int) bool {
-		ai := getPrimaryAddr(devices[i])
-		aj := getPrimaryAddr(devices[j])
-		// Push no-IP devices to the end (Addr{} is < any valid address, so without
-		// these guards they would sort to the top, which is wrong).
-		if !ai.IsValid() {
-			return false // i has no IP → i belongs after j
-		}
-		if !aj.IsValid() {
-			return true // j has no IP → i belongs before j
-		}
-		return ai.Compare(aj) < 0
-	})
 }
 
 // ── Site CRUD ──────────────────────────────────────────────────────────────────
@@ -513,12 +471,56 @@ func DeleteDeviceVendor(db *gorm.DB) gin.HandlerFunc {
 
 // ── Device CRUD ────────────────────────────────────────────────────────────────
 
+// ListDevices 服务端分页 + 过滤。
+// 排序规则与旧版前端排序保持一致：有管理 IP 的设备按 IP 数值升序在前
+// （MySQL INET6_ATON 同时支持 IPv4/IPv6，IPv4 的 4 字节二进制天然排在
+// 大多数 IPv6 的 16 字节之前），无 IP 的设备排在最后。
 func ListDevices(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+		pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+		if page < 1 {
+			page = 1
+		}
+		if pageSize < 1 || pageSize > 200 {
+			pageSize = 20
+		}
+
+		query := db.Model(&models.Device{})
+		if v := c.Query("hostname"); v != "" {
+			query = query.Where("hostname LIKE ?", "%"+v+"%")
+		}
+		if v := c.Query("ip"); v != "" {
+			query = query.Where("management_ip LIKE ?", "%"+v+"%")
+		}
+		if v := c.Query("ipv6"); v != "" {
+			query = query.Where("management_ipv6 LIKE ?", "%"+v+"%")
+		}
+		if v := c.Query("status"); v != "" {
+			query = query.Where("status = ?", v)
+		}
+		for param, col := range map[string]string{
+			"site_id": "site_id", "pop_id": "pop_id", "role_id": "role_id", "vendor_id": "vendor_id",
+		} {
+			if v := c.Query(param); v != "" {
+				if id, err := strconv.Atoi(v); err == nil && id > 0 {
+					query = query.Where(col+" = ?", id)
+				}
+			}
+		}
+
+		var total int64
+		query.Count(&total)
+
 		var devices []models.Device
-		db.Preload("Site").Preload("PoP").Preload("Role").Preload("Vendor").Find(&devices)
-		sortDevicesByIP(devices)
-		c.JSON(http.StatusOK, devices)
+		query.
+			Preload("Site").Preload("PoP").Preload("Role").Preload("Vendor").
+			Order("(management_ip IS NULL AND management_ipv6 IS NULL) ASC").
+			Order("COALESCE(INET6_ATON(management_ip), INET6_ATON(management_ipv6)) ASC").
+			Order("id ASC").
+			Offset((page - 1) * pageSize).Limit(pageSize).
+			Find(&devices)
+		c.JSON(http.StatusOK, gin.H{"total": total, "items": devices, "page": page, "page_size": pageSize})
 	}
 }
 

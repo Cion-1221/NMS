@@ -63,6 +63,28 @@ export interface DeviceAuditLog {
   created_at: string;
 }
 
+/** 设备列表查询参数 — 服务端分页 + 过滤 */
+export interface DeviceListParams {
+  page: number;
+  page_size: number;
+  hostname?: string;
+  ip?: string;
+  ipv6?: string;
+  status?: string;
+  site_id?: number;
+  pop_id?: number;
+  role_id?: number;
+  vendor_id?: number;
+}
+
+/** 服务端分页响应 */
+export interface DeviceListResp {
+  total: number;
+  items: Device[];
+  page: number;
+  page_size: number;
+}
+
 export interface CreateDeviceReq {
   hostname: string;
   management_ip?: string | null;

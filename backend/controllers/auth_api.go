@@ -118,9 +118,18 @@ func Login(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			return
 		}
 
+		// 防爆破：处于锁定期的 用户名+IP 直接拒绝，不触碰数据库密码校验
+		clientIP := c.ClientIP()
+		if msg := loginGuardCheck(db, req.Username, clientIP); msg != "" {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": msg})
+			return
+		}
+
 		var user models.SysUser
 		if err := db.Preload("Group").Where("username = ?", req.Username).First(&user).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
+				// 用户不存在与密码错误同样计入失败，避免通过响应差异枚举用户名
+				loginGuardFail(db, req.Username, clientIP)
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
 				return
 			}
@@ -129,9 +138,13 @@ func Login(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 		}
 
 		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+			loginGuardFail(db, req.Username, clientIP)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
 			return
 		}
+
+		// 登录成功：清除该 用户名+IP 的失败计数
+		loginGuardSuccess(req.Username, clientIP)
 
 		// 清理过期的 Refresh Token
 		cleanupExpiredTokens(db, user.ID)

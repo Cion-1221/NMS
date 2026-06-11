@@ -45,6 +45,17 @@ type SysUser struct {
 
 func (SysUser) TableName() string { return "sys_users" }
 
+// SysSetting 系统级键值配置（由 System 模块管理界面维护）。
+// 列名使用 setting_key 而非 key —— key 是 MySQL 保留字。
+type SysSetting struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	Key       string    `gorm:"column:setting_key;type:varchar(100);uniqueIndex;not null" json:"key"`
+	Value     string    `gorm:"type:varchar(1000);not null" json:"value"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (SysSetting) TableName() string { return "sys_settings" }
+
 type SysRefreshToken struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
 	UserID    uint      `gorm:"not null;index" json:"user_id"`

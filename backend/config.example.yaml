@@ -7,9 +7,43 @@ database:
   user: "nms_user"
   password: "CHANGE_ME"
   dbname: "nms_db"
+  # ── 连接池（以下 4 项可省略，省略时使用所示默认值）─────────────────────────
+  # 最大并发连接数
+  max_open_conns: 25
+  # 最大空闲连接数
+  max_idle_conns: 10
+  # 连接最长存活时间（分钟）；必须小于 MySQL wait_timeout（默认 480 分钟），
+  # 否则空闲连接被服务端关闭后下一个请求会拿到死连接
+  conn_max_lifetime_minutes: 60
+  # 空闲连接最长保留时间（分钟）
+  conn_max_idle_time_minutes: 10
 
 jwt:
   # ⚠️ 生产部署前必须替换为强随机字符串（至少 32 位），切勿泄露
   secret: "CHANGE_ME_TO_A_RANDOM_SECRET_STRING_AT_LEAST_32_CHARS"
   # Refresh Token 有效期（天），0 = 使用默认值 7 天
   refresh_token_days: 7
+
+# 审计日志保留策略（可省略，省略时默认 180 天）
+audit:
+  # IPAM / Devices 审计日志自动保留天数，超期每日自动清理；0 = 永久保留
+  max_age_days: 180
+
+# 日志：按天轮转，文件名 nms-server-YYYY-MM-DD.log（整个 log 块可省略，省略时使用下列默认值）
+log:
+  # 日志存储目录（支持绝对路径，如 /var/log/nms）
+  dir: "logs"
+  # 保留最近 N 天的日志文件，0 = 不限制
+  max_age_days: 30
+  # 最多保留 N 个旧文件，与 max_age_days 双重保障，0 = 不限制
+  max_backups: 30
+  # 是否 gzip 压缩历史日志文件（后台异步执行，不阻塞业务）
+  compress: true
+  # 最低记录级别: debug | info | warn | error
+  level: "info"
+  # 日志格式: json（适合 ELK/Loki 采集） | text（适合直接 grep）
+  format: "json"
+  # 是否同时输出到标准输出（Docker / systemd journald 环境推荐开启）
+  stdout: false
+  # 是否记录 HTTP 请求访问日志；部署在 Nginx/LB 后且已有访问日志采集时可关闭
+  access_log: true

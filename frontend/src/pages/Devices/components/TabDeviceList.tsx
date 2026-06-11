@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, Button, Form, Input, Modal, Select, Space, Table, Tag, Tooltip, message,
 } from 'antd';
@@ -39,8 +39,10 @@ function isValidIPv4(v: string): boolean {
 
 /**
  * Returns true when v looks like a valid IPv6 address.
- * Handles the full 8-group form and the compressed '::' notation;
- * rejects inputs that contain more than one '::' sequence.
+ * Handles the full 8-group form, the compressed '::' notation, and the
+ * IPv4-mapped/embedded form whose last group is a dotted-quad
+ * (e.g. ::ffff:192.168.1.1).  Rejects multiple '::' sequences and
+ * non-compressed addresses whose group count is not exactly 8.
  */
 function isValidIPv6(v: string): boolean {
   if (v === '::') return true;
@@ -48,11 +50,34 @@ function isValidIPv6(v: string): boolean {
   if ((v.match(/::/g) ?? []).length > 1) return false;
   // Split around the optional '::' and collect all explicit groups
   const halves = v.split('::');
-  const groups = halves.flatMap(h => (h === '' ? [] : h.split(':')));
-  // '::' compresses at least one group, so max explicit groups drops from 8 to 7
-  const maxGroups = halves.length === 2 ? 7 : 8;
-  if (groups.length > maxGroups) return false;
-  return groups.every(g => /^[0-9a-fA-F]{1,4}$/.test(g));
+  const hasCompression = halves.length === 2;
+  let groups = halves.flatMap(h => (h === '' ? [] : h.split(':')));
+  // IPv4-mapped form: a trailing dotted-quad counts as two 16-bit groups
+  let embeddedGroups = 0;
+  const last = groups[groups.length - 1];
+  if (last !== undefined && last.includes('.')) {
+    if (!isValidIPv4(last)) return false;
+    groups = groups.slice(0, -1);
+    embeddedGroups = 2;
+  }
+  if (groups.some(g => !/^[0-9a-fA-F]{1,4}$/.test(g))) return false;
+  const totalGroups = groups.length + embeddedGroups;
+  // '::' compresses at least one group → at most 7 explicit; otherwise exactly 8
+  return hasCompression ? totalGroups <= 7 : totalGroups === 8;
+}
+
+/**
+ * Debounce a fast-changing value (text-filter inputs) so each keystroke
+ * doesn't fire a server query.  Returns the value after it has been
+ * stable for `delay` ms.
+ */
+function useDebounced<T>(value: T, delay = 400): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebounced(value), delay);
+    return () => window.clearTimeout(id);
+  }, [value, delay]);
+  return debounced;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -64,9 +89,12 @@ const TabDeviceList: React.FC = () => {
     label: t(`device.status.${v}` as TranslationKey),
   }));
 
-  // ── Data ─────────────────────────────────────────────────────────────────────
+  // ── Data (server-side pagination) ────────────────────────────────────────────
   const [data, setData]       = useState<Device[]>([]);
   const [loading, setLoading] = useState(false);
+  const [page,     setPage]     = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total,    setTotal]    = useState(0);
 
   // ── Lookup lists ─────────────────────────────────────────────────────────────
   const [sites,          setSites]          = useState<DeviceSite[]>([]);
@@ -94,17 +122,48 @@ const TabDeviceList: React.FC = () => {
   const [form] = Form.useForm();
 
   // ── Loaders ───────────────────────────────────────────────────────────────────
-  const loadData = async () => {
+
+  // 文本筛选取防抖后的值作为请求依赖，避免每个按键都触发服务端查询
+  const debHostname = useDebounced(filterHostname);
+  const debIP       = useDebounced(filterIP);
+  const debIPv6     = useDebounced(filterIPv6);
+
+  // 请求序号守卫：筛选/翻页连续变化时丢弃乱序返回的过期响应
+  const reqSeq = useRef(0);
+
+  const loadData = useCallback(async () => {
+    const seq = ++reqSeq.current;
     setLoading(true);
     try {
-      const r = await getDevices();
-      setData(r.data);
+      const r = await getDevices({
+        page,
+        page_size: pageSize,
+        hostname:  debHostname || undefined,
+        ip:        debIP       || undefined,
+        ipv6:      debIPv6     || undefined,
+        status:    filterStatus,
+        site_id:   filterSiteId,
+        pop_id:    filterPopId,
+        role_id:   filterRoleId,
+        vendor_id: filterVendorId,
+      });
+      if (seq !== reqSeq.current) return; // 已有更新的请求发出，丢弃本次结果
+      // 删除当前页最后一条记录后该页可能为空 —— 自动回退一页重新加载
+      if (r.data.items.length === 0 && r.data.total > 0 && page > 1) {
+        setPage(p => Math.max(1, p - 1));
+        return;
+      }
+      setData(r.data.items);
+      setTotal(r.data.total);
     } catch (err: unknown) {
-      message.error(err instanceof Error ? err.message : 'Failed to load devices');
+      if (seq === reqSeq.current) {
+        message.error(err instanceof Error ? err.message : 'Failed to load devices');
+      }
     } finally {
-      setLoading(false);
+      if (seq === reqSeq.current) setLoading(false);
     }
-  };
+  }, [page, pageSize, debHostname, debIP, debIPv6, filterStatus,
+      filterSiteId, filterPopId, filterRoleId, filterVendorId]);
 
   const loadLookups = async () => {
     setLookupsLoading(true);
@@ -130,7 +189,16 @@ const TabDeviceList: React.FC = () => {
     }
   };
 
-  useEffect(() => { loadData(); loadLookups(); }, []);
+  // 筛选条件变化时回到第一页（loadData 依赖变化会自动触发重新查询）
+  useEffect(() => {
+    setPage(1);
+  }, [debHostname, debIP, debIPv6, filterStatus,
+      filterSiteId, filterPopId, filterRoleId, filterVendorId]);
+
+  // 分页 / 筛选任一变化即重新查询；首次挂载同样由此触发
+  useEffect(() => { void loadData(); }, [loadData]);
+
+  useEffect(() => { void loadLookups(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-fetch lookups every time the modal opens to pick up any dictionary changes
   useEffect(() => {
@@ -153,20 +221,6 @@ const TabDeviceList: React.FC = () => {
       ? allPoPs.filter(p => p.site_id === filterSiteId).map(p => ({ value: p.id, label: p.name }))
       : [],
   [allPoPs, filterSiteId]);
-
-  // Client-side filtered rows
-  const filtered = useMemo(() => data.filter(d => {
-    if (filterHostname && !d.hostname.toLowerCase().includes(filterHostname.toLowerCase())) return false;
-    if (filterIP     && !(d.management_ip   ?? '').includes(filterIP))   return false;
-    if (filterIPv6   && !(d.management_ipv6 ?? '').includes(filterIPv6)) return false;
-    if (filterStatus   != null && d.status     !== filterStatus)    return false;
-    if (filterSiteId   != null && d.site_id    !== filterSiteId)    return false;
-    if (filterPopId    != null && d.pop_id     !== filterPopId)     return false;
-    if (filterRoleId   != null && d.role_id    !== filterRoleId)    return false;
-    if (filterVendorId != null && d.vendor_id  !== filterVendorId)  return false;
-    return true;
-  }), [data, filterHostname, filterIP, filterIPv6, filterStatus,
-       filterSiteId, filterPopId, filterRoleId, filterVendorId]);
 
   // ── Filter bar handlers ───────────────────────────────────────────────────────
   const handleFilterSiteChange = (val: number | undefined) => {
@@ -433,18 +487,29 @@ const TabDeviceList: React.FC = () => {
         </Button>
       </Space>
 
-      {/* ── Table ── */}
+      {/* ── Table (server-side pagination) ── */}
       <Table
         columns={columns}
-        dataSource={filtered}
+        dataSource={data}
         rowKey="id"
         loading={loading}
         pagination={{
-          defaultPageSize: 20,
+          current: page,
+          pageSize,
+          total,
           pageSizeOptions: ['10', '20', '50', '100'],
           showSizeChanger: true,
           showQuickJumper: true,
           showTotal: (n, range) => `${range[0]}-${range[1]} / ${n}`,
+          onChange: (p, ps) => {
+            // 切换每页条数时回到第一页，避免落在超出范围的页码上
+            if (ps !== pageSize) {
+              setPageSize(ps);
+              setPage(1);
+            } else {
+              setPage(p);
+            }
+          },
         }}
         scroll={{ x: 1600 }}
       />

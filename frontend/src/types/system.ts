@@ -32,6 +32,14 @@ export interface CreateGroupReq {
   permissions: string;
 }
 
+/** 登录安全（防爆破）配置 — 对应 GET/PUT /system/settings/security */
+export interface SecuritySettings {
+  enabled: boolean;
+  max_attempts: number;
+  window_minutes: number;
+  lockout_minutes: number;
+}
+
 export interface UpdateGroupReq {
   name?: string;
   permissions?: string;

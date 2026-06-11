@@ -9,6 +9,7 @@ const t = {
   'nav.system':          { en: 'System', zh: '系统' },
   'nav.users':           { en: 'Users', zh: '用户' },
   'nav.groups':          { en: 'Groups', zh: '用户组' },
+  'nav.settings':        { en: 'Security', zh: '安全设置' },
   'nav.brand':           { en: 'NMS Network', zh: 'NMS 网络管理' },
 
   // ── Common ──────────────────────────────────────────────────────────────────
@@ -326,6 +327,18 @@ const t = {
   'sys.group.createOk':  { en: 'Group created', zh: '用户组创建成功' },
   'sys.group.editOk':    { en: 'Group updated', zh: '用户组已更新' },
   'sys.group.delOk':     { en: 'Group deleted', zh: '用户组已删除' },
+
+  // Security settings (login brute-force protection)
+  'sysset.title':              { en: 'Login Security', zh: '登录安全' },
+  'sysset.desc':               { en: 'When failed login attempts from the same username + IP exceed the threshold within the window, that combination is temporarily locked out.', zh: '同一「用户名 + IP」在统计窗口内登录失败达到阈值后，将被临时锁定，锁定期间拒绝登录尝试。' },
+  'sysset.enabled':            { en: 'Enable brute-force protection', zh: '启用登录防爆破' },
+  'sysset.maxAttempts':        { en: 'Max failed attempts', zh: '最大失败次数' },
+  'sysset.maxAttemptsHint':    { en: 'Lockout triggers when failures reach this count (1-100)', zh: '窗口内失败达到该次数即触发锁定（1-100）' },
+  'sysset.windowMinutes':      { en: 'Counting window (minutes)', zh: '统计窗口（分钟）' },
+  'sysset.windowMinutesHint':  { en: 'Failures older than this are not counted (1-1440)', zh: '仅统计该时间范围内的失败次数（1-1440）' },
+  'sysset.lockoutMinutes':     { en: 'Lockout duration (minutes)', zh: '锁定时长（分钟）' },
+  'sysset.lockoutMinutesHint': { en: 'How long the username + IP stays locked after triggering (1-1440)', zh: '触发锁定后该「用户名 + IP」的封禁时长（1-1440）' },
+  'sysset.saveOk':             { en: 'Security settings saved', zh: '安全设置已保存' },
 } as const;
 
 export type TranslationKey = keyof typeof t;

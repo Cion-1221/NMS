@@ -12,6 +12,7 @@ import IPAMPage from './pages/IPAM';
 import DevicesPage from './pages/Devices';
 import SystemUserPage from './pages/System/User';
 import SystemGroupPage from './pages/System/Group';
+import SystemSettingsPage from './pages/System/Settings';
 import ChangePasswordModal from './components/ChangePasswordModal';
 
 // ── Theme / locale wrapper (must be inside AppProvider) ──────────────────────
@@ -66,8 +67,9 @@ const AppRouter: React.FC = () => {
         <Route path="/devices"  element={<DevicesPage />} />
         {user.is_admin && (
           <>
-            <Route path="/system/users"  element={<SystemUserPage />} />
-            <Route path="/system/groups" element={<SystemGroupPage />} />
+            <Route path="/system/users"    element={<SystemUserPage />} />
+            <Route path="/system/groups"   element={<SystemGroupPage />} />
+            <Route path="/system/settings" element={<SystemSettingsPage />} />
           </>
         )}
         <Route path="/system/*" element={<Navigate to="/ipam" replace />} />

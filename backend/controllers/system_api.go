@@ -371,5 +371,9 @@ func RegisterSystemRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc) {
 		sys.POST("/groups", CreateGroup(db))
 		sys.PUT("/groups/:id", UpdateGroup(db))
 		sys.DELETE("/groups/:id", DeleteGroup(db))
+
+		// 安全设置（登录防爆破阈值）
+		sys.GET("/settings/security", GetSecuritySettings(db))
+		sys.PUT("/settings/security", UpdateSecuritySettings(db))
 	}
 }
