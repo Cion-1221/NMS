@@ -339,6 +339,18 @@ const t = {
   'sysset.lockoutMinutes':     { en: 'Lockout duration (minutes)', zh: '锁定时长（分钟）' },
   'sysset.lockoutMinutesHint': { en: 'How long the username + IP stays locked after triggering (1-1440)', zh: '触发锁定后该「用户名 + IP」的封禁时长（1-1440）' },
   'sysset.saveOk':             { en: 'Security settings saved', zh: '安全设置已保存' },
+
+  // Lockout list (manual unlock)
+  'sysset.lockouts.title':          { en: 'Active Lockouts', zh: '锁定列表' },
+  'sysset.lockouts.search':         { en: 'Search username / IP…', zh: '搜索用户名 / IP…' },
+  'sysset.lockouts.ip':             { en: 'IP Address', zh: 'IP 地址' },
+  'sysset.lockouts.lockedAt':       { en: 'Locked At', zh: '锁定时间' },
+  'sysset.lockouts.lockedUntil':    { en: 'Auto-unlock At', zh: '自动解锁时间' },
+  'sysset.lockouts.remaining':      { en: 'Remaining', zh: '剩余时长' },
+  'sysset.lockouts.minutes':        { en: 'min', zh: '分钟' },
+  'sysset.lockouts.unlock':         { en: 'Unlock', zh: '解除' },
+  'sysset.lockouts.unlockSelected': { en: 'Unlock Selected', zh: '批量解除' },
+  'sysset.lockouts.unlockOk':       { en: '{n} lockout(s) removed', zh: '已解除 {n} 条锁定' },
 } as const;
 
 export type TranslationKey = keyof typeof t;

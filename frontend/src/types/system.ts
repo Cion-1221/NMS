@@ -40,6 +40,23 @@ export interface SecuritySettings {
   lockout_minutes: number;
 }
 
+/** 当前处于锁定状态的「用户名 + IP」条目 — 对应 GET /system/security/lockouts */
+export interface LockoutEntry {
+  key: string;
+  username: string;
+  ip: string;
+  locked_at: string;
+  locked_until: string;
+}
+
+/** 锁定列表服务端分页响应 */
+export interface LockoutListResp {
+  total: number;
+  items: LockoutEntry[];
+  page: number;
+  page_size: number;
+}
+
 export interface UpdateGroupReq {
   name?: string;
   permissions?: string;

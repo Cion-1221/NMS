@@ -375,5 +375,9 @@ func RegisterSystemRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc) {
 		// 安全设置（登录防爆破阈值）
 		sys.GET("/settings/security", GetSecuritySettings(db))
 		sys.PUT("/settings/security", UpdateSecuritySettings(db))
+
+		// 锁定列表：查看 + 手动解除（单条/批量）
+		sys.GET("/security/lockouts", ListLockouts())
+		sys.POST("/security/lockouts/unlock", UnlockLockouts())
 	}
 }

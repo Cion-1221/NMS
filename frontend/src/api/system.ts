@@ -3,7 +3,7 @@ import {
   SysUser, SysGroup,
   CreateUserReq, UpdateUserReq,
   CreateGroupReq, UpdateGroupReq,
-  SecuritySettings,
+  SecuritySettings, LockoutListResp,
 } from '../types/system';
 
 // ── 用户管理 ──────────────────────────────────────────────────────────────────
@@ -38,3 +38,11 @@ export const getSecuritySettings = () =>
 
 export const updateSecuritySettings = (data: SecuritySettings) =>
   client.put<SecuritySettings>('/system/settings/security', data);
+
+// ── 锁定列表（防爆破触发的临时锁定，支持手动解除）──────────────────────────────
+// 服务端分页：q 同时模糊匹配用户名和 IP；undefined 参数自动从 query string 剔除
+export const listLockouts = (params: { page: number; page_size: number; q?: string }) =>
+  client.get<LockoutListResp>('/system/security/lockouts', { params });
+
+export const unlockLockouts = (keys: string[]) =>
+  client.post<{ unlocked: number }>('/system/security/lockouts/unlock', { keys });

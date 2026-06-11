@@ -13,6 +13,7 @@ import {
 import type { Device, DeviceSite, DevicePoP, DeviceRole, DeviceVendor } from '../../../types/device';
 import type { TranslationKey } from '../../../i18n/translations';
 import { useT } from '../../../i18n';
+import { useDebounced } from '../../../utils/useDebounced';
 
 const { confirm } = Modal;
 
@@ -66,19 +67,6 @@ function isValidIPv6(v: string): boolean {
   return hasCompression ? totalGroups <= 7 : totalGroups === 8;
 }
 
-/**
- * Debounce a fast-changing value (text-filter inputs) so each keystroke
- * doesn't fire a server query.  Returns the value after it has been
- * stable for `delay` ms.
- */
-function useDebounced<T>(value: T, delay = 400): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const id = window.setTimeout(() => setDebounced(value), delay);
-    return () => window.clearTimeout(id);
-  }, [value, delay]);
-  return debounced;
-}
 
 // ── Component ─────────────────────────────────────────────────────────────────
 const TabDeviceList: React.FC = () => {

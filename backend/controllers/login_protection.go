@@ -3,7 +3,10 @@ package controllers
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -67,8 +70,22 @@ func saveLoginProtectionSettings(db *gorm.DB, s LoginProtectionSettings) error {
 // ── 内存滑动窗口计数器 ──────────────────────────────────────────────────────────
 
 type loginRecord struct {
+	// username / ip 冗余存储原始值，供锁定列表展示（key 不可逆向解析，
+	// 因为用户名理论上可包含分隔符）
+	username    string
+	ip          string
 	failures    []time.Time
+	lockedAt    time.Time
 	lockedUntil time.Time
+}
+
+// LockoutEntry 锁定列表条目（System 管理界面展示用）
+type LockoutEntry struct {
+	Key         string    `json:"key"`
+	Username    string    `json:"username"`
+	IP          string    `json:"ip"`
+	LockedAt    time.Time `json:"locked_at"`
+	LockedUntil time.Time `json:"locked_until"`
 }
 
 type loginTracker struct {
@@ -108,7 +125,8 @@ func (t *loginTracker) check(key string) (locked bool, until time.Time) {
 }
 
 // fail 记录一次失败；窗口内失败次数达到阈值时触发锁定并清空计数
-func (t *loginTracker) fail(key string, s LoginProtectionSettings) {
+func (t *loginTracker) fail(username, ip string, s LoginProtectionSettings) {
+	key := loginGuardKey(username, ip)
 	now := time.Now()
 	windowStart := now.Add(-time.Duration(s.WindowMinutes) * time.Minute)
 
@@ -116,7 +134,10 @@ func (t *loginTracker) fail(key string, s LoginProtectionSettings) {
 	defer t.mu.Unlock()
 	rec, ok := t.records[key]
 	if !ok {
-		rec = &loginRecord{}
+		rec = &loginRecord{
+			username: strings.ToLower(strings.TrimSpace(username)),
+			ip:       ip,
+		}
 		t.records[key] = rec
 	}
 	// 只保留窗口内的失败记录
@@ -128,9 +149,47 @@ func (t *loginTracker) fail(key string, s LoginProtectionSettings) {
 	}
 	rec.failures = append(kept, now)
 	if len(rec.failures) >= s.MaxAttempts {
+		rec.lockedAt = now
 		rec.lockedUntil = now.Add(time.Duration(s.LockoutMinutes) * time.Minute)
 		rec.failures = nil
 	}
+}
+
+// lockedEntries 返回当前处于锁定状态的全部条目，按锁定时间从新到旧排序
+func (t *loginTracker) lockedEntries() []LockoutEntry {
+	now := time.Now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	entries := make([]LockoutEntry, 0)
+	for key, rec := range t.records {
+		if now.Before(rec.lockedUntil) {
+			entries = append(entries, LockoutEntry{
+				Key:         key,
+				Username:    rec.username,
+				IP:          rec.ip,
+				LockedAt:    rec.lockedAt,
+				LockedUntil: rec.lockedUntil,
+			})
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].LockedAt.After(entries[j].LockedAt)
+	})
+	return entries
+}
+
+// unlock 解除指定 key 的锁定（连同失败计数一并清除），返回实际解除的条数
+func (t *loginTracker) unlock(keys []string) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n := 0
+	for _, k := range keys {
+		if _, ok := t.records[k]; ok {
+			delete(t.records, k)
+			n++
+		}
+	}
+	return n
 }
 
 // success 登录成功后清除该 key 的全部状态
@@ -174,7 +233,7 @@ func loginGuardFail(db *gorm.DB, username, ip string) {
 	if !s.Enabled {
 		return
 	}
-	loginGuard.fail(loginGuardKey(username, ip), s)
+	loginGuard.fail(username, ip, s)
 }
 
 // loginGuardSuccess 在登录成功后调用
@@ -216,5 +275,65 @@ func UpdateSecuritySettings(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, req)
+	}
+}
+
+// ListLockouts GET /api/v1/system/security/lockouts
+// 服务端分页查询当前锁定条目：?page=&page_size=&q=
+// q 同时模糊匹配用户名和 IP；列表来自内存快照，过滤/切片成本可忽略
+func ListLockouts() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+		pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+		if page < 1 {
+			page = 1
+		}
+		if pageSize < 1 || pageSize > 100 {
+			pageSize = 10
+		}
+		q := strings.ToLower(strings.TrimSpace(c.Query("q")))
+
+		entries := loginGuard.lockedEntries()
+		if q != "" {
+			kept := make([]LockoutEntry, 0, len(entries))
+			for _, e := range entries {
+				// username 入库时已统一小写；IP 转小写以兼容 IPv6 十六进制大写形式
+				if strings.Contains(e.Username, q) || strings.Contains(strings.ToLower(e.IP), q) {
+					kept = append(kept, e)
+				}
+			}
+			entries = kept
+		}
+
+		total := len(entries)
+		start := (page - 1) * pageSize
+		if start > total {
+			start = total
+		}
+		end := start + pageSize
+		if end > total {
+			end = total
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"total": total, "items": entries[start:end], "page": page, "page_size": pageSize,
+		})
+	}
+}
+
+// UnlockLockouts POST /api/v1/system/security/lockouts/unlock
+// 管理员手动解除锁定，支持单条或批量（keys 来自 ListLockouts 返回的 key 字段）
+func UnlockLockouts() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Keys []string `json:"keys" binding:"required,min=1"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: 请至少选择一条要解除的锁定"})
+			return
+		}
+		n := loginGuard.unlock(req.Keys)
+		slog.Info("管理员手动解除登录锁定",
+			"operator", getUsername(c), "requested", len(req.Keys), "unlocked", n)
+		c.JSON(http.StatusOK, gin.H{"unlocked": n})
 	}
 }
