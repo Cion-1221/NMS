@@ -10,6 +10,8 @@ import { MainLayout } from './layouts/MainLayout';
 import LoginPage from './pages/Login';
 import IPAMPage from './pages/IPAM';
 import DevicesPage from './pages/Devices';
+import AgentPage from './pages/Agent';
+import ProbeResultsPage from './pages/ProbeResults';
 import SystemUserPage from './pages/System/User';
 import SystemGroupPage from './pages/System/Group';
 import SystemSettingsPage from './pages/System/Settings';
@@ -62,11 +64,13 @@ const AppRouter: React.FC = () => {
   return (
     <MainLayout>
       <Routes>
-        <Route path="/"         element={<Navigate to="/ipam" replace />} />
-        <Route path="/ipam"     element={<IPAMPage />} />
-        <Route path="/devices"  element={<DevicesPage />} />
+        <Route path="/"             element={<Navigate to="/ipam" replace />} />
+        <Route path="/ipam"         element={<IPAMPage />} />
+        <Route path="/devices"      element={<DevicesPage />} />
+        <Route path="/probe-results" element={<ProbeResultsPage />} />
         {user.is_admin && (
           <>
+            <Route path="/agents"          element={<AgentPage />} />
             <Route path="/system/users"    element={<SystemUserPage />} />
             <Route path="/system/groups"   element={<SystemGroupPage />} />
             <Route path="/system/settings" element={<SystemSettingsPage />} />

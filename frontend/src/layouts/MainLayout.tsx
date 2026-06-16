@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Avatar, Dropdown, Layout, Menu, Space, Typography } from 'antd';
 import {
   ClusterOutlined,
+  CloudServerOutlined,
   DesktopOutlined,
   LogoutOutlined,
   SafetyCertificateOutlined,
@@ -29,7 +30,9 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     ? ['system']
     : currentPath.startsWith('/devices')
       ? ['devices']
-      : ['network_services'];
+      : currentPath.startsWith('/agents') || currentPath.startsWith('/probe-results')
+        ? ['agent_system']
+        : ['network_services'];
 
   const sidebarItems = [
     {
@@ -43,6 +46,18 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
       icon:     <DesktopOutlined />,
       label:    t('nav.devices'),
       children: [{ key: '/devices', label: t('nav.deviceList') }],
+    },
+    {
+      key:      'agent_system',
+      icon:     <CloudServerOutlined />,
+      label:    t('nav.agent'),
+      // Agent 管理（注册码/证书等安全凭证）仅管理员可见；Probe Results 监控数据任何
+      // 已登录用户可查看——与后端 RegisterAgentAdminRoutes / RegisterProbeResultsRoutes
+      // 的权限划分保持一致。
+      children: [
+        ...(user?.is_admin ? [{ key: '/agents', label: t('nav.agentManagement') }] : []),
+        { key: '/probe-results', label: t('nav.probeResults') },
+      ],
     },
     ...(user?.is_admin
       ? [{

@@ -29,6 +29,31 @@ audit:
   # IPAM / Devices 审计日志自动保留天数，超期每日自动清理；0 = 永久保留
   max_age_days: 180
 
+# Agent PKI：内置 CA + mTLS 自动引导注册体系（整个 agent_pki 块可省略，省略时使用下列默认值）
+agent_pki:
+  # 是否启用 Agent 体系；关闭后不会生成 CA，也不会监听 enroll/sync 两个端口
+  enabled: true
+  # Root CA + 证书存储目录（持久化，跨重启复用；删除等同于让所有已注册 Agent 失效）
+  dir: "data/pki"
+  # Agent 首次注册引导端口（单向 HTTPS，不要求客户端证书）
+  enroll_port: 8443
+  # Agent 任务拉取 / 结果上报端口（强制 mTLS，要求客户端证书）
+  sync_port: 8444
+  # ⚠️ 服务端证书 SAN 列表：必须覆盖 Agent 实际拨号使用的主机名/IP，否则 Agent 侧 TLS 校验会失败
+  # enroll/sync 监听地址本身是双栈的（IPv4+IPv6 都能连上），按需同时列出 v4/v6：
+  server_san:
+    - "localhost"
+    - "127.0.0.1"
+    - "::1"
+    # - "203.0.113.10"          # 生产环境：服务器的公网/内网 IPv4
+    # - "2001:db8::1"           # 生产环境：服务器的公网/内网 IPv6
+  # 签发给 Agent 的客户端证书有效期（天）
+  client_cert_days: 365
+  # enroll/sync 端口服务端叶子证书有效期（天）；每次启动重新签发，无需手工轮换
+  server_cert_days: 730
+  # Root CA 有效期（天）；首次启动生成后长期复用，到期前需手工规划轮换
+  ca_cert_days: 3650
+
 # 日志：按天轮转，文件名 nms-server-YYYY-MM-DD.log（整个 log 块可省略，省略时使用下列默认值）
 log:
   # 日志存储目录（支持绝对路径，如 /var/log/nms）

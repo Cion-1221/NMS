@@ -1,0 +1,27 @@
+# 真实配置（含数据库密码、JWT secret）—— 只提交 config.example.yaml 模板
+backend/config.yaml
+
+# Agent PKI：Root CA 私钥 + 已签发证书登记信息，绝不能进版本控制
+backend/data/
+
+# 日志
+backend/logs/
+*.log
+
+# 编译产物
+backend/nms-server
+backend/nms-server.exe
+frontend/dist/
+dist.tar.gz
+
+# 依赖
+frontend/node_modules/
+
+# Agent 骨架本地运行时落地的证书/状态
+agent-skeleton/agent-data/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
