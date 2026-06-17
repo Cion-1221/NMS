@@ -61,7 +61,7 @@ const TabAgentList: React.FC = () => {
 
   const openEdit = (r: Agent) => {
     setEditing(r);
-    form.setFieldsValue({ source_ip_override: r.source_ip_override ?? '', group_id: r.group_id ?? undefined });
+    form.setFieldsValue({ hostname: r.hostname, source_ip_override: r.source_ip_override ?? '', group_id: r.group_id ?? undefined });
     setEditOpen(true);
   };
 
@@ -69,6 +69,7 @@ const TabAgentList: React.FC = () => {
     const values = await form.validateFields();
     try {
       await updateAgent(editing!.agent_id, {
+        hostname: values.hostname,
         source_ip_override: values.source_ip_override ?? '',
         group_id: values.group_id ?? null,
       });
@@ -250,6 +251,9 @@ const TabAgentList: React.FC = () => {
         okText={t('common.save')} cancelText={t('common.cancel')} destroyOnClose
       >
         <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
+          <Form.Item label={t('agent.list.hostname')} name="hostname" rules={[{ required: true, whitespace: true }]}>
+            <Input />
+          </Form.Item>
           <Form.Item label={t('agent.list.sourceIp')} name="source_ip_override" tooltip={t('agent.list.sourceIpHint')}>
             <Input placeholder="10.0.0.5 / 2001:db8::1" />
           </Form.Item>

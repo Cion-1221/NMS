@@ -102,16 +102,17 @@ func ListAgents(db *gorm.DB) gin.HandlerFunc {
 }
 
 // UpdateAgent PUT /api/v1/agents/:agent_id —— 整体覆盖式更新（与 UpdateDevice 同款语义）：
-// source_ip_override 空字符串=清除；group_id 为 null=清除分组。
+// source_ip_override 空字符串=清除；group_id 为 null=清除分组；hostname 不可为空。
 func UpdateAgent(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		agentID := c.Param("agent_id")
 		var req struct {
+			Hostname         string `json:"hostname" binding:"required"`
 			SourceIPOverride string `json:"source_ip_override"`
 			GroupID          *uint  `json:"group_id"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
 			return
 		}
 		var agent models.Agent
@@ -137,6 +138,7 @@ func UpdateAgent(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		if err := db.Model(&agent).Updates(map[string]interface{}{
+			"hostname":           req.Hostname,
 			"source_ip_override": sourceIP,
 			"group_id":           req.GroupID,
 		}).Error; err != nil {
@@ -144,7 +146,8 @@ func UpdateAgent(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		db.Preload("Group").Where("agent_id = ?", agentID).First(&agent)
-		writeAgentAudit(db, getUsername(c), "update_agent", "agent", agentID, fmt.Sprintf("Updated agent %s", agentID))
+		writeAgentAudit(db, getUsername(c), "update_agent", "agent", agentID,
+			fmt.Sprintf("Updated agent %s (hostname=%s)", agentID, req.Hostname))
 		c.JSON(http.StatusOK, agent)
 	}
 }

@@ -66,6 +66,7 @@ export interface AgentListResp {
 }
 
 export interface UpdateAgentReq {
+  hostname: string;
   source_ip_override: string; // 空字符串 = 清除
   group_id?: number | null;   // null = 清除分组
 }
