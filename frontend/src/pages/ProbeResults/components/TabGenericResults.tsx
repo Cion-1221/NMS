@@ -1,10 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, DatePicker, Input, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Button, DatePicker, Input, Modal, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd';
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { Dayjs } from 'dayjs';
 import { getProbeResults, getLatestProbeResults, getAgents } from '../../../api/agent';
-import type { Agent, ProbeResult, TaskType } from '../../../types/agent';
+import type { Agent, MtrHop, ProbeResult, TaskType } from '../../../types/agent';
 import { useT } from '../../../i18n';
 import { useDebounced } from '../../../utils/useDebounced';
 
@@ -34,6 +34,13 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
   const [page, setPage]         = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal]       = useState(0);
+
+  const [mtrHops, setMtrHops] = useState<MtrHop[] | null>(null);
+
+  const agentMap = useMemo(
+    () => new Map(agents.map(a => [a.agent_id, a.hostname])),
+    [agents],
+  );
 
   const debSearch = useDebounced(search);
   const reqSeq = useRef(0);
@@ -67,6 +74,10 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
 
   const columns: ColumnsType<ProbeResult> = [
     { title: t('agent.list.agentId'), dataIndex: 'agent_id', key: 'agent_id', width: 150 },
+    {
+      title: t('agent.list.hostname'), key: 'hostname', width: 160,
+      render: (_: unknown, r: ProbeResult) => agentMap.get(r.agent_id) ?? '—',
+    },
     { title: t('proberesults.target'), dataIndex: 'target', key: 'target' },
     {
       title: t('common.status'), dataIndex: 'success', key: 'success', width: 100,
@@ -77,8 +88,23 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
       render: (v: number | null) => (v == null ? '—' : `${v.toFixed(1)} ms`),
     },
     {
-      title: t('proberesults.detail'), dataIndex: 'detail', key: 'detail', ellipsis: true,
-      render: (v: string) => v || '—',
+      title: t('proberesults.detail'), dataIndex: 'detail', key: 'detail',
+      render: (v: string) => {
+        if (type === 'mtr' && v) {
+          try {
+            const hops: MtrHop[] = JSON.parse(v);
+            const maxLoss = Math.max(...hops.map(h => h.loss_rate));
+            return (
+              <Button type="link" size="small" style={{ padding: 0 }} onClick={() => setMtrHops(hops)}>
+                {hops.length} hops{maxLoss > 0 ? `, max loss ${maxLoss}%` : ''}
+              </Button>
+            );
+          } catch { /* fall through */ }
+        }
+        return v
+          ? <Tooltip title={v}><span style={{ maxWidth: 300, display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{v}</span></Tooltip>
+          : '—';
+      },
     },
     {
       title: t('proberesults.reportedAt'), dataIndex: 'reported_at', key: 'reported_at', width: 180,
@@ -132,6 +158,46 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
         }}
         scroll={{ x: 'max-content' }}
       />
+      <Modal
+        title="MTR Hop Details"
+        open={mtrHops !== null}
+        onCancel={() => setMtrHops(null)}
+        footer={null}
+        width={700}
+        destroyOnClose
+      >
+        <Table
+          size="small"
+          dataSource={mtrHops ?? []}
+          rowKey="ttl"
+          pagination={false}
+          columns={[
+            { title: 'Hop', dataIndex: 'ttl', key: 'ttl', width: 55 },
+            { title: 'Host', dataIndex: 'host', key: 'host' },
+            {
+              title: 'Loss%', dataIndex: 'loss_rate', key: 'loss_rate', width: 70, align: 'right' as const,
+              render: (v: number) => <span style={{ color: v > 0 ? '#ff4d4f' : undefined }}>{v}%</span>,
+            },
+            {
+              title: 'Avg', dataIndex: 'avg_rtt_ms', key: 'avg_rtt_ms', width: 80, align: 'right' as const,
+              render: (v: number, r: MtrHop) => r.loss_rate >= 100 ? '—' : `${v.toFixed(1)} ms`,
+            },
+            {
+              title: 'Best', dataIndex: 'best_rtt_ms', key: 'best_rtt_ms', width: 80, align: 'right' as const,
+              render: (v: number, r: MtrHop) => r.loss_rate >= 100 ? '—' : `${v.toFixed(1)} ms`,
+            },
+            {
+              title: 'Worst', dataIndex: 'worst_rtt_ms', key: 'worst_rtt_ms', width: 80, align: 'right' as const,
+              render: (v: number, r: MtrHop) => r.loss_rate >= 100 ? '—' : `${v.toFixed(1)} ms`,
+            },
+            {
+              title: 'Std Dev', dataIndex: 'stddev_rtt_ms', key: 'stddev_rtt_ms', width: 80, align: 'right' as const,
+              render: (v: number | undefined, r: MtrHop) =>
+                r.loss_rate >= 100 || v == null ? '—' : `${v.toFixed(1)} ms`,
+            },
+          ]}
+        />
+      </Modal>
     </div>
   );
 };

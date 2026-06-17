@@ -3,6 +3,8 @@ package controllers
 import (
 	"log/slog"
 	"net/http"
+	"net/netip"
+	"strings"
 	"time"
 
 	"nms-backend/core"
@@ -61,15 +63,28 @@ func GetAgentTasks(db *gorm.DB) gin.HandlerFunc {
 			})
 		}
 
-		var sourceIP *string
+		var sourceIP, sourceIPv4, sourceIPv6 *string
 		if agent.SourceIPOverride != nil && *agent.SourceIPOverride != "" {
 			sourceIP = agent.SourceIPOverride
+			for _, part := range strings.SplitN(*agent.SourceIPOverride, "/", 2) {
+				part = strings.TrimSpace(part)
+				if a, err := netip.ParseAddr(part); err == nil {
+					s := a.String()
+					if a.Is4() {
+						sourceIPv4 = &s
+					} else {
+						sourceIPv6 = &s
+					}
+				}
+			}
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"agent_id":  agent.AgentID,
-			"source_ip": sourceIP,
-			"tasks":     payloads,
+			"agent_id":    agent.AgentID,
+			"source_ip":   sourceIP,   // raw stored value (backward compat)
+			"source_ipv4": sourceIPv4, // parsed IPv4 component
+			"source_ipv6": sourceIPv6, // parsed IPv6 component
+			"tasks":       payloads,
 		})
 	}
 }

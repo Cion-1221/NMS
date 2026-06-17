@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
+	"strings"
 	"time"
 
 	"nms-backend/core"
@@ -22,6 +23,42 @@ func writeAgentAudit(db *gorm.DB, username, action, resourceType, resourceID, de
 		Username: username, Action: action, ResourceType: resourceType,
 		ResourceID: resourceID, Detail: detail,
 	}).Error
+}
+
+// parseSourceIPOverride 验证并规范化 Source IP Override：
+// 支持单个 IPv4、单个 IPv6，或 "ipv4 / ipv6" 双栈格式（顺序不限，以 / 分隔）。
+func parseSourceIPOverride(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	parts := strings.SplitN(raw, "/", 2)
+	var addrs []netip.Addr
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		a, err := netip.ParseAddr(p)
+		if err != nil {
+			return "", fmt.Errorf("无效的 IP 地址: %s", p)
+		}
+		addrs = append(addrs, a)
+	}
+	if len(addrs) == 0 {
+		return "", fmt.Errorf("Source IP 不能为空")
+	}
+	if len(addrs) == 1 {
+		return addrs[0].String(), nil
+	}
+	a0, a1 := addrs[0], addrs[1]
+	if a0.Is4() == a1.Is4() {
+		return "", fmt.Errorf("双栈配置需要分别填写 IPv4 和 IPv6 地址")
+	}
+	if !a0.Is4() {
+		a0, a1 = a1, a0
+	}
+	return a0.String() + " / " + a1.String(), nil
 }
 
 var validTaskTypes = map[string]bool{
@@ -85,12 +122,12 @@ func UpdateAgent(db *gorm.DB) gin.HandlerFunc {
 
 		var sourceIP interface{}
 		if req.SourceIPOverride != "" {
-			addr, err := netip.ParseAddr(req.SourceIPOverride)
+			normalized, err := parseSourceIPOverride(req.SourceIPOverride)
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 Source IP 地址: " + req.SourceIPOverride})
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return
 			}
-			sourceIP = addr.String()
+			sourceIP = normalized
 		}
 		if req.GroupID != nil {
 			if err := db.First(&models.AgentGroup{}, *req.GroupID).Error; err != nil {

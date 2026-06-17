@@ -45,12 +45,12 @@ const TabMeshPingMatrix: React.FC = () => {
 
   const columns: ColumnsType<AgentRow> = [
     {
-      title: t('agent.list.agentId'), dataIndex: 'agent_id', key: '__row_header',
+      title: t('agent.list.hostname'), dataIndex: 'hostname', key: '__row_header',
       fixed: 'left' as const, width: 160,
-      render: (v: string, r: AgentRow) => <Tooltip title={r.hostname}><b>{v}</b></Tooltip>,
+      render: (v: string, r: AgentRow) => <Tooltip title={r.agent_id}><b>{v || r.agent_id}</b></Tooltip>,
     },
     ...agents.map(col => ({
-      title: <Tooltip title={col.hostname}>{col.agent_id}</Tooltip>,
+      title: <Tooltip title={col.agent_id}>{col.hostname || col.agent_id}</Tooltip>,
       key: col.agent_id,
       width: 130,
       align: 'center' as const,

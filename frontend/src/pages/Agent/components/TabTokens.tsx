@@ -125,8 +125,23 @@ const TabTokens: React.FC = () => {
   };
 
   const handleCopy = async (text: string) => {
-    try { await navigator.clipboard.writeText(text); message.success(t('agent.token.copied')); }
-    catch { message.error('Copy failed'); }
+    // navigator.clipboard 仅在 HTTPS / localhost 下可用；HTTP 环境降级到 execCommand
+    if (navigator.clipboard) {
+      try { await navigator.clipboard.writeText(text); message.success(t('agent.token.copied')); return; }
+      catch { /* fall through to execCommand */ }
+    }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      message.success(t('agent.token.copied'));
+    } catch {
+      message.error('Copy failed');
+    }
   };
 
   const handleRevoke = (r: AgentToken) => {

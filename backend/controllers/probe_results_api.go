@@ -32,7 +32,9 @@ func ListProbeResults(db *gorm.DB) gin.HandlerFunc {
 			q = q.Where("agent_id = ?", v)
 		}
 		if v := c.Query("q"); v != "" {
-			q = q.Where("agent_id LIKE ? OR target LIKE ?", "%"+v+"%", "%"+v+"%")
+			agentSub := db.Model(&models.Agent{}).Select("agent_id").
+				Where("agent_id LIKE ? OR hostname LIKE ?", "%"+v+"%", "%"+v+"%")
+			q = q.Where("agent_id IN (?) OR target LIKE ?", agentSub, "%"+v+"%")
 		}
 		if v := c.Query("success"); v != "" {
 			q = q.Where("success = ?", v == "true")
@@ -94,7 +96,9 @@ func GetLatestProbeResults(db *gorm.DB) gin.HandlerFunc {
 				tx = tx.Where("pr.agent_id = ?", agentID)
 			}
 			if q != "" {
-				tx = tx.Where("pr.agent_id LIKE ? OR pr.target LIKE ?", "%"+q+"%", "%"+q+"%")
+				agentSub := db.Model(&models.Agent{}).Select("agent_id").
+					Where("agent_id LIKE ? OR hostname LIKE ?", "%"+q+"%", "%"+q+"%")
+				tx = tx.Where("pr.agent_id IN (?) OR pr.target LIKE ?", agentSub, "%"+q+"%")
 			}
 			if successStr != "" {
 				tx = tx.Where("pr.success = ?", successStr == "true")

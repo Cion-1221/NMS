@@ -137,6 +137,16 @@ export interface CreateAgentTokenResp {
   expires_at: string;
 }
 
+export interface MtrHop {
+  ttl: number;
+  host: string;
+  loss_rate: number;
+  avg_rtt_ms: number;
+  best_rtt_ms: number;
+  worst_rtt_ms: number;
+  stddev_rtt_ms?: number;
+}
+
 export interface ProbeResult {
   id: number;
   agent_id: string;
