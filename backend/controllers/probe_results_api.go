@@ -1,10 +1,12 @@
 package controllers
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
+	"nms-backend/middleware"
 	"nms-backend/models"
 
 	"github.com/gin-gonic/gin"
@@ -196,8 +198,35 @@ func GetMeshPingMatrix(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// PurgeProbeResults DELETE /api/v1/probe-results?days=N —— 手动清理探测结果（管理员专用）。
+// days=0 清空全部；days>0 清理 N 天前的数据。与 PurgeAuditLogs / PurgeDeviceAuditLogs 同款语义。
+func PurgeProbeResults(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		daysStr := c.DefaultQuery("days", "")
+		days, err := strconv.Atoi(daysStr)
+		if err != nil || days < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 days 参数（0 = 全部清空，正整数 = 清理 N 天前的数据）"})
+			return
+		}
+		var result *gorm.DB
+		if days == 0 {
+			result = db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.ProbeResult{})
+		} else {
+			cutoff := time.Now().AddDate(0, 0, -days)
+			result = db.Where("reported_at < ?", cutoff).Delete(&models.ProbeResult{})
+		}
+		if result.Error != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "清理失败: " + result.Error.Error()})
+			return
+		}
+		writeAgentAudit(db, getUsername(c), "purge_probe_results", "probe_results", "",
+			fmt.Sprintf("Purged probe results (days=%d, deleted=%d rows)", days, result.RowsAffected))
+		c.JSON(http.StatusOK, gin.H{"deleted": result.RowsAffected})
+	}
+}
+
 // RegisterProbeResultsRoutes 挂载到主 JWT 引擎，仅需登录（与 IPAM/Devices 同等级别）——
-// 监控结果查看不属于安全敏感操作，不要求管理员权限。
+// 监控结果查看不属于安全敏感操作，不要求管理员权限。清理接口额外要求管理员权限。
 func RegisterProbeResultsRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc) {
 	pr := r.Group("/api/v1/probe-results")
 	pr.Use(authMW)
@@ -205,5 +234,11 @@ func RegisterProbeResultsRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFu
 		pr.GET("", ListProbeResults(db))
 		pr.GET("/latest", GetLatestProbeResults(db))
 		pr.GET("/meshping-matrix", GetMeshPingMatrix(db))
+	}
+
+	prAdmin := r.Group("/api/v1/probe-results")
+	prAdmin.Use(authMW, middleware.AdminRequired)
+	{
+		prAdmin.DELETE("", PurgeProbeResults(db))
 	}
 }

@@ -1,25 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, DatePicker, Input, Modal, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd';
+import { Button, Input, Modal, Select, Space, Table, Tag, Tooltip, message } from 'antd';
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import type { Dayjs } from 'dayjs';
-import { getProbeResults, getLatestProbeResults, getAgents } from '../../../api/agent';
+import { getLatestProbeResults, getAgents } from '../../../api/agent';
 import type { Agent, MtrHop, ProbeResult, TaskType } from '../../../types/agent';
 import { useT } from '../../../i18n';
 import { useDebounced } from '../../../utils/useDebounced';
 
-const { RangePicker } = DatePicker;
-
 interface Props {
   type: TaskType;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 通用结果 Tab：参数化 type，复用于 ping / tcpping / httpcheck / mtr 四个 Tab。
-// 服务端分页 + 搜索防抖 + 请求序号守卫，与 TabLockouts 同款交互模式。
-// "仅看最新" 打开后切换到 /probe-results/latest（每个 Agent+Target 只保留最新一条，
-// 即"当前状态"快照），关闭则是完整历史日志（按时间倒序）。
-// ─────────────────────────────────────────────────────────────────────────────
 
 const TabGenericResults: React.FC<Props> = ({ type }) => {
   const t = useT();
@@ -29,8 +19,6 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
   const [search, setSearch]     = useState('');
   const [successFilter, setSuccessFilter] = useState<string | undefined>(undefined);
   const [agentFilter, setAgentFilter]     = useState<string | undefined>(undefined);
-  const [dateRange, setDateRange]         = useState<[Dayjs | null, Dayjs | null] | null>(null);
-  const [latestOnly, setLatestOnly]       = useState(false);
   const [page, setPage]         = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal]       = useState(0);
@@ -54,10 +42,8 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
         q: debSearch || undefined,
         agent_id: agentFilter || undefined,
         success: successFilter === undefined ? undefined : successFilter === 'true',
-        start: dateRange?.[0] ? dateRange[0].toISOString() : undefined,
-        end: dateRange?.[1] ? dateRange[1].toISOString() : undefined,
       };
-      const r = latestOnly ? await getLatestProbeResults(params) : await getProbeResults(params);
+      const r = await getLatestProbeResults(params);
       if (seq !== reqSeq.current) return;
       setData(r.data.items);
       setTotal(r.data.total);
@@ -66,9 +52,9 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
-  }, [page, pageSize, debSearch, successFilter, agentFilter, dateRange, latestOnly, type]);
+  }, [page, pageSize, debSearch, successFilter, agentFilter, type]);
 
-  useEffect(() => { setPage(1); }, [debSearch, successFilter, agentFilter, dateRange, latestOnly]);
+  useEffect(() => { setPage(1); }, [debSearch, successFilter, agentFilter]);
   useEffect(() => { void loadData(); }, [loadData]);
   useEffect(() => { getAgents({ page: 1, page_size: 200 }).then(r => setAgents(r.data.items)).catch(() => {}); }, []);
 
@@ -134,15 +120,6 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
             { value: 'false', label: t('proberesults.failed') },
           ]}
         />
-        <RangePicker
-          showTime value={dateRange} onChange={(v) => setDateRange(v as [Dayjs | null, Dayjs | null] | null)}
-        />
-        <Tooltip title={t('proberesults.latestOnlyHint')}>
-          <Space>
-            <Switch checked={latestOnly} onChange={setLatestOnly} />
-            <span>{t('proberesults.latestOnly')}</span>
-          </Space>
-        </Tooltip>
         <Button icon={<ReloadOutlined />} onClick={() => { void loadData(); }} loading={loading}>{t('common.refresh')}</Button>
       </Space>
       <Table

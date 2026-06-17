@@ -83,3 +83,6 @@ export const getLatestProbeResults = (params: ProbeResultListParams) =>
 
 export const getMeshPingMatrix = (params: MeshPingMatrixParams) =>
   client.get<MeshPingMatrixResp>('/probe-results/meshping-matrix', { params });
+
+export const purgeProbeResults = (days: number) =>
+  client.delete<{ deleted: number }>('/probe-results', { params: { days } });

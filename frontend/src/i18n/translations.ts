@@ -465,6 +465,12 @@ const t = {
   'proberesults.noData':        { en: 'No data', zh: '暂无数据' },
   'proberesults.latestOnly':     { en: 'Latest only', zh: '仅看最新' },
   'proberesults.latestOnlyHint': { en: 'Show only the most recent result per Agent + Target pair, instead of full history', zh: '每个 Agent+Target 组合只显示最新一条结果，而非完整历史' },
+  'proberesults.purge':          { en: 'Purge Old Data', zh: '清理历史数据' },
+  'proberesults.purgeTitle':     { en: 'Purge Probe Results', zh: '清理探测结果' },
+  'proberesults.purgeDaysLabel': { en: 'Delete results older than (days)', zh: '删除多少天前的数据' },
+  'proberesults.purgeDaysHint':  { en: '0 = delete all records; enter a positive number to keep recent data', zh: '0 = 全部删除；填正整数则保留最近 N 天数据' },
+  'proberesults.purgeConfirm':   { en: 'This will permanently delete probe results and cannot be undone. Proceed?', zh: '此操作将永久删除探测结果，不可恢复，确认继续？' },
+  'proberesults.purgeOk':        { en: 'Deleted {n} records', zh: '已删除 {n} 条记录' },
 } as const;
 
 export type TranslationKey = keyof typeof t;

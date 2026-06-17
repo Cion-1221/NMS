@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { Tabs } from 'antd';
+import { Button, Form, InputNumber, Modal, Tabs, message } from 'antd';
+import { DeleteOutlined } from '@ant-design/icons';
 import { useT } from '../../i18n';
+import { purgeProbeResults } from '../../api/agent';
 import TabGenericResults from './components/TabGenericResults';
 import TabMeshPingMatrix from './components/TabMeshPingMatrix';
 
@@ -8,15 +10,51 @@ const ProbeResultsPage: React.FC = () => {
   const t = useT();
   const [activeKey, setActiveKey] = useState('1');
   const [versions, setVersions]   = useState<Record<string, number>>({ '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 });
+  const [purgeOpen, setPurgeOpen] = useState(false);
+  const [purging, setPurging]     = useState(false);
+  const [form] = Form.useForm();
 
   const handleTabChange = (key: string) => {
     setActiveKey(key);
     setVersions((prev) => ({ ...prev, [key]: prev[key] + 1 }));
   };
 
+  const openPurge = () => {
+    form.setFieldsValue({ days: 30 });
+    setPurgeOpen(true);
+  };
+
+  const handlePurge = async () => {
+    const { days } = await form.validateFields();
+    Modal.confirm({
+      title: t('proberesults.purgeTitle'),
+      content: t('proberesults.purgeConfirm'),
+      okText: t('common.confirm'),
+      okType: 'danger',
+      cancelText: t('common.cancel'),
+      onOk: async () => {
+        setPurging(true);
+        try {
+          const r = await purgeProbeResults(days);
+          message.success(t('proberesults.purgeOk').replace('{n}', String(r.data.deleted)));
+          setPurgeOpen(false);
+          // bump all tab versions so they reload
+          setVersions({ '1': 1, '2': 1, '3': 1, '4': 1, '5': 1 });
+        } catch (err: any) {
+          message.error(err?.response?.data?.error ?? 'Purge failed');
+        } finally {
+          setPurging(false);
+        }
+      },
+    });
+  };
+
   return (
     <div>
-      <h2 style={{ marginBottom: 24, fontWeight: 700 }}>{t('proberesults.title')}</h2>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 24, gap: 12 }}>
+        <h2 style={{ margin: 0, fontWeight: 700, flex: 1 }}>{t('proberesults.title')}</h2>
+        <Button danger icon={<DeleteOutlined />} onClick={openPurge}>{t('proberesults.purge')}</Button>
+      </div>
       <Tabs
         activeKey={activeKey}
         onChange={handleTabChange}
@@ -28,6 +66,28 @@ const ProbeResultsPage: React.FC = () => {
           { key: '5', label: t('proberesults.tab.meshping'),   children: <TabMeshPingMatrix key={versions['5']} /> },
         ]}
       />
+
+      <Modal
+        title={t('proberesults.purgeTitle')}
+        open={purgeOpen}
+        onOk={handlePurge}
+        onCancel={() => setPurgeOpen(false)}
+        okText={t('proberesults.purge')}
+        okButtonProps={{ danger: true, loading: purging }}
+        cancelText={t('common.cancel')}
+        destroyOnClose
+      >
+        <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
+          <Form.Item
+            label={t('proberesults.purgeDaysLabel')}
+            name="days"
+            tooltip={t('proberesults.purgeDaysHint')}
+            rules={[{ required: true }, { type: 'number', min: 0 }]}
+          >
+            <InputNumber min={0} style={{ width: '100%' }} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };
