@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, message } from 'antd';
+import { Alert, Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, message } from 'antd';
 import { ExclamationCircleFilled, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -30,7 +30,14 @@ const TabProbeConfig: React.FC = () => {
   const [mode, setMode]       = useState<'create' | 'edit'>('create');
   const [editing, setEditing] = useState<AgentTask | null>(null);
   const [form] = Form.useForm();
-  const scope: TaskScope | undefined = Form.useWatch('scope', form);
+  const scope: TaskScope | undefined          = Form.useWatch('scope', form);
+  const selectedTypes: TaskType[] | undefined = Form.useWatch('types', form);
+  const selectedType: TaskType | undefined    = Form.useWatch('type', form);
+
+  // 纯 meshping（无其他类型）时隐藏 Target IPs — targets 由 server 动态解析
+  const meshpingOnly = mode === 'create'
+    ? (selectedTypes ?? []).length === 1 && (selectedTypes ?? []).includes('meshping')
+    : selectedType === 'meshping';
 
   const loadData = async () => {
     setLoading(true);
@@ -182,9 +189,16 @@ const TabProbeConfig: React.FC = () => {
               <Select options={TASK_TYPES.map(ty => ({ value: ty, label: ty }))} />
             </Form.Item>
           )}
-          <Form.Item label={t('agent.task.targets')} name="targets_raw" tooltip={t('agent.task.targetsHint')}>
-            <Input.TextArea rows={4} placeholder={'8.8.8.8\n2001:4860:4860::8888'} />
-          </Form.Item>
+          {meshpingOnly ? (
+            <Alert
+              type="info" showIcon style={{ marginBottom: 16 }}
+              message={t('agent.task.meshAutoTargets')}
+            />
+          ) : (
+            <Form.Item label={t('agent.task.targets')} name="targets_raw" tooltip={t('agent.task.targetsHint')}>
+              <Input.TextArea rows={4} placeholder={'8.8.8.8\n2001:4860:4860::8888'} />
+            </Form.Item>
+          )}
           <Form.Item label={t('agent.task.interval')} name="interval_seconds" rules={[{ required: true }]}>
             <InputNumber min={1} addonAfter="s" style={{ width: '100%' }} />
           </Form.Item>

@@ -56,7 +56,7 @@ func GetAgentTasks(db *gorm.DB) gin.HandlerFunc {
 		for _, t := range tasks {
 			targets := t.Targets()
 			if t.Type == "meshping" {
-				targets = resolveMeshPingTargets(db, agent)
+				targets = resolveMeshPingTargets(db, agent, t)
 			}
 			payloads = append(payloads, taskPayload{
 				TaskID: t.ID, Type: t.Type, IntervalSeconds: t.IntervalSeconds, Targets: targets,
@@ -89,16 +89,24 @@ func GetAgentTasks(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// resolveMeshPingTargets 查询同 Group 下其他"存活"（LastSeenAt 在 onlineThreshold 内、
-// 未被吊销）Agent 的 ConnectionIP，作为该 Agent 的 MeshPing 目标列表（排除自身）。
-func resolveMeshPingTargets(db *gorm.DB, self *models.Agent) []string {
-	if self.GroupID == nil {
-		return []string{}
+// resolveMeshPingTargets 查询其他"存活"（LastSeenAt 在 onlineThreshold 内、未被吊销）
+// Agent 的 ConnectionIP，作为 MeshPing 目标列表（排除自身）。
+//
+// scope=group：仅限任务指定 Group 内的成员。
+// scope=global / scope=agent：所有存活 Agent（无 group 过滤）。
+func resolveMeshPingTargets(db *gorm.DB, self *models.Agent, task models.AgentTask) []string {
+	q := db.Where("agent_id <> ? AND revoked = ?", self.AgentID, false).
+		Where("last_seen_at > ?", time.Now().Add(-onlineThreshold))
+
+	if task.Scope == "group" {
+		if task.GroupID == nil {
+			return []string{}
+		}
+		q = q.Where("group_id = ?", *task.GroupID)
 	}
+
 	var peers []models.Agent
-	db.Where("group_id = ? AND agent_id <> ? AND revoked = ?", *self.GroupID, self.AgentID, false).
-		Where("last_seen_at > ?", time.Now().Add(-onlineThreshold)).
-		Find(&peers)
+	q.Find(&peers)
 
 	targets := make([]string, 0, len(peers))
 	for _, p := range peers {

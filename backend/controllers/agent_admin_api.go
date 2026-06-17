@@ -349,10 +349,6 @@ func CreateAgentTasks(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的任务类型: " + ty})
 				return
 			}
-			if ty == "meshping" && req.Scope != "group" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "meshping 任务必须应用到特定 Group"})
-				return
-			}
 			if ty != "meshping" {
 				needsTargetValidation = true
 			}
@@ -413,10 +409,6 @@ func UpdateAgentTask(db *gorm.DB) gin.HandlerFunc {
 		}
 		if !validTaskTypes[req.Type] {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的任务类型: " + req.Type})
-			return
-		}
-		if req.Type == "meshping" && req.Scope != "group" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "meshping 任务必须应用到特定 Group"})
 			return
 		}
 		if msg := validateTaskScope(req.Scope, req.GroupID, req.AgentID); msg != "" {
