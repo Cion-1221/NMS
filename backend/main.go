@@ -146,7 +146,12 @@ func main() {
 		cfg.Database.User, cfg.Database.Password,
 		cfg.Database.Host, cfg.Database.Port, cfg.Database.DBName)
 
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
+		// 禁止在 AutoMigrate 的 CREATE TABLE DDL 中内联 FOREIGN KEY 约束。
+		// 部分 MySQL/MariaDB 版本对 GORM 生成的外键语法报 errno 150；禁用后
+		// GORM 关联查询（Preload 等）照常工作，应用层已自行管理级联逻辑。
+		DisableForeignKeyConstraintWhenMigrating: true,
+	})
 	if err != nil {
 		slog.Error("MySQL 连接失败", "err", err)
 		os.Exit(1)
@@ -247,9 +252,13 @@ func main() {
 	controllers.RegisterIPAMRoutes(r, db, authMW)
 	controllers.RegisterDeviceRoutes(r, db, authMW)
 	controllers.RegisterSystemRoutes(r, db, authMW)
+	// Agent 管理路由（list/update/delete/groups/tasks/tokens）和探测结果路由不依赖 PKI，
+	// 无论 agent_pki.enabled 是否开启都注册，确保前端页面始终可用。
+	controllers.RegisterAgentAdminRoutes(r, db, authMW)
+	controllers.RegisterProbeResultsRoutes(r, db, authMW)
 	if pki != nil {
-		controllers.RegisterAgentAdminRoutes(r, db, pki, cfg.AgentPKI.CACertDays, authMW)
-		controllers.RegisterProbeResultsRoutes(r, db, authMW)
+		// CA 管理路由（ca-cert/status/rotate/finalize）和 mTLS 监听端口需要 PKI。
+		controllers.RegisterAgentPKIRoutes(r, db, pki, cfg.AgentPKI.CACertDays, authMW)
 		// 后台扫描：把超过心跳阈值仍标记 online 的 Agent 翻转为 offline
 		controllers.StartAgentOfflineSweeper(db)
 	}

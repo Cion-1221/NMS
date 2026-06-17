@@ -587,21 +587,15 @@ func GetAgentSummary(db *gorm.DB) gin.HandlerFunc {
 }
 
 // ── Route Registration ─────────────────────────────────────────────────────
-// 全部挂载在主 JWT 引擎上，authMW + AdminRequired —— 与 System 模块同等保护级别
-// （涉及证书吊销 / 注册码签发等安全凭证操作）。
 
-func RegisterAgentAdminRoutes(r *gin.Engine, db *gorm.DB, pki *core.PKI, caDays int, authMW gin.HandlerFunc) {
+// RegisterAgentAdminRoutes 注册不依赖 PKI 的 Agent 管理路由（agents/groups/tasks/tokens），
+// 无论 agent_pki.enabled 是否开启都应调用。
+func RegisterAgentAdminRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc) {
 	agents := r.Group("/api/v1/agents")
 	agents.Use(authMW, middleware.AdminRequired)
 	{
 		agents.GET("", ListAgents(db))
 		agents.GET("/summary", GetAgentSummary(db))
-		// 浏览器走主站 HTTPS/HTTP，无法直接信任 enroll 端口上自签发的内置 CA 证书，
-		// 故在主引擎上镜像一份 GetCACert，方便 Token Tab 展示/下载 CA 公钥。
-		agents.GET("/ca-cert", GetCACert(pki))
-		agents.GET("/ca/status", GetCAStatus(pki))
-		agents.POST("/ca/rotate", RotateCA(db, pki, caDays))
-		agents.POST("/ca/finalize", FinalizeCA(db, pki))
 		agents.PUT("/:agent_id", UpdateAgent(db))
 		agents.DELETE("/:agent_id", DeleteAgent(db))
 		agents.POST("/:agent_id/revoke", RevokeAgent(db))
@@ -631,5 +625,20 @@ func RegisterAgentAdminRoutes(r *gin.Engine, db *gorm.DB, pki *core.PKI, caDays 
 		tokens.GET("", ListAgentTokens(db))
 		tokens.POST("", CreateAgentToken(db))
 		tokens.POST("/:id/revoke", RevokeAgentToken(db))
+	}
+}
+
+// RegisterAgentPKIRoutes 注册依赖 PKI 的 CA 管理路由（ca-cert/ca/status/rotate/finalize），
+// 仅在 agent_pki.enabled=true 且 PKI 初始化成功时调用。
+func RegisterAgentPKIRoutes(r *gin.Engine, db *gorm.DB, pki *core.PKI, caDays int, authMW gin.HandlerFunc) {
+	agents := r.Group("/api/v1/agents")
+	agents.Use(authMW, middleware.AdminRequired)
+	{
+		// 浏览器走主站 HTTPS/HTTP，无法直接信任 enroll 端口上自签发的内置 CA 证书，
+		// 故在主引擎上镜像一份 GetCACert，方便 Token Tab 展示/下载 CA 公钥。
+		agents.GET("/ca-cert", GetCACert(pki))
+		agents.GET("/ca/status", GetCAStatus(pki))
+		agents.POST("/ca/rotate", RotateCA(db, pki, caDays))
+		agents.POST("/ca/finalize", FinalizeCA(db, pki))
 	}
 }
