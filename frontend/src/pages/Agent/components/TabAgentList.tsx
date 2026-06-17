@@ -5,6 +5,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { getAgents, getAgentSummary, updateAgent, deleteAgent, revokeAgent, getAgentGroups } from '../../../api/agent';
 import type { Agent, AgentGroup, AgentSummary } from '../../../types/agent';
 import { useT } from '../../../i18n';
+import type { TranslationKey } from '../../../i18n/translations';
 import { useDebounced } from '../../../utils/useDebounced';
 
 const { confirm } = Modal;
@@ -114,7 +115,7 @@ const TabAgentList: React.FC = () => {
   const runBulk = async (
     keys: React.Key[],
     action: (agentId: string) => Promise<unknown>,
-    successMsgKey: string,
+    successMsgKey: TranslationKey,
   ) => {
     const ids = keys as string[];
     const results = await Promise.allSettled(ids.map(action));
