@@ -472,6 +472,7 @@ const t = {
   'proberesults.purgeDaysHint':  { en: '0 = delete all records; enter a positive number to keep recent data', zh: '0 = 全部删除；填正整数则保留最近 N 天数据' },
   'proberesults.purgeConfirm':   { en: 'This will permanently delete probe results and cannot be undone. Proceed?', zh: '此操作将永久删除探测结果，不可恢复，确认继续？' },
   'proberesults.purgeOk':        { en: 'Deleted {n} records', zh: '已删除 {n} 条记录' },
+  'proberesults.filterTargets': { en: 'Filter target agents (columns)', zh: '筛选目标 Agent（列）' },
 } as const;
 
 export type TranslationKey = keyof typeof t;

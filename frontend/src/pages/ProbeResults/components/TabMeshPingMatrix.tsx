@@ -9,18 +9,20 @@ import { useDebounced } from '../../../utils/useDebounced';
 
 type AgentRow = MeshPingMatrixResp['agents'][number];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MeshPing Tab：将互测结果渲染为 NxN 交叉延迟矩阵——行/列均为当前 Agent 集合，
-// 单元格取双方最新一次探测结果。q 同时过滤参与矩阵的 Agent（按 agent_id/hostname）。
-// ─────────────────────────────────────────────────────────────────────────────
+interface ActiveCell { rowId: string; colId: string }
+
+const HL_ROW_COL = '#dbeeff';
+const HL_CROSS   = '#bbd6f7';
 
 const TabMeshPingMatrix: React.FC = () => {
   const t = useT();
   const [matrixData, setMatrixData] = useState<MeshPingMatrixResp>({ agents: [], matrix: {} });
-  const [groups, setGroups]   = useState<AgentGroup[]>([]);
-  const [groupId, setGroupId] = useState<number | undefined>(undefined);
-  const [loading, setLoading] = useState(false);
-  const [search, setSearch]   = useState('');
+  const [groups, setGroups]           = useState<AgentGroup[]>([]);
+  const [groupId, setGroupId]         = useState<number | undefined>(undefined);
+  const [loading, setLoading]         = useState(false);
+  const [search, setSearch]           = useState('');
+  const [selectedTargets, setSelectedTargets] = useState<string[]>([]);
+  const [activeCell, setActiveCell]   = useState<ActiveCell | null>(null);
   const debSearch = useDebounced(search);
   const reqSeq = useRef(0);
 
@@ -31,6 +33,7 @@ const TabMeshPingMatrix: React.FC = () => {
       const r = await getMeshPingMatrix({ q: debSearch || undefined, group_id: groupId });
       if (seq !== reqSeq.current) return;
       setMatrixData(r.data);
+      setActiveCell(null);
     } catch (err: any) {
       if (seq === reqSeq.current) message.error(err?.response?.data?.error ?? 'Failed to load matrix');
     } finally {
@@ -42,6 +45,25 @@ const TabMeshPingMatrix: React.FC = () => {
   useEffect(() => { getAgentGroups().then(r => setGroups(r.data)).catch(() => {}); }, []);
 
   const { agents, matrix } = matrixData;
+
+  const colAgents = selectedTargets.length > 0
+    ? agents.filter(a => selectedTargets.includes(a.agent_id))
+    : agents;
+
+  const handleCellClick = (rowId: string, colId: string) => {
+    setActiveCell(prev =>
+      prev?.rowId === rowId && prev?.colId === colId ? null : { rowId, colId }
+    );
+  };
+
+  const cellBg = (rowId: string, colId: string): string | undefined => {
+    if (!activeCell) return undefined;
+    const isActiveRow = activeCell.rowId === rowId;
+    const isActiveCol = activeCell.colId === colId;
+    if (isActiveRow && isActiveCol) return HL_CROSS;
+    if (isActiveRow || isActiveCol) return HL_ROW_COL;
+    return undefined;
+  };
 
   const renderProto = (p: MeshPingProto, label?: string) => (
     <Tooltip title={new Date(p.reported_at).toLocaleString()}>
@@ -57,12 +79,23 @@ const TabMeshPingMatrix: React.FC = () => {
       title: t('agent.list.hostname'), dataIndex: 'hostname', key: '__row_header',
       fixed: 'left' as const, width: 160,
       render: (v: string, r: AgentRow) => <Tooltip title={r.agent_id}><b>{v || r.agent_id}</b></Tooltip>,
+      onCell: (row: AgentRow) => ({
+        style: { background: activeCell?.rowId === row.agent_id ? HL_ROW_COL : undefined },
+      }),
     },
-    ...agents.map(col => ({
-      title: <Tooltip title={col.agent_id}>{col.hostname || col.agent_id}</Tooltip>,
+    ...colAgents.map(col => ({
+      title: (
+        <span style={{ background: activeCell?.colId === col.agent_id ? HL_ROW_COL : undefined, borderRadius: 4, padding: '0 4px' }}>
+          <Tooltip title={col.agent_id}>{col.hostname || col.agent_id}</Tooltip>
+        </span>
+      ),
       key: col.agent_id,
       width: 130,
       align: 'center' as const,
+      onCell: (row: AgentRow) => ({
+        style: { background: cellBg(row.agent_id, col.agent_id), cursor: 'pointer' },
+        onClick: () => handleCellClick(row.agent_id, col.agent_id),
+      }),
       render: (_: unknown, row: AgentRow) => {
         if (row.agent_id === col.agent_id) return <span style={{ color: '#ccc' }}>—</span>;
         const cell = matrix[row.agent_id]?.[col.agent_id];
@@ -90,6 +123,16 @@ const TabMeshPingMatrix: React.FC = () => {
           prefix={<SearchOutlined />}
           placeholder={t('proberesults.search')}
           value={search} onChange={e => setSearch(e.target.value)} allowClear style={{ width: 260 }}
+        />
+        <Select
+          mode="multiple"
+          allowClear
+          placeholder={t('proberesults.filterTargets')}
+          style={{ minWidth: 220 }}
+          value={selectedTargets}
+          onChange={setSelectedTargets}
+          maxTagCount="responsive"
+          options={agents.map(a => ({ value: a.agent_id, label: a.hostname || a.agent_id }))}
         />
         <Button icon={<ReloadOutlined />} onClick={() => { void loadData(); }} loading={loading}>{t('common.refresh')}</Button>
       </Space>
