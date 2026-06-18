@@ -10,7 +10,7 @@ const t = {
   'nav.users':           { en: 'Users', zh: '用户' },
   'nav.groups':          { en: 'Groups', zh: '用户组' },
   'nav.settings':        { en: 'Security', zh: '安全设置' },
-  'nav.brand':           { en: 'NMS Network', zh: 'NMS 网络管理' },
+  'nav.brand':           { en: 'CION NMS', zh: 'CION NMS' },
 
   // ── Common ──────────────────────────────────────────────────────────────────
   'common.save':        { en: 'Save', zh: '保存' },

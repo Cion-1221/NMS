@@ -15,7 +15,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useT } from '../i18n';
 import ProfileModal from '../components/ProfileModal';
 
-const { Header, Content, Sider } = Layout;
+const { Header, Content, Footer, Sider } = Layout;
 const { Text } = Typography;
 
 export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -141,6 +141,10 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
               {children}
             </div>
           </Content>
+          <Footer style={{ textAlign: 'center', padding: '12px 24px', fontSize: 13, color: '#888' }}>
+            Copyright© 2026{' '}
+            <a href="https://github.com/Cion-1221/NMS" target="_blank" rel="noopener noreferrer">CION</a>
+          </Footer>
         </Layout>
       </Layout>
 
