@@ -21,6 +21,8 @@ export interface Agent {
   group_id?: number | null;
   group?: AgentGroup | null;
   connection_ip: string;
+  connection_ipv4: string;
+  connection_ipv6: string;
   source_ip_override?: string | null;
   status: AgentStatus;
   version?: string;
@@ -180,10 +182,15 @@ export interface ProbeResultListResp {
   page_size: number;
 }
 
-export interface MeshPingCell {
+export interface MeshPingProto {
   success: boolean;
   latency_ms: number | null;
   reported_at: string;
+}
+
+export interface MeshPingCell {
+  v4?: MeshPingProto;
+  v6?: MeshPingProto;
 }
 
 export interface MeshPingMatrixResp {

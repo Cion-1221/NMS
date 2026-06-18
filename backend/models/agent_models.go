@@ -30,6 +30,8 @@ type Agent struct {
 	GroupID          *uint       `gorm:"index" json:"group_id"`
 	Group            *AgentGroup `gorm:"foreignKey:GroupID" json:"group,omitempty"`
 	ConnectionIP     string      `gorm:"type:varchar(100)" json:"connection_ip"`
+	ConnectionIPv4   string      `gorm:"type:varchar(100)" json:"connection_ipv4"`
+	ConnectionIPv6   string      `gorm:"type:varchar(100)" json:"connection_ipv6"`
 	SourceIPOverride *string     `gorm:"type:varchar(100)" json:"source_ip_override"`
 	Status           string      `gorm:"type:varchar(20);not null;default:'offline'" json:"status"`
 	Version          string      `gorm:"type:varchar(50)" json:"version"`

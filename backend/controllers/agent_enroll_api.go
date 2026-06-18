@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -196,6 +197,13 @@ func EnrollAgent(db *gorm.DB, pki *core.PKI, cfg AgentPKIConfig) gin.HandlerFunc
 				RegisteredAt: time.Now(),
 				CertExpiry:   issued.Expiry,
 				CertSerial:   issued.Serial,
+			}
+			if addr, err := netip.ParseAddr(clientIP); err == nil {
+				if addr.Is4() {
+					agent.ConnectionIPv4 = clientIP
+				} else {
+					agent.ConnectionIPv6 = clientIP
+				}
 			}
 			return tx.Create(&agent).Error
 		})

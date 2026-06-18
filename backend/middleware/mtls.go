@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"net/netip"
 	"time"
 
 	"nms-backend/models"
@@ -45,17 +46,27 @@ func AgentMTLS(db *gorm.DB) gin.HandlerFunc {
 		// 无需 Agent 端额外实现心跳接口。版本号是 Agent 自报的软件版本（可选头），
 		// 用于在 Agent List 里识别哪些 Agent 还跑着旧版本。
 		now := time.Now()
+		ip := c.ClientIP()
 		updates := map[string]interface{}{
-			"connection_ip": c.ClientIP(),
+			"connection_ip": ip,
 			"last_seen_at":  now,
 			"status":        "online",
+		}
+		if addr, err := netip.ParseAddr(ip); err == nil {
+			if addr.Is4() {
+				updates["connection_ipv4"] = ip
+				agent.ConnectionIPv4 = ip
+			} else {
+				updates["connection_ipv6"] = ip
+				agent.ConnectionIPv6 = ip
+			}
 		}
 		if v := c.GetHeader("X-Agent-Version"); v != "" {
 			updates["version"] = v
 			agent.Version = v
 		}
 		db.Model(&agent).Updates(updates)
-		agent.ConnectionIP = c.ClientIP()
+		agent.ConnectionIP = ip
 		agent.LastSeenAt = &now
 		agent.Status = "online"
 

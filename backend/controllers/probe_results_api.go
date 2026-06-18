@@ -3,7 +3,9 @@ package controllers
 import (
 	"fmt"
 	"net/http"
+	"net/netip"
 	"strconv"
+	"strings"
 	"time"
 
 	"nms-backend/middleware"
@@ -129,14 +131,8 @@ type meshPingLatestRow struct {
 }
 
 // GetMeshPingMatrix GET /api/v1/probe-results/meshping-matrix —— 将 meshping 结果
-// 透视为 NxN 矩阵：行/列 = 当前存活的 Agent（可用 group_id/q 过滤参与的 Agent 集合），
-// 单元格 = 该 Agent 对另一 Agent 的最新一次探测结果。
-//
-// 已知简化：ProbeResult.Target 存的是探测发起时对端的 ConnectionIP（Agent 侧只认
-// IP，不感知对端 AgentID），矩阵在读取时按"各 Agent 当前 ConnectionIP"反查回
-// AgentID 做单元格归属。若某 Agent 的 ConnectionIP 在两次探测之间发生变化，历史
-// 结果可能无法归位到正确的列——这是当前 Agent↔Server 协议（只传 IP）下的固有限制，
-// 而非 bug。
+// 透视为 NxN 矩阵：行/列 = 当前非吊销 Agent，单元格结构为 {"v4": {...}, "v6": {...}}。
+// 同一 (src, dst) 对的 IPv4 和 IPv6 探测结果独立存储，前端分别渲染，支持双栈同时显示。
 func GetMeshPingMatrix(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		agentQuery := db.Model(&models.Agent{}).Where("revoked = ?", false)
@@ -166,13 +162,26 @@ func GetMeshPingMatrix(db *gorm.DB) gin.HandlerFunc {
 			WHERE pr.type = ?
 		`, "meshping", "meshping").Scan(&rows)
 
-		ipToAgent := make(map[string]string, len(agents))
+		// 建立 IP → AgentID 的反查表：覆盖所有可能的 IP 字段 + source_ip_override
+		ipToAgent := make(map[string]string, len(agents)*3)
 		for _, a := range agents {
-			if a.ConnectionIP != "" {
-				ipToAgent[a.ConnectionIP] = a.AgentID
+			registerIP := func(ip string) {
+				if ip != "" {
+					ipToAgent[ip] = a.AgentID
+				}
+			}
+			registerIP(a.ConnectionIP)
+			registerIP(a.ConnectionIPv4)
+			registerIP(a.ConnectionIPv6)
+			if a.SourceIPOverride != nil && *a.SourceIPOverride != "" {
+				for _, part := range strings.SplitN(*a.SourceIPOverride, "/", 2) {
+					registerIP(strings.TrimSpace(part))
+				}
 			}
 		}
 
+		// matrix[srcAgentID][dstAgentID] = {"v4": {...}, "v6": {...}}
+		// v4/v6 键独立存储，均为可选（nil 表示无对应协议探测结果）
 		matrix := make(map[string]map[string]gin.H, len(agents))
 		for _, a := range agents {
 			matrix[a.AgentID] = make(map[string]gin.H)
@@ -182,10 +191,19 @@ func GetMeshPingMatrix(db *gorm.DB) gin.HandlerFunc {
 			if !ok {
 				continue
 			}
-			if _, ok := matrix[row.AgentID]; !ok {
+			srcMap, ok := matrix[row.AgentID]
+			if !ok {
 				continue
 			}
-			matrix[row.AgentID][targetAgentID] = gin.H{
+			addr, _ := netip.ParseAddr(row.Target)
+			protoKey := "v6"
+			if addr.Is4() {
+				protoKey = "v4"
+			}
+			if srcMap[targetAgentID] == nil {
+				srcMap[targetAgentID] = gin.H{}
+			}
+			srcMap[targetAgentID][protoKey] = gin.H{
 				"success": row.Success, "latency_ms": row.LatencyMs, "reported_at": row.ReportedAt,
 			}
 		}

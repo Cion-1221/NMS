@@ -3,7 +3,7 @@ import { Button, Input, Select, Space, Table, Tag, Tooltip, message } from 'antd
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { getMeshPingMatrix, getAgentGroups } from '../../../api/agent';
-import type { MeshPingMatrixResp, AgentGroup } from '../../../types/agent';
+import type { MeshPingMatrixResp, MeshPingProto, AgentGroup } from '../../../types/agent';
 import { useT } from '../../../i18n';
 import { useDebounced } from '../../../utils/useDebounced';
 
@@ -43,6 +43,15 @@ const TabMeshPingMatrix: React.FC = () => {
 
   const { agents, matrix } = matrixData;
 
+  const renderProto = (p: MeshPingProto, label?: string) => (
+    <Tooltip title={new Date(p.reported_at).toLocaleString()}>
+      <Tag color={p.success ? 'green' : 'red'} style={{ marginBottom: 2, display: 'inline-block' }}>
+        {label && <span style={{ opacity: 0.7, marginRight: 3 }}>{label}</span>}
+        {p.success ? `${p.latency_ms?.toFixed(1) ?? '?'} ms` : t('proberesults.failed')}
+      </Tag>
+    </Tooltip>
+  );
+
   const columns: ColumnsType<AgentRow> = [
     {
       title: t('agent.list.hostname'), dataIndex: 'hostname', key: '__row_header',
@@ -52,18 +61,18 @@ const TabMeshPingMatrix: React.FC = () => {
     ...agents.map(col => ({
       title: <Tooltip title={col.agent_id}>{col.hostname || col.agent_id}</Tooltip>,
       key: col.agent_id,
-      width: 130,
+      width: 150,
       align: 'center' as const,
       render: (_: unknown, row: AgentRow) => {
         if (row.agent_id === col.agent_id) return <span style={{ color: '#ccc' }}>—</span>;
         const cell = matrix[row.agent_id]?.[col.agent_id];
-        if (!cell) return <span style={{ color: '#ccc' }}>{t('proberesults.noData')}</span>;
+        if (!cell?.v4 && !cell?.v6) return <span style={{ color: '#ccc' }}>{t('proberesults.noData')}</span>;
+        const hasBoth = !!(cell.v4 && cell.v6);
         return (
-          <Tooltip title={new Date(cell.reported_at).toLocaleString()}>
-            <Tag color={cell.success ? 'green' : 'red'}>
-              {cell.success ? `${cell.latency_ms?.toFixed(1) ?? '?'} ms` : t('proberesults.failed')}
-            </Tag>
-          </Tooltip>
+          <div style={{ lineHeight: 1.4 }}>
+            {cell.v4 && renderProto(cell.v4, hasBoth ? 'v4' : undefined)}
+            {cell.v6 && renderProto(cell.v6, hasBoth ? 'v6' : undefined)}
+          </div>
         );
       },
     })),

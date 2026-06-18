@@ -81,7 +81,8 @@ func ListAgents(db *gorm.DB) gin.HandlerFunc {
 
 		q := db.Model(&models.Agent{})
 		if v := c.Query("q"); v != "" {
-			q = q.Where("agent_id LIKE ? OR hostname LIKE ? OR connection_ip LIKE ?", "%"+v+"%", "%"+v+"%", "%"+v+"%")
+			q = q.Where("agent_id LIKE ? OR hostname LIKE ? OR connection_ip LIKE ? OR connection_ipv4 LIKE ? OR connection_ipv6 LIKE ?",
+				"%"+v+"%", "%"+v+"%", "%"+v+"%", "%"+v+"%", "%"+v+"%")
 		}
 		if v := c.Query("group_id"); v != "" {
 			if id, err := strconv.Atoi(v); err == nil && id > 0 {

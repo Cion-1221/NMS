@@ -90,7 +90,12 @@ func GetAgentTasks(db *gorm.DB) gin.HandlerFunc {
 }
 
 // resolveMeshPingTargets 查询其他"存活"（LastSeenAt 在 onlineThreshold 内、未被吊销）
-// Agent 的 ConnectionIP，作为 MeshPing 目标列表（排除自身）。
+// Agent 的可达 IP，作为 MeshPing 目标列表（排除自身）。
+//
+// IP 优先级（每个 peer 独立计算）：
+//  1. source_ip_override（管理员手动，支持单 IP 或 "ipv4 / ipv6" 双栈格式）
+//  2. connection_ipv4 + connection_ipv6（自动追踪，有哪个发哪个）
+//  3. connection_ip（兜底：旧数据或尚未更新的 agent）
 //
 // scope=group：仅限任务指定 Group 内的成员。
 // scope=global / scope=agent：所有存活 Agent（无 group 过滤）。
@@ -108,9 +113,24 @@ func resolveMeshPingTargets(db *gorm.DB, self *models.Agent, task models.AgentTa
 	var peers []models.Agent
 	q.Find(&peers)
 
-	targets := make([]string, 0, len(peers))
+	targets := make([]string, 0, len(peers)*2)
 	for _, p := range peers {
-		if p.ConnectionIP != "" {
+		if p.SourceIPOverride != nil && *p.SourceIPOverride != "" {
+			// 管理员手动优先：支持单 IP 或 "ipv4 / ipv6" 双栈格式
+			for _, part := range strings.SplitN(*p.SourceIPOverride, "/", 2) {
+				if part = strings.TrimSpace(part); part != "" {
+					targets = append(targets, part)
+				}
+			}
+		} else if p.ConnectionIPv4 != "" || p.ConnectionIPv6 != "" {
+			// 自动追踪的双栈地址：有哪个发哪个，agent 自行处理不可达
+			if p.ConnectionIPv4 != "" {
+				targets = append(targets, p.ConnectionIPv4)
+			}
+			if p.ConnectionIPv6 != "" {
+				targets = append(targets, p.ConnectionIPv6)
+			}
+		} else if p.ConnectionIP != "" {
 			targets = append(targets, p.ConnectionIP)
 		}
 	}

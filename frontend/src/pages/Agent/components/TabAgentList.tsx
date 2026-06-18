@@ -156,7 +156,15 @@ const TabAgentList: React.FC = () => {
     { title: t('agent.list.agentId'), dataIndex: 'agent_id', key: 'agent_id', width: 150 },
     { title: t('agent.list.hostname'), dataIndex: 'hostname', key: 'hostname' },
     { title: t('agent.list.group'), key: 'group', width: 120, render: (_: unknown, r: Agent) => r.group?.name ?? '—' },
-    { title: t('agent.list.connectionIp'), dataIndex: 'connection_ip', key: 'connection_ip', width: 150, render: (v: string) => v || '—' },
+    {
+      title: t('agent.list.connectionIp'), key: 'connection_ip', width: 200,
+      render: (_: unknown, r: Agent) => {
+        const v4 = r.connection_ipv4 || (r.connection_ip && !r.connection_ip.includes(':') ? r.connection_ip : '');
+        const v6 = r.connection_ipv6 || (r.connection_ip && r.connection_ip.includes(':') ? r.connection_ip : '');
+        if (v4 && v6) return <span>{v4}<br /><span style={{ color: '#888', fontSize: 12 }}>{v6}</span></span>;
+        return <span>{v4 || v6 || '—'}</span>;
+      },
+    },
     { title: t('agent.list.sourceIp'), dataIndex: 'source_ip_override', key: 'source_ip_override', width: 150, render: (v: string | null) => v || '—' },
     { title: t('agent.list.version'), dataIndex: 'version', key: 'version', width: 110, render: (v: string | undefined) => v || '—' },
     {
