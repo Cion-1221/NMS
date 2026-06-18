@@ -23,9 +23,7 @@ const ThemedShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { resolvedTheme, language } = useAppContext();
 
   useEffect(() => {
-    document.title = language === 'zh'
-      ? 'NMS - 网络管理系统'
-      : 'NMS - Network Management System';
+    document.title = 'CION NMS';
   }, [language]);
 
   return (

@@ -32,7 +32,7 @@ const t = {
   'common.success':     { en: 'Operation succeeded', zh: '操作成功' },
 
   // ── Auth / Login ────────────────────────────────────────────────────────────
-  'auth.login.title':    { en: 'NMS — Network Management System', zh: 'NMS — 网络管理系统' },
+  'auth.login.title':    { en: 'CION NMS', zh: 'CION NMS' },
   'auth.login.subtitle': { en: 'Network Management System', zh: '网络管理系统' },
   'auth.login.username': { en: 'Username', zh: '用户名' },
   'auth.login.password': { en: 'Password', zh: '密码' },

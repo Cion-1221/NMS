@@ -68,9 +68,9 @@ const LoginPage: React.FC = () => {
               marginBottom: 14,
             }}
           >
-            <span style={{ color: '#fff', fontSize: 26, fontWeight: 900, fontFamily: 'monospace' }}>N</span>
+            <span style={{ color: '#fff', fontSize: 26, fontWeight: 900, fontFamily: 'monospace' }}>C</span>
           </div>
-          <Title level={3} style={{ margin: 0 }}>NMS</Title>
+          <Title level={3} style={{ margin: 0 }}>CION NMS</Title>
           <Text type="secondary">{t('auth.login.subtitle')}</Text>
         </div>
 
