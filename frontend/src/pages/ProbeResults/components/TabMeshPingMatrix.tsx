@@ -45,7 +45,7 @@ const TabMeshPingMatrix: React.FC = () => {
 
   const renderProto = (p: MeshPingProto, label?: string) => (
     <Tooltip title={new Date(p.reported_at).toLocaleString()}>
-      <Tag color={p.success ? 'green' : 'red'} style={{ marginBottom: 2, display: 'inline-block' }}>
+      <Tag color={p.success ? 'green' : 'red'}>
         {label && <span style={{ opacity: 0.7, marginRight: 3 }}>{label}</span>}
         {p.success ? `${p.latency_ms?.toFixed(1) ?? '?'} ms` : t('proberesults.failed')}
       </Tag>
@@ -61,7 +61,7 @@ const TabMeshPingMatrix: React.FC = () => {
     ...agents.map(col => ({
       title: <Tooltip title={col.agent_id}>{col.hostname || col.agent_id}</Tooltip>,
       key: col.agent_id,
-      width: 150,
+      width: 130,
       align: 'center' as const,
       render: (_: unknown, row: AgentRow) => {
         if (row.agent_id === col.agent_id) return <span style={{ color: '#ccc' }}>—</span>;
@@ -69,7 +69,7 @@ const TabMeshPingMatrix: React.FC = () => {
         if (!cell?.v4 && !cell?.v6) return <span style={{ color: '#ccc' }}>{t('proberesults.noData')}</span>;
         const hasBoth = !!(cell.v4 && cell.v6);
         return (
-          <div style={{ lineHeight: 1.4 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
             {cell.v4 && renderProto(cell.v4, hasBoth ? 'v4' : undefined)}
             {cell.v6 && renderProto(cell.v6, hasBoth ? 'v6' : undefined)}
           </div>
