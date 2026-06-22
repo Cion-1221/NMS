@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Card, Descriptions, Form, InputNumber, Modal, Select, Space, Statistic, Table, Tag, Typography, message } from 'antd';
+import { Button, Card, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Statistic, Table, Tag, Typography, message } from 'antd';
 import { CopyOutlined, PlusOutlined, ReloadOutlined, StopOutlined, SyncOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -125,23 +125,25 @@ const TabTokens: React.FC = () => {
   };
 
   const handleCopy = async (text: string) => {
-    // navigator.clipboard 仅在 HTTPS / localhost 下可用；HTTP 环境降级到 execCommand
-    if (navigator.clipboard) {
-      try { await navigator.clipboard.writeText(text); message.success(t('agent.token.copied')); return; }
-      catch { /* fall through to execCommand */ }
+    let copied = false;
+    // navigator.clipboard 仅在安全上下文（HTTPS / localhost）下真正可用
+    if (window.isSecureContext && navigator.clipboard) {
+      try { await navigator.clipboard.writeText(text); copied = true; } catch { /* fall through */ }
     }
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      message.success(t('agent.token.copied'));
-    } catch {
-      message.error('Copy failed');
+    if (!copied) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;top:0;left:-9999px;opacity:0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        copied = document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch { /* ignore */ }
     }
+    if (copied) message.success(t('agent.token.copied'));
+    else message.error('Copy failed — please select and copy manually');
   };
 
   const handleRevoke = (r: AgentToken) => {
@@ -249,7 +251,11 @@ const TabTokens: React.FC = () => {
       >
         <Paragraph type="warning">{t('agent.token.resultWarning')}</Paragraph>
         <Space.Compact style={{ width: '100%', marginBottom: 16 }}>
-          <Text code style={{ flex: 1, padding: 8, overflowWrap: 'anywhere' }}>{resultToken?.token}</Text>
+          <Input
+            readOnly
+            value={resultToken?.token ?? ''}
+            style={{ fontFamily: 'monospace', fontSize: 12 }}
+          />
           <Button icon={<CopyOutlined />} onClick={() => resultToken && handleCopy(resultToken.token)} />
         </Space.Compact>
         {resultToken && (
