@@ -473,6 +473,8 @@ const t = {
   'proberesults.purgeConfirm':   { en: 'This will permanently delete probe results and cannot be undone. Proceed?', zh: '此操作将永久删除探测结果，不可恢复，确认继续？' },
   'proberesults.purgeOk':        { en: 'Deleted {n} records', zh: '已删除 {n} 条记录' },
   'proberesults.filterTargets': { en: 'Filter target agents (columns)', zh: '筛选目标 Agent（列）' },
+  'agent.token.viewLast':  { en: 'View Last Token', zh: '查看上次 Token' },
+  'agent.token.viewToken': { en: 'View', zh: '查看' },
 } as const;
 
 export type TranslationKey = keyof typeof t;

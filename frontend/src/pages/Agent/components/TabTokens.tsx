@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Card, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Statistic, Table, Tag, Typography, message } from 'antd';
-import { CopyOutlined, PlusOutlined, ReloadOutlined, StopOutlined, SyncOutlined } from '@ant-design/icons';
+import { CopyOutlined, EyeOutlined, PlusOutlined, ReloadOutlined, StopOutlined, SyncOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
   getAgentTokens, createAgentToken, revokeAgentToken, getAgentGroups,
@@ -28,7 +28,7 @@ const TabTokens: React.FC = () => {
   const [total, setTotal]       = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
   const [resultOpen, setResultOpen] = useState(false);
-  const [resultToken, setResultToken] = useState<{ token: string; expires_at: string } | null>(null);
+  const [resultToken, setResultToken] = useState<{ id: number; token: string; expires_at: string } | null>(null);
   const [caStatus, setCaStatus]       = useState<PKIStatus | null>(null);
   const [caBusy, setCaBusy]           = useState(false);
   const [form] = Form.useForm();
@@ -116,7 +116,7 @@ const TabTokens: React.FC = () => {
         preset_group_id: values.preset_group_id ?? undefined,
       });
       setCreateOpen(false);
-      setResultToken({ token: r.data.token, expires_at: r.data.expires_at });
+      setResultToken({ id: r.data.id, token: r.data.token, expires_at: r.data.expires_at });
       setResultOpen(true);
       void loadData();
     } catch (err: any) {
@@ -185,7 +185,16 @@ const TabTokens: React.FC = () => {
       title: t('common.actions'), key: 'action', width: 100, fixed: 'right' as const,
       render: (_: unknown, r: AgentToken) => (
         r.status === 'unused'
-          ? <Button type="text" size="small" danger icon={<StopOutlined />} onClick={() => handleRevoke(r)}>{t('agent.token.revoke')}</Button>
+          ? <Space size={4}>
+              {resultToken?.id === r.id && (
+                <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setResultOpen(true)}>
+                  {t('agent.token.viewToken')}
+                </Button>
+              )}
+              <Button type="text" size="small" danger icon={<StopOutlined />} onClick={() => handleRevoke(r)}>
+                {t('agent.token.revoke')}
+              </Button>
+            </Space>
           : null
       ),
     },
@@ -217,6 +226,11 @@ const TabTokens: React.FC = () => {
       <Space style={{ marginBottom: 16 }}>
         <Button icon={<ReloadOutlined />} onClick={() => { void loadData(); }} loading={loading}>{t('common.refresh')}</Button>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>{t('agent.token.generate')}</Button>
+        {resultToken && new Date(resultToken.expires_at).getTime() > Date.now() && (
+          <Button icon={<EyeOutlined />} onClick={() => setResultOpen(true)}>
+            {t('agent.token.viewLast')}
+          </Button>
+        )}
       </Space>
       <Table
         columns={columns} dataSource={tokens} rowKey="id" loading={loading}
