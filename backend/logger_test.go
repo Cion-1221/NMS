@@ -35,7 +35,7 @@ func TestParseLogLevel(t *testing.T) {
 	}
 }
 
-func TestDailyRotateWriterWritesToDatedFile(t *testing.T) {
+func TestDailyRotateWriterWritesToCurrentFile(t *testing.T) {
 	dir := t.TempDir()
 	w, err := newDailyRotateWriter(LogConfig{Dir: dir})
 	if err != nil {
@@ -47,7 +47,8 @@ func TestDailyRotateWriterWritesToDatedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := filepath.Join(dir, fmt.Sprintf("%s-%s.log", logBaseName, time.Now().Format(dateLayout)))
+	// 当日活跃文件应为固定名称 nms-server.log，而非带日期的版本
+	want := filepath.Join(dir, logCurrentFile)
 	b, err := os.ReadFile(want)
 	if err != nil {
 		t.Fatalf("当日日志文件未创建: %v", err)
@@ -170,7 +171,8 @@ func TestMaintainNeverTouchesActiveFile(t *testing.T) {
 	}
 	w.maintain()
 
-	active := filepath.Join(dir, fmt.Sprintf("%s-%s.log", logBaseName, time.Now().Format(dateLayout)))
+	// 当日活跃文件为固定名称 nms-server.log，maintain 不应触碰它
+	active := filepath.Join(dir, logCurrentFile)
 	b, err := os.ReadFile(active)
 	if err != nil {
 		t.Fatalf("当日活跃文件不应被压缩或删除: %v", err)

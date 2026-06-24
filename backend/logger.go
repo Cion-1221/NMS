@@ -16,7 +16,8 @@ import (
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 日志子系统：按天轮转 + 历史压缩 + 过期清理，零第三方依赖（纯 stdlib 实现）。
-// 文件名格式: nms-server-2006-01-02.log（压缩后追加 .gz 后缀）。
+// 当日活跃文件：nms-server.log
+// 轮转后归档：nms-server-2006-01-02.log.gz
 // ─────────────────────────────────────────────────────────────────────────────
 
 // LogConfig 日志配置，对应 config.yaml 的 log: 块
@@ -32,16 +33,17 @@ type LogConfig struct {
 }
 
 const (
-	logBaseName = "nms-server"
-	dateLayout  = "2006-01-02"
+	logBaseName    = "nms-server"
+	logCurrentFile = "nms-server.log" // 当日活跃日志文件，固定名称
+	dateLayout     = "2006-01-02"
 )
 
-// 仅匹配本程序生成的日志文件，其他文件（含旧版 lumberjack 的 nms.log）一律不动
+// 仅匹配带日期的历史归档文件，不匹配当日活跃的 nms-server.log
 var logFileRe = regexp.MustCompile(`^` + logBaseName + `-(\d{4}-\d{2}-\d{2})\.log(\.gz)?$`)
 
 // dailyRotateWriter 按自然日轮转的 io.Writer。
-// 每次写入时检查日期，跨天则关闭旧文件、打开当日新文件，
-// 并在后台 goroutine 中压缩历史文件、清理过期文件（不阻塞业务写入）。
+// 当日写入 nms-server.log；跨天时将其 rename 为 nms-server-{date}.log，
+// 再由后台 goroutine 压缩和清理，不阻塞业务写入。
 type dailyRotateWriter struct {
 	mu         sync.Mutex // 保护 file / curDate
 	maintainMu sync.Mutex // 串行化后台维护任务，防止并发压缩/删除
@@ -106,16 +108,37 @@ func (w *dailyRotateWriter) Write(p []byte) (int, error) {
 	return w.file.Write(p)
 }
 
-// openLocked 关闭当前文件并打开指定日期的新文件，调用方必须持有 w.mu
+// openLocked 关闭当前文件并打开/创建 nms-server.log，调用方必须持有 w.mu。
+//
+// 跨天轮转时：把已关闭的 nms-server.log rename 为 nms-server-{prevDate}.log，
+// 供 maintain() 后续压缩。
+// 首次启动时：如果目录中存在修改日期不属于今天的 nms-server.log（上次运行遗留），
+// 同样按其修改日期 rename，避免日志混写。
 func (w *dailyRotateWriter) openLocked(date string) error {
+	currentPath := filepath.Join(w.dir, logCurrentFile)
+
 	if w.file != nil {
 		_ = w.file.Close()
 		w.file = nil
+		// 跨天轮转：将 nms-server.log 归档为带日期的文件
+		if w.curDate != "" && w.curDate != date {
+			datedPath := filepath.Join(w.dir, fmt.Sprintf("%s-%s.log", logBaseName, w.curDate))
+			_ = os.Rename(currentPath, datedPath)
+		}
+	} else {
+		// 首次打开：检查是否存在上次运行遗留的 nms-server.log
+		if info, err := os.Stat(currentPath); err == nil {
+			fileDate := info.ModTime().Format(dateLayout)
+			if fileDate != date {
+				datedPath := filepath.Join(w.dir, fmt.Sprintf("%s-%s.log", logBaseName, fileDate))
+				_ = os.Rename(currentPath, datedPath)
+			}
+		}
 	}
-	path := filepath.Join(w.dir, fmt.Sprintf("%s-%s.log", logBaseName, date))
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+
+	f, err := os.OpenFile(currentPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		return fmt.Errorf("打开日志文件 %s 失败: %w", path, err)
+		return fmt.Errorf("打开日志文件 %s 失败: %w", currentPath, err)
 	}
 	w.file = f
 	w.curDate = date
@@ -123,7 +146,7 @@ func (w *dailyRotateWriter) openLocked(date string) error {
 }
 
 // maintain 压缩历史明文日志并按 maxAgeDays / maxBackups 清理过期文件。
-// 当日活跃文件永不触碰；非本程序命名规则的文件一律跳过。
+// 当日活跃文件为 nms-server.log，不匹配 logFileRe，永不被触碰。
 func (w *dailyRotateWriter) maintain() {
 	w.maintainMu.Lock()
 	defer w.maintainMu.Unlock()
