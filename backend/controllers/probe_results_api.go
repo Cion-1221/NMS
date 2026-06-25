@@ -145,7 +145,7 @@ func GetMeshPingMatrix(db *gorm.DB) gin.HandlerFunc {
 			agentQuery = agentQuery.Where("agent_id LIKE ? OR hostname LIKE ?", "%"+v+"%", "%"+v+"%")
 		}
 		var agents []models.Agent
-		agentQuery.Order("agent_id asc").Find(&agents)
+		agentQuery.Order("group_id asc, agent_id asc").Find(&agents)
 
 		var rows []meshPingLatestRow
 		db.Raw(`
