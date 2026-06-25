@@ -4,6 +4,7 @@ import type {
   AgentGroup,
   AgentTask, CreateAgentTasksReq, UpdateAgentTaskReq,
   AgentTokenListResp, CreateAgentTokenReq, CreateAgentTokenResp,
+  AgentRelease, CreateAgentReleaseReq,
   ProbeResultListParams, ProbeResultListResp, MeshPingMatrixResp, MeshPingMatrixParams,
 } from '../types/agent';
 
@@ -72,6 +73,19 @@ export const createAgentToken = (data: CreateAgentTokenReq) =>
 
 export const revokeAgentToken = (id: number) =>
   client.post(`/agent-tokens/${id}/revoke`);
+
+// ── Agent Releases ───────────────────────────────────────────────────────────
+export const getAgentReleases = () =>
+  client.get<AgentRelease[]>('/agent-releases');
+
+export const createAgentRelease = (data: CreateAgentReleaseReq) =>
+  client.post<AgentRelease>('/agent-releases', data);
+
+export const deleteAgentRelease = (id: number) =>
+  client.delete(`/agent-releases/${id}`);
+
+export const setAgentReleaseActive = (id: number, active: boolean) =>
+  client.post<AgentRelease>(`/agent-releases/${id}/set-active`, { active });
 
 // ── Probe Results ────────────────────────────────────────────────────────────
 export const getProbeResults = (params: ProbeResultListParams) =>

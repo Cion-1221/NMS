@@ -197,6 +197,7 @@ func main() {
 		&models.AgentTask{},
 		&models.ProbeResult{},
 		&models.AgentAuditLog{},
+		&models.AgentRelease{},
 	); err != nil {
 		slog.Error("自动迁移数据库失败", "err", err)
 		os.Exit(1)

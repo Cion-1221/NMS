@@ -136,6 +136,28 @@ export interface CreateAgentTokenReq {
   preset_group_id?: number | null;
 }
 
+export interface AgentRelease {
+  id: number;
+  version: string;
+  os: string;
+  arch: string;
+  download_url: string;
+  sha256: string;
+  notes: string;
+  active: boolean;
+  created_by: string;
+  created_at: string;
+}
+
+export interface CreateAgentReleaseReq {
+  version: string;
+  os: string;
+  arch: string;
+  download_url: string;
+  sha256: string;
+  notes?: string;
+}
+
 export interface CreateAgentTokenResp {
   id: number;
   token: string;

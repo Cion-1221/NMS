@@ -79,12 +79,28 @@ func GetAgentTasks(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
+		// 检查该 Agent OS+Arch 是否有激活的可用更新（版本不同才下发）
+		var updatePayload interface{}
+		if agent.OS != "" && agent.Arch != "" {
+			var rel models.AgentRelease
+			if db.Where("os = ? AND arch = ? AND active = ?", agent.OS, agent.Arch, true).First(&rel).Error == nil {
+				if rel.Version != agent.Version {
+					updatePayload = gin.H{
+						"version":      rel.Version,
+						"download_url": rel.DownloadURL,
+						"sha256":       rel.SHA256,
+					}
+				}
+			}
+		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"agent_id":    agent.AgentID,
 			"source_ip":   sourceIP,   // raw stored value (backward compat)
 			"source_ipv4": sourceIPv4, // parsed IPv4 component
 			"source_ipv6": sourceIPv6, // parsed IPv6 component
 			"tasks":       payloads,
+			"update":      updatePayload, // nil = no update; non-nil = download and replace
 		})
 	}
 }

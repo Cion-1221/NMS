@@ -619,6 +619,104 @@ func GetAgentSummary(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// ── AgentRelease 管理（版本更新）──────────────────────────────────────────────
+
+func ListAgentReleases(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var releases []models.AgentRelease
+		db.Order("id desc").Find(&releases)
+		c.JSON(http.StatusOK, releases)
+	}
+}
+
+func CreateAgentRelease(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Version     string `json:"version" binding:"required"`
+			OS          string `json:"os" binding:"required"`
+			Arch        string `json:"arch" binding:"required"`
+			DownloadURL string `json:"download_url" binding:"required"`
+			SHA256      string `json:"sha256" binding:"required"`
+			Notes       string `json:"notes"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+			return
+		}
+		rel := models.AgentRelease{
+			Version: req.Version, OS: req.OS, Arch: req.Arch,
+			DownloadURL: req.DownloadURL, SHA256: strings.ToLower(req.SHA256),
+			Notes: req.Notes, CreatedBy: getUsername(c),
+		}
+		if err := db.Create(&rel).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建失败: " + err.Error()})
+			return
+		}
+		writeAgentAudit(db, getUsername(c), "create_release", "agent_releases", strconv.Itoa(int(rel.ID)),
+			fmt.Sprintf("Created release %s (%s/%s)", rel.Version, rel.OS, rel.Arch))
+		c.JSON(http.StatusOK, rel)
+	}
+}
+
+func DeleteAgentRelease(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := parseIDParam(c, "id")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		var rel models.AgentRelease
+		if err := db.First(&rel, id).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Release 不存在"})
+			return
+		}
+		if err := db.Delete(&rel).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败: " + err.Error()})
+			return
+		}
+		writeAgentAudit(db, getUsername(c), "delete_release", "agent_releases", strconv.Itoa(int(id)),
+			fmt.Sprintf("Deleted release %s (%s/%s)", rel.Version, rel.OS, rel.Arch))
+		c.JSON(http.StatusOK, gin.H{"message": "success"})
+	}
+}
+
+// SetAgentReleaseActive POST /api/v1/agent-releases/:id/set-active
+// {"active":true} 激活时自动把同 OS+Arch 的其他记录设为 inactive，保证同类型只有一个激活版本。
+func SetAgentReleaseActive(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := parseIDParam(c, "id")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		var req struct {
+			Active bool `json:"active"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+			return
+		}
+		var rel models.AgentRelease
+		if err := db.First(&rel, id).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Release 不存在"})
+			return
+		}
+		if req.Active {
+			db.Model(&models.AgentRelease{}).
+				Where("os = ? AND arch = ? AND id <> ?", rel.OS, rel.Arch, id).
+				Update("active", false)
+		}
+		if err := db.Model(&rel).Update("active", req.Active).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败: " + err.Error()})
+			return
+		}
+		rel.Active = req.Active
+		writeAgentAudit(db, getUsername(c), "set_release_active", "agent_releases", strconv.Itoa(int(id)),
+			fmt.Sprintf("Set release %s (%s/%s) active=%v", rel.Version, rel.OS, rel.Arch, req.Active))
+		c.JSON(http.StatusOK, rel)
+	}
+}
+
 // ── Route Registration ─────────────────────────────────────────────────────
 
 // RegisterAgentAdminRoutes 注册不依赖 PKI 的 Agent 管理路由（agents/groups/tasks/tokens），
@@ -658,6 +756,15 @@ func RegisterAgentAdminRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc
 		tokens.GET("", ListAgentTokens(db))
 		tokens.POST("", CreateAgentToken(db))
 		tokens.POST("/:id/revoke", RevokeAgentToken(db))
+	}
+
+	releases := r.Group("/api/v1/agent-releases")
+	releases.Use(authMW, middleware.AdminRequired)
+	{
+		releases.GET("", ListAgentReleases(db))
+		releases.POST("", CreateAgentRelease(db))
+		releases.DELETE("/:id", DeleteAgentRelease(db))
+		releases.POST("/:id/set-active", SetAgentReleaseActive(db))
 	}
 }
 

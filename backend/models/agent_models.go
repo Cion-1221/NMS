@@ -137,3 +137,23 @@ type AgentAuditLog struct {
 }
 
 func (AgentAuditLog) TableName() string { return "agent_audit_logs" }
+
+// ── AgentRelease ─────────────────────────────────────────────────────────────
+// 记录每个 OS/Arch 组合对应的 Agent 二进制版本与下载地址。
+// 同一 OS+Arch 同时只能有一条 active=true 的记录；激活某条时服务端自动将同 OS+Arch 的其他
+// 记录设为 false。当 Agent 的 OS+Arch 命中激活记录且版本不同时，任务同步响应附带 update
+// 字段，Agent 自行下载、校验、替换并重启。
+type AgentRelease struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	Version     string    `gorm:"type:varchar(50);not null;uniqueIndex:idx_release_ver_os_arch" json:"version"`
+	OS          string    `gorm:"type:varchar(20);not null;uniqueIndex:idx_release_ver_os_arch" json:"os"`
+	Arch        string    `gorm:"type:varchar(20);not null;uniqueIndex:idx_release_ver_os_arch" json:"arch"`
+	DownloadURL string    `gorm:"type:varchar(1000);not null" json:"download_url"`
+	SHA256      string    `gorm:"type:varchar(64);not null" json:"sha256"`
+	Notes       string    `gorm:"type:varchar(500)" json:"notes"`
+	Active      bool      `gorm:"not null;default:false" json:"active"`
+	CreatedBy   string    `gorm:"type:varchar(100)" json:"created_by"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+func (AgentRelease) TableName() string { return "agent_releases" }
