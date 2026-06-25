@@ -4,7 +4,7 @@ import type {
   AgentGroup,
   AgentTask, CreateAgentTasksReq, UpdateAgentTaskReq,
   AgentTokenListResp, CreateAgentTokenReq, CreateAgentTokenResp,
-  AgentRelease, CreateAgentReleaseReq,
+  AgentRelease,
   ProbeResultListParams, ProbeResultListResp, MeshPingMatrixResp, MeshPingMatrixParams,
 } from '../types/agent';
 
@@ -78,8 +78,10 @@ export const revokeAgentToken = (id: number) =>
 export const getAgentReleases = () =>
   client.get<AgentRelease[]>('/agent-releases');
 
-export const createAgentRelease = (data: CreateAgentReleaseReq) =>
-  client.post<AgentRelease>('/agent-releases', data);
+export const createAgentRelease = (data: FormData) =>
+  client.post<AgentRelease>('/agent-releases', data, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
 
 export const deleteAgentRelease = (id: number) =>
   client.delete(`/agent-releases/${id}`);

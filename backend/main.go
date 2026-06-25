@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -54,7 +55,8 @@ type Config struct {
 	// Agent PKI：内置 CA + mTLS 注册引导/任务同步两个独立 TLS 端口
 	AgentPKI struct {
 		Enabled        bool     `mapstructure:"enabled"`
-		Dir            string   `mapstructure:"dir"`             // CA + 证书存储目录
+		Dir            string   `mapstructure:"dir"`              // CA + 证书存储目录
+		ReleasesDir    string   `mapstructure:"releases_dir"`     // Agent 二进制文件存储目录
 		EnrollPort     int      `mapstructure:"enroll_port"`      // 单向 HTTPS：Agent 首次注册
 		SyncPort       int      `mapstructure:"sync_port"`        // mTLS：任务拉取/结果上报
 		ServerSAN      []string `mapstructure:"server_san"`       // 服务端证书 SAN（Agent 据此拨号的主机名/IP）
@@ -82,6 +84,7 @@ func loadConfig() (*Config, error) {
 	// Agent PKI 缺省值：旧版 config.yaml 未配置时保持开箱即用
 	viper.SetDefault("agent_pki.enabled", true)
 	viper.SetDefault("agent_pki.dir", "data/pki")
+	viper.SetDefault("agent_pki.releases_dir", "data/releases")
 	viper.SetDefault("agent_pki.enroll_port", 8443)
 	viper.SetDefault("agent_pki.sync_port", 8444)
 	viper.SetDefault("agent_pki.server_san", []string{"localhost", "127.0.0.1"})
@@ -206,6 +209,13 @@ func main() {
 	// 写入初始化种子数据（幂等）
 	controllers.SeedDatabase(db)
 
+	// 确保 Agent 二进制存储目录存在
+	releasesDir := filepath.Clean(cfg.AgentPKI.ReleasesDir)
+	if err := os.MkdirAll(releasesDir, 0755); err != nil {
+		slog.Error("创建 releases 目录失败", "err", err, "dir", releasesDir)
+		os.Exit(1)
+	}
+
 	// 审计日志 + 探测结果自动保留（后台任务，对应 max_age_days = 0 时不启用）
 	controllers.StartAuditRetention(db, cfg.Audit.MaxAgeDays, cfg.Audit.ProbeResultsMaxAgeDays)
 
@@ -222,6 +232,7 @@ func main() {
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	r.MaxMultipartMemory = 128 << 20 // 128 MiB，支持上传较大的 Agent 二进制
 	// 自定义 Recovery：panic 堆栈写入 slog（落盘），而非 gin 默认的 stderr
 	r.Use(middleware.Recovery())
 	if cfg.Log.AccessLog {
@@ -255,7 +266,7 @@ func main() {
 	controllers.RegisterSystemRoutes(r, db, authMW)
 	// Agent 管理路由（list/update/delete/groups/tasks/tokens）和探测结果路由不依赖 PKI，
 	// 无论 agent_pki.enabled 是否开启都注册，确保前端页面始终可用。
-	controllers.RegisterAgentAdminRoutes(r, db, authMW)
+	controllers.RegisterAgentAdminRoutes(r, db, authMW, releasesDir)
 	controllers.RegisterProbeResultsRoutes(r, db, authMW)
 	if pki != nil {
 		// CA 管理路由（ca-cert/status/rotate/finalize）和 mTLS 监听端口需要 PKI。

@@ -1,9 +1,14 @@
 package controllers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -629,31 +634,82 @@ func ListAgentReleases(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-func CreateAgentRelease(db *gorm.DB) gin.HandlerFunc {
+// CreateAgentRelease POST /api/v1/agent-releases（multipart/form-data）
+// 字段：version, os, arch, notes（文本） + file（二进制文件）。
+// 服务端流式写盘、同时计算 SHA256，不在内存中缓存整个文件。
+func CreateAgentRelease(db *gorm.DB, releaseDir string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req struct {
-			Version     string `json:"version" binding:"required"`
-			OS          string `json:"os" binding:"required"`
-			Arch        string `json:"arch" binding:"required"`
-			DownloadURL string `json:"download_url" binding:"required"`
-			SHA256      string `json:"sha256" binding:"required"`
-			Notes       string `json:"notes"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+		version := strings.TrimSpace(c.PostForm("version"))
+		osName := strings.TrimSpace(c.PostForm("os"))
+		arch := strings.TrimSpace(c.PostForm("arch"))
+		notes := strings.TrimSpace(c.PostForm("notes"))
+		if version == "" || osName == "" || arch == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "version / os / arch 不能为空"})
 			return
 		}
+
+		fh, err := c.FormFile("file")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少二进制文件（字段名 file）"})
+			return
+		}
+		src, err := fh.Open()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "无法读取上传文件"})
+			return
+		}
+		defer src.Close()
+
+		// 临时文件与最终文件在同一目录，保证 rename 是同分区原子操作
+		tmp, err := os.CreateTemp(releaseDir, "upload-*")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建临时文件失败"})
+			return
+		}
+		tmpPath := tmp.Name()
+		cleanTmp := true
+		defer func() {
+			if cleanTmp {
+				tmp.Close()
+				os.Remove(tmpPath)
+			}
+		}()
+
+		// 流式写盘 + 同步计算 SHA256
+		h := sha256.New()
+		written, err := io.Copy(io.MultiWriter(tmp, h), src)
+		tmp.Close()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "写入文件失败"})
+			return
+		}
+		checksum := hex.EncodeToString(h.Sum(nil))
+
+		// 先建 DB 记录取 ID，再以 ID 为文件名落盘
 		rel := models.AgentRelease{
-			Version: req.Version, OS: req.OS, Arch: req.Arch,
-			DownloadURL: req.DownloadURL, SHA256: strings.ToLower(req.SHA256),
-			Notes: req.Notes, CreatedBy: getUsername(c),
+			Version: version, OS: osName, Arch: arch,
+			SHA256: checksum, FileSize: written,
+			Notes: notes, CreatedBy: getUsername(c),
 		}
 		if err := db.Create(&rel).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建失败: " + err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建记录失败: " + err.Error()})
 			return
 		}
+
+		finalPath := filepath.Join(releaseDir, strconv.FormatUint(uint64(rel.ID), 10))
+		if err := os.Rename(tmpPath, finalPath); err != nil {
+			db.Delete(&rel)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存文件失败"})
+			return
+		}
+		cleanTmp = false            // rename 成功，不再清理（已不是 tmpPath）
+		os.Chmod(finalPath, 0o755) // 保证文件可执行
+
+		db.Model(&rel).Updates(map[string]interface{}{"file_path": finalPath})
+		rel.FilePath = finalPath
+
 		writeAgentAudit(db, getUsername(c), "create_release", "agent_releases", strconv.Itoa(int(rel.ID)),
-			fmt.Sprintf("Created release %s (%s/%s)", rel.Version, rel.OS, rel.Arch))
+			fmt.Sprintf("Uploaded release %s (%s/%s) size=%d sha256=%s", rel.Version, rel.OS, rel.Arch, written, checksum))
 		c.JSON(http.StatusOK, rel)
 	}
 }
@@ -673,6 +729,9 @@ func DeleteAgentRelease(db *gorm.DB) gin.HandlerFunc {
 		if err := db.Delete(&rel).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败: " + err.Error()})
 			return
+		}
+		if rel.FilePath != "" {
+			_ = os.Remove(rel.FilePath) // 忽略文件不存在等错误
 		}
 		writeAgentAudit(db, getUsername(c), "delete_release", "agent_releases", strconv.Itoa(int(id)),
 			fmt.Sprintf("Deleted release %s (%s/%s)", rel.Version, rel.OS, rel.Arch))
@@ -719,9 +778,9 @@ func SetAgentReleaseActive(db *gorm.DB) gin.HandlerFunc {
 
 // ── Route Registration ─────────────────────────────────────────────────────
 
-// RegisterAgentAdminRoutes 注册不依赖 PKI 的 Agent 管理路由（agents/groups/tasks/tokens），
-// 无论 agent_pki.enabled 是否开启都应调用。
-func RegisterAgentAdminRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc) {
+// RegisterAgentAdminRoutes 注册不依赖 PKI 的 Agent 管理路由（agents/groups/tasks/tokens/releases），
+// 无论 agent_pki.enabled 是否开启都应调用。releaseDir 为 Agent 二进制文件存储目录。
+func RegisterAgentAdminRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc, releaseDir string) {
 	agents := r.Group("/api/v1/agents")
 	agents.Use(authMW, middleware.AdminRequired)
 	{
@@ -762,7 +821,7 @@ func RegisterAgentAdminRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc
 	releases.Use(authMW, middleware.AdminRequired)
 	{
 		releases.GET("", ListAgentReleases(db))
-		releases.POST("", CreateAgentRelease(db))
+		releases.POST("", CreateAgentRelease(db, releaseDir))
 		releases.DELETE("/:id", DeleteAgentRelease(db))
 		releases.POST("/:id/set-active", SetAgentReleaseActive(db))
 	}

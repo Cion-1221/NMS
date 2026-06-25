@@ -141,21 +141,13 @@ export interface AgentRelease {
   version: string;
   os: string;
   arch: string;
-  download_url: string;
+  file_path: string;
+  file_size: number;
   sha256: string;
   notes: string;
   active: boolean;
   created_by: string;
   created_at: string;
-}
-
-export interface CreateAgentReleaseReq {
-  version: string;
-  os: string;
-  arch: string;
-  download_url: string;
-  sha256: string;
-  notes?: string;
 }
 
 export interface CreateAgentTokenResp {

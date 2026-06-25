@@ -1,18 +1,28 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Button, Form, Input, Modal, Space, Table, Tag, Tooltip, message } from 'antd';
-import { ExclamationCircleFilled, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Alert, Button, Form, Input, Modal, Space, Table, Tag, Tooltip, Upload, message } from 'antd';
+import { ExclamationCircleFilled, InboxOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
+import type { RcFile } from 'antd/es/upload';
 import { getAgentReleases, createAgentRelease, deleteAgentRelease, setAgentReleaseActive } from '../../../api/agent';
 import type { AgentRelease } from '../../../types/agent';
 import { useT } from '../../../i18n';
 
 const { confirm } = Modal;
+const { Dragger } = Upload;
+
+function fmtSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
 
 const TabReleases: React.FC = () => {
   const t = useT();
-  const [releases, setReleases] = useState<AgentRelease[]>([]);
-  const [loading, setLoading]   = useState(false);
-  const [addOpen, setAddOpen]   = useState(false);
+  const [releases, setReleases]     = useState<AgentRelease[]>([]);
+  const [loading, setLoading]       = useState(false);
+  const [addOpen, setAddOpen]       = useState(false);
+  const [uploading, setUploading]   = useState(false);
+  const [selectedFile, setSelectedFile] = useState<RcFile | null>(null);
   const [form] = Form.useForm();
 
   const loadData = useCallback(async () => {
@@ -29,23 +39,34 @@ const TabReleases: React.FC = () => {
 
   useEffect(() => { void loadData(); }, [loadData]);
 
+  const handleCloseAdd = () => {
+    setAddOpen(false);
+    setSelectedFile(null);
+    form.resetFields();
+  };
+
   const handleAdd = async () => {
     const values = await form.validateFields();
+    if (!selectedFile) {
+      message.error(t('agent.release.uploadFile') + ' is required');
+      return;
+    }
+    setUploading(true);
     try {
-      await createAgentRelease({
-        version:      values.version.trim(),
-        os:           values.os.trim(),
-        arch:         values.arch.trim(),
-        download_url: values.download_url.trim(),
-        sha256:       values.sha256.trim().toLowerCase(),
-        notes:        values.notes?.trim() ?? '',
-      });
+      const fd = new FormData();
+      fd.append('version', values.version.trim());
+      fd.append('os', values.os.trim());
+      fd.append('arch', values.arch.trim());
+      fd.append('notes', values.notes?.trim() ?? '');
+      fd.append('file', selectedFile);
+      await createAgentRelease(fd);
       message.success(t('common.success'));
-      setAddOpen(false);
-      form.resetFields();
+      handleCloseAdd();
       void loadData();
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? 'Create failed');
+      message.error(err?.response?.data?.error ?? 'Upload failed');
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -80,21 +101,19 @@ const TabReleases: React.FC = () => {
     { title: t('agent.release.arch'),    dataIndex: 'arch',    key: 'arch',    width: 90 },
     {
       title: t('agent.release.active'), dataIndex: 'active', key: 'active', width: 100,
-      render: (v: boolean) => v ? <Tag color="green">{t('agent.release.active')}</Tag> : <span style={{ color: '#aaa' }}>—</span>,
+      render: (v: boolean) => v
+        ? <Tag color="green">{t('agent.release.active')}</Tag>
+        : <span style={{ color: '#aaa' }}>—</span>,
     },
     {
-      title: t('agent.release.downloadUrl'), dataIndex: 'download_url', key: 'download_url',
-      render: (v: string) => (
-        <Tooltip title={v}>
-          <a href={v} target="_blank" rel="noopener noreferrer" style={{ maxWidth: 260, display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>
-            {v}
-          </a>
-        </Tooltip>
-      ),
+      title: t('agent.release.fileSize'), dataIndex: 'file_size', key: 'file_size', width: 110,
+      render: (v: number) => fmtSize(v),
     },
     {
       title: t('agent.release.sha256'), dataIndex: 'sha256', key: 'sha256', width: 130,
-      render: (v: string) => <Tooltip title={v}><code style={{ fontSize: 11 }}>{v.slice(0, 12)}…</code></Tooltip>,
+      render: (v: string) => v
+        ? <Tooltip title={v}><code style={{ fontSize: 11 }}>{v.slice(0, 12)}…</code></Tooltip>
+        : '—',
     },
     { title: t('agent.release.notes'), dataIndex: 'notes', key: 'notes', render: (v: string) => v || '—' },
     {
@@ -140,9 +159,10 @@ const TabReleases: React.FC = () => {
         title={t('agent.release.addRelease')}
         open={addOpen}
         onOk={handleAdd}
-        onCancel={() => { setAddOpen(false); form.resetFields(); }}
+        onCancel={handleCloseAdd}
         okText={t('common.save')}
         cancelText={t('common.cancel')}
+        confirmLoading={uploading}
         destroyOnClose
       >
         <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
@@ -155,14 +175,20 @@ const TabReleases: React.FC = () => {
           <Form.Item label={t('agent.release.arch')} name="arch" rules={[{ required: true, whitespace: true }]}>
             <Input placeholder="amd64" />
           </Form.Item>
-          <Form.Item label={t('agent.release.downloadUrl')} name="download_url" rules={[{ required: true, whitespace: true, type: 'url' }]}>
-            <Input placeholder="https://..." />
-          </Form.Item>
-          <Form.Item label={t('agent.release.sha256')} name="sha256" rules={[{ required: true, whitespace: true, len: 64, message: 'SHA256 must be 64 hex characters' }]}>
-            <Input placeholder="64-char hex digest" style={{ fontFamily: 'monospace' }} />
-          </Form.Item>
           <Form.Item label={t('agent.release.notes')} name="notes">
-            <Input.TextArea rows={2} />
+            <Input />
+          </Form.Item>
+          <Form.Item label={t('agent.release.uploadFile')} required>
+            <Dragger
+              beforeUpload={(file) => { setSelectedFile(file); return false; }}
+              onRemove={() => setSelectedFile(null)}
+              maxCount={1}
+              fileList={selectedFile ? [{ uid: '1', name: selectedFile.name, size: selectedFile.size, status: 'done' }] : []}
+            >
+              <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+              <p className="ant-upload-text">Click or drag the agent binary here</p>
+              <p className="ant-upload-hint" style={{ fontSize: 12 }}>SHA256 is computed automatically on the server</p>
+            </Dragger>
           </Form.Item>
         </Form>
       </Modal>

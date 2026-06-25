@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"os"
 	"strings"
 	"time"
 
@@ -79,16 +80,17 @@ func GetAgentTasks(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
-		// 检查该 Agent OS+Arch 是否有激活的可用更新（版本不同才下发）
+		// 检查该 Agent OS+Arch 是否有激活的可用更新（版本不同且文件已上传才下发）
 		var updatePayload interface{}
 		if agent.OS != "" && agent.Arch != "" {
 			var rel models.AgentRelease
 			if db.Where("os = ? AND arch = ? AND active = ?", agent.OS, agent.Arch, true).First(&rel).Error == nil {
-				if rel.Version != agent.Version {
+				if rel.Version != agent.Version && rel.FilePath != "" {
 					updatePayload = gin.H{
-						"version":      rel.Version,
-						"download_url": rel.DownloadURL,
-						"sha256":       rel.SHA256,
+						"version":   rel.Version,
+						"binary_id": rel.ID,
+						"sha256":    rel.SHA256,
+						"file_size": rel.FileSize,
 					}
 				}
 			}
@@ -259,6 +261,32 @@ func GetMyIP(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ip": c.ClientIP()})
 }
 
+// GetAgentBinary GET /api/v1/agent-sync/binary/:id —— 流式下发 Agent 二进制文件。
+// 受 AgentMTLS 中间件保护：只有持有有效客户端证书的 Agent 才能下载。
+func GetAgentBinary(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := parseIDParam(c, "id")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		var rel models.AgentRelease
+		if err := db.First(&rel, id).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Release 不存在"})
+			return
+		}
+		if rel.FilePath == "" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "文件未上传"})
+			return
+		}
+		if _, err := os.Stat(rel.FilePath); os.IsNotExist(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在（可能已被删除）"})
+			return
+		}
+		c.FileAttachment(rel.FilePath, "nms-agent")
+	}
+}
+
 // RegisterAgentSyncRoutes 挂载到独立的 sync mTLS 引擎（tls.RequireAndVerifyClientCert）。
 func RegisterAgentSyncRoutes(r *gin.Engine, db *gorm.DB, pki *core.PKI, clientCertDays int) {
 	sync := r.Group("/api/v1/agent-sync")
@@ -268,5 +296,6 @@ func RegisterAgentSyncRoutes(r *gin.Engine, db *gorm.DB, pki *core.PKI, clientCe
 		sync.POST("/results", PostAgentResults(db))
 		sync.POST("/renew-cert", RenewAgentCert(db, pki, clientCertDays))
 		sync.GET("/my-ip", GetMyIP)
+		sync.GET("/binary/:id", GetAgentBinary(db))
 	}
 }
