@@ -167,6 +167,8 @@ const TabAgentList: React.FC = () => {
     },
     { title: t('agent.list.sourceIp'), dataIndex: 'source_ip_override', key: 'source_ip_override', width: 150, render: (v: string | null) => v || '—' },
     { title: t('agent.list.version'), dataIndex: 'version', key: 'version', width: 110, render: (v: string | undefined) => v || '—' },
+    { title: t('agent.list.os'), dataIndex: 'os', key: 'os', width: 100, render: (v: string | undefined) => v || '—' },
+    { title: t('agent.list.arch'), dataIndex: 'arch', key: 'arch', width: 90, render: (v: string | undefined) => v || '—' },
     {
       title: t('common.status'), dataIndex: 'status', key: 'status', width: 110,
       render: (v: string, r: Agent) => r.revoked

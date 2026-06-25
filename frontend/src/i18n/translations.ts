@@ -382,6 +382,8 @@ const t = {
   'agent.list.revokeBody':   { en: 'The agent will be rejected on its next mTLS call and must re-enroll with a new token. Historical data is kept.', zh: '作废后该 Agent 下次 mTLS 调用将被拒绝，需使用新注册码重新注册；历史数据保留。' },
   'agent.list.revoked':      { en: 'Revoked', zh: '已作废' },
   'agent.list.version':      { en: 'Version', zh: '版本' },
+  'agent.list.os':           { en: 'OS', zh: '系统' },
+  'agent.list.arch':         { en: 'Arch', zh: '架构' },
   'agent.list.bulkDelete':       { en: 'Delete Selected', zh: '批量删除' },
   'agent.list.bulkRevoke':       { en: 'Revoke Selected', zh: '批量作废' },
   'agent.list.bulkDelTitle':     { en: 'Delete {n} selected agent(s)?', zh: '确认删除选中的 {n} 个 Agent？' },

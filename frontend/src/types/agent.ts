@@ -26,6 +26,8 @@ export interface Agent {
   source_ip_override?: string | null;
   status: AgentStatus;
   version?: string;
+  os?: string;
+  arch?: string;
   registered_at: string;
   cert_expiry: string;
   revoked: boolean;

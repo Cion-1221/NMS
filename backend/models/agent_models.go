@@ -35,6 +35,8 @@ type Agent struct {
 	SourceIPOverride *string     `gorm:"type:varchar(100)" json:"source_ip_override"`
 	Status           string      `gorm:"type:varchar(20);not null;default:'offline'" json:"status"`
 	Version          string      `gorm:"type:varchar(50)" json:"version"`
+	OS               string      `gorm:"type:varchar(50)" json:"os"`
+	Arch             string      `gorm:"type:varchar(20)" json:"arch"`
 	RegisteredAt     time.Time   `json:"registered_at"`
 	CertExpiry       time.Time   `json:"cert_expiry"`
 	CertSerial       string      `gorm:"type:varchar(100)" json:"-"`

@@ -88,6 +88,14 @@ func AgentMTLS(db *gorm.DB) gin.HandlerFunc {
 			updates["version"] = v
 			agent.Version = v
 		}
+		if v := c.GetHeader("X-Agent-OS"); v != "" {
+			updates["os"] = v
+			agent.OS = v
+		}
+		if v := c.GetHeader("X-Agent-Arch"); v != "" {
+			updates["arch"] = v
+			agent.Arch = v
+		}
 		db.Model(&agent).Updates(updates)
 		agent.ConnectionIP = ip
 		agent.LastSeenAt = &now
