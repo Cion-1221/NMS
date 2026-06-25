@@ -237,6 +237,12 @@ func StartAgentOfflineSweeper(db *gorm.DB) {
 	}()
 }
 
+// GetMyIP GET /api/v1/agent-sync/my-ip —— 返回 server 所见的 agent TCP 来源 IP。
+// Agent 通过强制 tcp4/tcp6 的 mTLS 客户端各调一次，即可得到双栈公网地址，穿透任何 NAT。
+func GetMyIP(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"ip": c.ClientIP()})
+}
+
 // RegisterAgentSyncRoutes 挂载到独立的 sync mTLS 引擎（tls.RequireAndVerifyClientCert）。
 func RegisterAgentSyncRoutes(r *gin.Engine, db *gorm.DB, pki *core.PKI, clientCertDays int) {
 	sync := r.Group("/api/v1/agent-sync")
@@ -245,5 +251,6 @@ func RegisterAgentSyncRoutes(r *gin.Engine, db *gorm.DB, pki *core.PKI, clientCe
 		sync.GET("/tasks", GetAgentTasks(db))
 		sync.POST("/results", PostAgentResults(db))
 		sync.POST("/renew-cert", RenewAgentCert(db, pki, clientCertDays))
+		sync.GET("/my-ip", GetMyIP)
 	}
 }

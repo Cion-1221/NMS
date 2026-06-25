@@ -42,9 +42,11 @@ func AgentMTLS(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// 心跳：mTLS 双向校验通过即视为存活，顺手刷新连接 IP/状态/版本号，
-		// 无需 Agent 端额外实现心跳接口。版本号是 Agent 自报的软件版本（可选头），
-		// 用于在 Agent List 里识别哪些 Agent 还跑着旧版本。
+		// 心跳：mTLS 双向校验通过即视为存活，顺手刷新连接 IP/状态/版本号。
+		// IP 来源优先级：
+		//   1. Agent 主动上报的 X-Agent-IPv4 / X-Agent-IPv6 header（双栈可同时写入两个字段）
+		//   2. Fallback：TCP 连接来源 IP（c.ClientIP()），只能记录本次握手所用的协议
+		// connection_ip 始终记录 TCP 来源 IP，供旧字段兼容。
 		now := time.Now()
 		ip := c.ClientIP()
 		updates := map[string]interface{}{
@@ -52,15 +54,36 @@ func AgentMTLS(db *gorm.DB) gin.HandlerFunc {
 			"last_seen_at":  now,
 			"status":        "online",
 		}
-		if addr, err := netip.ParseAddr(ip); err == nil {
-			if addr.Is4() {
-				updates["connection_ipv4"] = ip
-				agent.ConnectionIPv4 = ip
-			} else {
-				updates["connection_ipv6"] = ip
-				agent.ConnectionIPv6 = ip
+
+		hv4 := c.GetHeader("X-Agent-IPv4")
+		hv6 := c.GetHeader("X-Agent-IPv6")
+		if hv4 != "" || hv6 != "" {
+			// Agent 主动上报：校验地址族后分别写入
+			if hv4 != "" {
+				if addr, err := netip.ParseAddr(hv4); err == nil && addr.Is4() && !addr.IsLoopback() && !addr.IsUnspecified() {
+					updates["connection_ipv4"] = hv4
+					agent.ConnectionIPv4 = hv4
+				}
+			}
+			if hv6 != "" {
+				if addr, err := netip.ParseAddr(hv6); err == nil && !addr.Is4() && !addr.IsLoopback() && !addr.IsUnspecified() {
+					updates["connection_ipv6"] = hv6
+					agent.ConnectionIPv6 = hv6
+				}
+			}
+		} else {
+			// Fallback：从 TCP 连接来源 IP 推断协议版本
+			if addr, err := netip.ParseAddr(ip); err == nil {
+				if addr.Is4() {
+					updates["connection_ipv4"] = ip
+					agent.ConnectionIPv4 = ip
+				} else {
+					updates["connection_ipv6"] = ip
+					agent.ConnectionIPv6 = ip
+				}
 			}
 		}
+
 		if v := c.GetHeader("X-Agent-Version"); v != "" {
 			updates["version"] = v
 			agent.Version = v
