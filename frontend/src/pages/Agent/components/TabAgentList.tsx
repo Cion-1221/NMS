@@ -10,6 +10,14 @@ import { useDebounced } from '../../../utils/useDebounced';
 
 const { confirm } = Modal;
 
+function splitSourceIP(raw: string | null | undefined): { ipv4: string; ipv6: string } {
+  const parts = (raw ?? '').split('/').map(s => s.trim()).filter(Boolean);
+  return {
+    ipv4: parts.find(p => !p.includes(':')) ?? '',
+    ipv6: parts.find(p =>  p.includes(':')) ?? '',
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent List Tab：顶部健康汇总卡片 + 服务端分页列表，支持搜索、修改 Source IP/
 // Group、单条/批量删除与作废证书。交互模式与 TabLockouts（搜索防抖+请求序号守卫+
@@ -61,16 +69,20 @@ const TabAgentList: React.FC = () => {
 
   const openEdit = (r: Agent) => {
     setEditing(r);
-    form.setFieldsValue({ hostname: r.hostname, source_ip_override: r.source_ip_override ?? '', group_id: r.group_id ?? undefined });
+    const { ipv4, ipv6 } = splitSourceIP(r.source_ip_override);
+    form.setFieldsValue({ hostname: r.hostname, source_ipv4: ipv4, source_ipv6: ipv6, group_id: r.group_id ?? undefined });
     setEditOpen(true);
   };
 
   const handleSubmitEdit = async () => {
     const values = await form.validateFields();
+    const v4 = (values.source_ipv4 ?? '').trim();
+    const v6 = (values.source_ipv6 ?? '').trim();
+    const sourceIPOverride = v4 && v6 ? `${v4} / ${v6}` : v4 || v6;
     try {
       await updateAgent(editing!.agent_id, {
         hostname: values.hostname,
-        source_ip_override: values.source_ip_override ?? '',
+        source_ip_override: sourceIPOverride,
         group_id: values.group_id ?? null,
       });
       message.success(t('common.success'));
@@ -171,7 +183,14 @@ const TabAgentList: React.FC = () => {
         return <span>{v4 || v6 || '—'}</span>;
       },
     },
-    { title: t('agent.list.sourceIp'), dataIndex: 'source_ip_override', key: 'source_ip_override', width: 150, render: (v: string | null) => v || '—' },
+    {
+      title: t('agent.list.sourceIp'), key: 'source_ip_override', width: 170,
+      render: (_: unknown, r: Agent) => {
+        const { ipv4, ipv6 } = splitSourceIP(r.source_ip_override);
+        if (ipv4 && ipv6) return <span>{ipv4}<br /><span style={{ color: '#888', fontSize: 12 }}>{ipv6}</span></span>;
+        return <span>{ipv4 || ipv6 || '—'}</span>;
+      },
+    },
     { title: t('agent.list.version'), dataIndex: 'version', key: 'version', width: 110, render: (v: string | undefined) => v || '—' },
     { title: t('agent.list.os'), dataIndex: 'os', key: 'os', width: 100, render: (v: string | undefined) => v || '—' },
     { title: t('agent.list.arch'), dataIndex: 'arch', key: 'arch', width: 90, render: (v: string | undefined) => v || '—' },
@@ -270,8 +289,11 @@ const TabAgentList: React.FC = () => {
           <Form.Item label={t('agent.list.hostname')} name="hostname" rules={[{ required: true, whitespace: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item label={t('agent.list.sourceIp')} name="source_ip_override" tooltip={t('agent.list.sourceIpHint')}>
-            <Input placeholder="10.0.0.5 / 2001:db8::1" />
+          <Form.Item label={t('agent.list.sourceIpv4')} name="source_ipv4" tooltip={t('agent.list.sourceIpHint')}>
+            <Input placeholder="10.0.0.5" />
+          </Form.Item>
+          <Form.Item label={t('agent.list.sourceIpv6')} name="source_ipv6">
+            <Input placeholder="2001:db8::1" />
           </Form.Item>
           <Form.Item label={t('agent.list.group')} name="group_id">
             <Select allowClear options={groups.map(g => ({ value: g.id, label: g.name }))} />
