@@ -96,7 +96,7 @@ func ListAgents(db *gorm.DB) gin.HandlerFunc {
 		var total int64
 		q.Count(&total)
 		var agents []models.Agent
-		q.Preload("Group").Order("registered_at desc").
+		q.Preload("Group").Order("group_id asc, agent_id asc").
 			Offset((page - 1) * pageSize).Limit(pageSize).Find(&agents)
 		c.JSON(http.StatusOK, gin.H{"total": total, "items": agents, "page": page, "page_size": pageSize})
 	}
@@ -196,7 +196,7 @@ func RevokeAgent(db *gorm.DB) gin.HandlerFunc {
 func ListAgentGroups(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var groups []models.AgentGroup
-		db.Order("name asc").Find(&groups)
+		db.Order("id asc").Find(&groups)
 		c.JSON(http.StatusOK, groups)
 	}
 }
@@ -292,7 +292,7 @@ func DeleteAgentGroup(db *gorm.DB) gin.HandlerFunc {
 func ListAgentTasks(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var tasks []models.AgentTask
-		db.Preload("Group").Preload("Agent").Order("id desc").Find(&tasks)
+		db.Preload("Group").Preload("Agent").Order("id asc").Find(&tasks)
 		c.JSON(http.StatusOK, tasks)
 	}
 }
@@ -479,7 +479,7 @@ func ListAgentTokens(db *gorm.DB) gin.HandlerFunc {
 		var total int64
 		q.Count(&total)
 		var tokens []models.AgentToken
-		q.Preload("PresetGroup").Order("created_at desc").
+		q.Preload("PresetGroup").Order("id desc").
 			Offset((page - 1) * pageSize).Limit(pageSize).Find(&tokens)
 		c.JSON(http.StatusOK, gin.H{"total": total, "items": tokens, "page": page, "page_size": pageSize})
 	}

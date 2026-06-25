@@ -57,7 +57,7 @@ func ListProbeResults(db *gorm.DB) gin.HandlerFunc {
 		var total int64
 		q.Count(&total)
 		var results []models.ProbeResult
-		q.Order("reported_at desc").Offset((page - 1) * pageSize).Limit(pageSize).Find(&results)
+		q.Order("agent_id asc, reported_at desc").Offset((page - 1) * pageSize).Limit(pageSize).Find(&results)
 		c.JSON(http.StatusOK, gin.H{"total": total, "items": results, "page": page, "page_size": pageSize})
 	}
 }
@@ -114,7 +114,7 @@ func GetLatestProbeResults(db *gorm.DB) gin.HandlerFunc {
 		buildQuery().Count(&total)
 
 		var results []models.ProbeResult
-		buildQuery().Select("pr.*").Order("pr.reported_at desc").
+		buildQuery().Select("pr.*").Order("pr.agent_id asc, pr.reported_at desc").
 			Offset((page - 1) * pageSize).Limit(pageSize).Scan(&results)
 
 		c.JSON(http.StatusOK, gin.H{"total": total, "items": results, "page": page, "page_size": pageSize})
