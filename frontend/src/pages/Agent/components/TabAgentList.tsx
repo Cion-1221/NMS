@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Card, Col, Form, Input, Modal, Row, Select, Space, Statistic, Table, Tag, message } from 'antd';
+import { Button, Card, Col, Form, Input, Modal, Row, Select, Space, Statistic, Table, Tag, Tooltip, message } from 'antd';
 import { ExclamationCircleFilled, ReloadOutlined, SearchOutlined, StopOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { getAgents, getAgentSummary, updateAgent, deleteAgent, revokeAgent, getAgentGroups } from '../../../api/agent';
@@ -153,8 +153,14 @@ const TabAgentList: React.FC = () => {
   };
 
   const columns: ColumnsType<Agent> = [
-    { title: t('agent.list.agentId'), dataIndex: 'agent_id', key: 'agent_id', width: 150 },
-    { title: t('agent.list.hostname'), dataIndex: 'hostname', key: 'hostname' },
+    {
+      title: t('agent.list.hostname'), key: 'hostname',
+      render: (_: unknown, r: Agent) => (
+        <Tooltip title={r.agent_id}>
+          <span style={{ cursor: 'default' }}>{r.hostname}</span>
+        </Tooltip>
+      ),
+    },
     { title: t('agent.list.group'), key: 'group', width: 120, render: (_: unknown, r: Agent) => r.group?.name ?? '—' },
     {
       title: t('agent.list.connectionIp'), key: 'connection_ip', width: 200,
