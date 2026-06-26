@@ -1,8 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, message } from 'antd';
 import { DeleteOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { getLatestProbeResults, getAgents, deleteProbeResult } from '../../../api/agent';
+import { getLatestProbeResults, getAgents, deleteProbeResultPair } from '../../../api/agent';
 import type { Agent, MtrHop, ProbeResult, TaskType } from '../../../types/agent';
 import { useT } from '../../../i18n';
 import { useDebounced } from '../../../utils/useDebounced';
@@ -58,9 +58,9 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
   useEffect(() => { void loadData(); }, [loadData]);
   useEffect(() => { getAgents({ page: 1, page_size: 200 }).then(r => setAgents(r.data.items)).catch(() => {}); }, []);
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async (r: ProbeResult) => {
     try {
-      await deleteProbeResult(id);
+      await deleteProbeResultPair(r.agent_id, r.target, type);
       message.success(t('common.success'));
       void loadData();
     } catch (err: any) {
@@ -114,7 +114,7 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
       render: (_: unknown, r: ProbeResult) => (
         <Popconfirm
           title={t('proberesults.delConfirm')}
-          onConfirm={() => handleDelete(r.id)}
+          onConfirm={() => handleDelete(r)}
           okText={t('common.delete')}
           okButtonProps={{ danger: true }}
           cancelText={t('common.cancel')}

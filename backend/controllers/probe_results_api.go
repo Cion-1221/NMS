@@ -216,24 +216,26 @@ func GetMeshPingMatrix(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// DeleteProbeResult DELETE /api/v1/probe-results/:id —— 删除单条探测结果（管理员专用）。
-func DeleteProbeResult(db *gorm.DB) gin.HandlerFunc {
+// DeleteProbeResultPair DELETE /api/v1/probe-results/pair?agent_id=X&target=Y&type=Z
+// 删除指定 (agent_id, target, type) 组合的全部历史记录（管理员专用）。
+// 在 "latest" 快照视图里删除一行时，必须清掉该组合的所有历史，否则上一条历史记录会
+// 立刻成为新的 "latest" 补回来，视觉上看不到任何变化。Agent 再上报时新数据自然写入。
+func DeleteProbeResultPair(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		id, err := strconv.Atoi(c.Param("id"))
-		if err != nil || id <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 ID"})
+		agentID := c.Query("agent_id")
+		target := c.Query("target")
+		typeFilter := c.Query("type")
+		if agentID == "" || target == "" || typeFilter == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少必要参数 agent_id / target / type"})
 			return
 		}
-		var result models.ProbeResult
-		if err := db.First(&result, id).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "记录不存在"})
+		result := db.Where("agent_id = ? AND target = ? AND type = ?", agentID, target, typeFilter).
+			Delete(&models.ProbeResult{})
+		if result.Error != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败: " + result.Error.Error()})
 			return
 		}
-		if err := db.Delete(&result).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败: " + err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"message": "success"})
+		c.JSON(http.StatusOK, gin.H{"deleted": result.RowsAffected})
 	}
 }
 
@@ -279,6 +281,6 @@ func RegisterProbeResultsRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFu
 	prAdmin.Use(authMW, middleware.AdminRequired)
 	{
 		prAdmin.DELETE("", PurgeProbeResults(db))
-		prAdmin.DELETE("/:id", DeleteProbeResult(db))
+		prAdmin.DELETE("/pair", DeleteProbeResultPair(db))
 	}
 }

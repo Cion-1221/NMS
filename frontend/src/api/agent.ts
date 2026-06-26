@@ -100,8 +100,8 @@ export const getLatestProbeResults = (params: ProbeResultListParams) =>
 export const getMeshPingMatrix = (params: MeshPingMatrixParams) =>
   client.get<MeshPingMatrixResp>('/probe-results/meshping-matrix', { params });
 
-export const deleteProbeResult = (id: number) =>
-  client.delete(`/probe-results/${id}`);
+export const deleteProbeResultPair = (agentId: string, target: string, type: string) =>
+  client.delete('/probe-results/pair', { params: { agent_id: agentId, target, type } });
 
 export const purgeProbeResults = (days: number) =>
   client.delete<{ deleted: number }>('/probe-results', { params: { days } });
