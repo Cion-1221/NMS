@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Card, Col, Form, Input, Modal, Row, Select, Space, Statistic, Table, Tag, Tooltip, message } from 'antd';
+import { Button, Card, Checkbox, Col, Form, Input, Modal, Row, Select, Space, Statistic, Table, Tag, Tooltip, message } from 'antd';
 import { ExclamationCircleFilled, ReloadOutlined, SearchOutlined, StopOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { getAgents, getAgentSummary, updateAgent, deleteAgent, revokeAgent, getAgentGroups } from '../../../api/agent';
@@ -37,6 +37,8 @@ const TabAgentList: React.FC = () => {
   const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([]);
   const [editOpen, setEditOpen]     = useState(false);
   const [editing, setEditing]       = useState<Agent | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ ids: string[]; label: string } | null>(null);
+  const [purgeOnDelete, setPurgeOnDelete] = useState(false);
   const [form] = Form.useForm();
 
   const debSearch = useDebounced(search);
@@ -94,18 +96,22 @@ const TabAgentList: React.FC = () => {
   };
 
   const handleDelete = (r: Agent) => {
-    confirm({
-      title: t('agent.list.delTitle'),
-      icon: <ExclamationCircleFilled style={{ color: '#ff4d4f' }} />,
-      content: t('agent.list.delBody').replace('{id}', r.agent_id),
-      okText: t('common.delete'),
-      okType: 'danger',
-      cancelText: t('common.cancel'),
-      onOk: async () => {
-        try { await deleteAgent(r.agent_id); message.success(t('common.success')); void loadData(); void loadSummary(); }
-        catch (err: any) { message.error(err?.response?.data?.error ?? 'Delete failed'); }
-      },
-    });
+    setPurgeOnDelete(false);
+    setDeleteTarget({ ids: [r.agent_id], label: r.hostname });
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    const results = await Promise.allSettled(
+      deleteTarget.ids.map(id => deleteAgent(id, purgeOnDelete))
+    );
+    const ok   = results.filter(r => r.status === 'fulfilled').length;
+    const fail = results.length - ok;
+    if (ok   > 0) message.success(deleteTarget.ids.length === 1 ? t('common.success') : t('agent.list.bulkDelOk').replace('{n}', String(ok)));
+    if (fail > 0) message.error(`${fail} 条操作失败`);
+    setDeleteTarget(null);
+    void loadData();
+    void loadSummary();
   };
 
   const handleRevoke = (r: Agent) => {
@@ -141,15 +147,8 @@ const TabAgentList: React.FC = () => {
   };
 
   const handleBulkDelete = () => {
-    confirm({
-      title: t('agent.list.bulkDelTitle').replace('{n}', String(selectedKeys.length)),
-      icon: <ExclamationCircleFilled style={{ color: '#ff4d4f' }} />,
-      content: t('agent.list.delBody').replace('{id}', ''),
-      okText: t('common.delete'),
-      okType: 'danger',
-      cancelText: t('common.cancel'),
-      onOk: () => runBulk(selectedKeys, (id) => deleteAgent(id), 'agent.list.bulkDelOk'),
-    });
+    setPurgeOnDelete(false);
+    setDeleteTarget({ ids: selectedKeys as string[], label: String(selectedKeys.length) });
   };
 
   const handleBulkRevoke = () => {
@@ -299,6 +298,26 @@ const TabAgentList: React.FC = () => {
             <Select allowClear options={groups.map(g => ({ value: g.id, label: g.name }))} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title={
+          deleteTarget?.ids.length === 1
+            ? t('agent.list.delTitle').replace('{id}', deleteTarget.label)
+            : t('agent.list.bulkDelTitle').replace('{n}', deleteTarget?.label ?? '')
+        }
+        open={!!deleteTarget}
+        onOk={confirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+        okText={t('common.delete')}
+        okButtonProps={{ danger: true }}
+        cancelText={t('common.cancel')}
+        destroyOnClose
+      >
+        <p style={{ marginBottom: 12 }}>{t('agent.list.delBody')}</p>
+        <Checkbox checked={purgeOnDelete} onChange={e => setPurgeOnDelete(e.target.checked)}>
+          {t('agent.list.purgeResults')}
+        </Checkbox>
       </Modal>
     </div>
   );

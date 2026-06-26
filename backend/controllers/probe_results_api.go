@@ -216,6 +216,27 @@ func GetMeshPingMatrix(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// DeleteProbeResult DELETE /api/v1/probe-results/:id —— 删除单条探测结果（管理员专用）。
+func DeleteProbeResult(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := strconv.Atoi(c.Param("id"))
+		if err != nil || id <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 ID"})
+			return
+		}
+		var result models.ProbeResult
+		if err := db.First(&result, id).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "记录不存在"})
+			return
+		}
+		if err := db.Delete(&result).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败: " + err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "success"})
+	}
+}
+
 // PurgeProbeResults DELETE /api/v1/probe-results?days=N —— 手动清理探测结果（管理员专用）。
 // days=0 清空全部；days>0 清理 N 天前的数据。与 PurgeAuditLogs / PurgeDeviceAuditLogs 同款语义。
 func PurgeProbeResults(db *gorm.DB) gin.HandlerFunc {
@@ -258,5 +279,6 @@ func RegisterProbeResultsRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFu
 	prAdmin.Use(authMW, middleware.AdminRequired)
 	{
 		prAdmin.DELETE("", PurgeProbeResults(db))
+		prAdmin.DELETE("/:id", DeleteProbeResult(db))
 	}
 }

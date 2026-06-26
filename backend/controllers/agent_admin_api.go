@@ -166,6 +166,12 @@ func DeleteAgent(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Agent 不存在"})
 			return
 		}
+		if c.Query("purge") == "true" {
+			if err := db.Where("agent_id = ?", agentID).Delete(&models.ProbeResult{}).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "清除探测记录失败: " + err.Error()})
+				return
+			}
+		}
 		if err := db.Delete(&agent).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败: " + err.Error()})
 			return

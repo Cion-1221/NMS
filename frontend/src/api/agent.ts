@@ -19,8 +19,8 @@ export const getAgentSummary = () =>
 export const updateAgent = (agentId: string, data: UpdateAgentReq) =>
   client.put<Agent>(`/agents/${agentId}`, data);
 
-export const deleteAgent = (agentId: string) =>
-  client.delete(`/agents/${agentId}`);
+export const deleteAgent = (agentId: string, purge = false) =>
+  client.delete(`/agents/${agentId}`, { params: purge ? { purge: 'true' } : undefined });
 
 export const revokeAgent = (agentId: string) =>
   client.post(`/agents/${agentId}/revoke`);
@@ -99,6 +99,9 @@ export const getLatestProbeResults = (params: ProbeResultListParams) =>
 
 export const getMeshPingMatrix = (params: MeshPingMatrixParams) =>
   client.get<MeshPingMatrixResp>('/probe-results/meshping-matrix', { params });
+
+export const deleteProbeResult = (id: number) =>
+  client.delete(`/probe-results/${id}`);
 
 export const purgeProbeResults = (days: number) =>
   client.delete<{ deleted: number }>('/probe-results', { params: { days } });

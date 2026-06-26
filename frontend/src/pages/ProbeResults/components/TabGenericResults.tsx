@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Input, Modal, Select, Space, Table, Tag, Tooltip, message } from 'antd';
-import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
+import { Button, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, message } from 'antd';
+import { DeleteOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { getLatestProbeResults, getAgents } from '../../../api/agent';
+import { getLatestProbeResults, getAgents, deleteProbeResult } from '../../../api/agent';
 import type { Agent, MtrHop, ProbeResult, TaskType } from '../../../types/agent';
 import { useT } from '../../../i18n';
 import { useDebounced } from '../../../utils/useDebounced';
@@ -58,11 +58,24 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
   useEffect(() => { void loadData(); }, [loadData]);
   useEffect(() => { getAgents({ page: 1, page_size: 200 }).then(r => setAgents(r.data.items)).catch(() => {}); }, []);
 
+  const handleDelete = async (id: number) => {
+    try {
+      await deleteProbeResult(id);
+      message.success(t('common.success'));
+      void loadData();
+    } catch (err: any) {
+      message.error(err?.response?.data?.error ?? 'Delete failed');
+    }
+  };
+
   const columns: ColumnsType<ProbeResult> = [
-    { title: t('agent.list.agentId'), dataIndex: 'agent_id', key: 'agent_id', width: 150 },
     {
       title: t('agent.list.hostname'), key: 'hostname', width: 160,
-      render: (_: unknown, r: ProbeResult) => agentMap.get(r.agent_id) ?? '—',
+      render: (_: unknown, r: ProbeResult) => (
+        <Tooltip title={r.agent_id}>
+          <span style={{ cursor: 'default' }}>{agentMap.get(r.agent_id) ?? r.agent_id}</span>
+        </Tooltip>
+      ),
     },
     { title: t('proberesults.target'), dataIndex: 'target', key: 'target' },
     {
@@ -96,6 +109,20 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
       title: t('proberesults.reportedAt'), dataIndex: 'reported_at', key: 'reported_at', width: 180,
       render: (v: string) => new Date(v).toLocaleString(),
     },
+    {
+      title: t('common.actions'), key: 'action', width: 80, fixed: 'right' as const,
+      render: (_: unknown, r: ProbeResult) => (
+        <Popconfirm
+          title={t('proberesults.delConfirm')}
+          onConfirm={() => handleDelete(r.id)}
+          okText={t('common.delete')}
+          okButtonProps={{ danger: true }}
+          cancelText={t('common.cancel')}
+        >
+          <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+        </Popconfirm>
+      ),
+    },
   ];
 
   return (
@@ -107,10 +134,10 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
           value={search} onChange={e => setSearch(e.target.value)} allowClear style={{ width: 220 }}
         />
         <Select
-          allowClear showSearch placeholder={t('agent.list.agentId')} style={{ width: 200 }}
+          allowClear showSearch placeholder={t('agent.list.hostname')} style={{ width: 200 }}
           value={agentFilter} onChange={setAgentFilter}
           optionFilterProp="label"
-          options={agents.map(a => ({ value: a.agent_id, label: `${a.agent_id} (${a.hostname})` }))}
+          options={agents.map(a => ({ value: a.agent_id, label: agentMap.get(a.agent_id) ?? a.agent_id }))}
         />
         <Select
           allowClear placeholder={t('common.status')} style={{ width: 130 }}
