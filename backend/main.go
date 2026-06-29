@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"nms-backend/asndb"
 	"nms-backend/controllers"
 	"nms-backend/core"
 	"nms-backend/middleware"
@@ -52,6 +53,15 @@ type Config struct {
 		// probe_results（Agent 自动周期探测写入，量级远高于审计日志）保留天数，0 = 永久保留
 		ProbeResultsMaxAgeDays int `mapstructure:"probe_results_max_age_days"`
 	} `mapstructure:"audit"`
+	// ASN 查询：基于 CAIDA RouteViews + RIPE 数据的 IP→ASN 前缀匹配
+	ASNDB struct {
+		Enabled      bool   `mapstructure:"enabled"`
+		V4PrefixFile string `mapstructure:"v4_prefix_file"`
+		V6PrefixFile string `mapstructure:"v6_prefix_file"`
+		NamesFile    string `mapstructure:"names_file"`
+		// UpdateHour：每天几点执行自动下载更新（0–23，服务器本地时间）
+		UpdateHour int `mapstructure:"update_hour"`
+	} `mapstructure:"asndb"`
 	// Agent PKI：内置 CA + mTLS 注册引导/任务同步两个独立 TLS 端口
 	AgentPKI struct {
 		Enabled        bool     `mapstructure:"enabled"`
@@ -80,6 +90,13 @@ func loadConfig() (*Config, error) {
 	// 审计日志保留缺省值
 	viper.SetDefault("audit.max_age_days", 180)
 	viper.SetDefault("audit.probe_results_max_age_days", 30)
+
+	// ASN DB 缺省值：功能默认关闭，开启后使用标准路径
+	viper.SetDefault("asndb.enabled", false)
+	viper.SetDefault("asndb.v4_prefix_file", "data/asndb/pfx2as_v4.txt")
+	viper.SetDefault("asndb.v6_prefix_file", "data/asndb/pfx2as_v6.txt")
+	viper.SetDefault("asndb.names_file", "data/asndb/asnames.txt")
+	viper.SetDefault("asndb.update_hour", 3)
 
 	// Agent PKI 缺省值：旧版 config.yaml 未配置时保持开箱即用
 	viper.SetDefault("agent_pki.enabled", true)
@@ -273,6 +290,36 @@ func main() {
 		controllers.RegisterAgentPKIRoutes(r, db, pki, cfg.AgentPKI.CACertDays, authMW)
 		// 后台扫描：把超过心跳阈值仍标记 online 的 Agent 翻转为 offline
 		controllers.StartAgentOfflineSweeper(db)
+	}
+
+	// ASN 查询功能（可选，由 asndb.enabled 控制）
+	// 关闭时不注册任何路由，对系统其余功能无影响。
+	if cfg.ASNDB.Enabled {
+		asnDB := new(asndb.DB)
+		if err := asnDB.Load(
+			cfg.ASNDB.V4PrefixFile,
+			cfg.ASNDB.V6PrefixFile,
+			cfg.ASNDB.NamesFile,
+		); err != nil {
+			slog.Warn("asndb: 初始加载失败，ASN 列将显示空值；可通过管理接口手动触发下载",
+				"err", err,
+				"download_endpoint", "POST /api/v1/admin/asndb/download",
+			)
+		}
+		asndb.StartScheduler(asnDB,
+			cfg.ASNDB.V4PrefixFile,
+			cfg.ASNDB.V6PrefixFile,
+			cfg.ASNDB.NamesFile,
+			cfg.ASNDB.UpdateHour,
+		)
+		controllers.RegisterASNRoutes(r, asnDB, authMW, middleware.AdminRequired,
+			cfg.ASNDB.V4PrefixFile,
+			cfg.ASNDB.V6PrefixFile,
+			cfg.ASNDB.NamesFile,
+		)
+		slog.Info("asndb: ASN 查询功能已启用", "update_hour", cfg.ASNDB.UpdateHour)
+	} else {
+		slog.Info("asndb: ASN 查询功能已禁用（asndb.enabled = false）")
 	}
 
 	// 优雅停机：收到 SIGINT/SIGTERM 后停止接收新连接，

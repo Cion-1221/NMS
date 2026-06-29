@@ -105,3 +105,9 @@ export const deleteProbeResultPair = (agentId: string, target: string, type: str
 
 export const purgeProbeResults = (days: number) =>
   client.delete<{ deleted: number }>('/probe-results', { params: { days } });
+
+// ── ASN Lookup ────────────────────────────────────────────────────────────────
+export const lookupASN = (ips: string[]) =>
+  client.get<Record<string, { asn: number; name: string } | null>>(
+    '/asn', { params: { ips: ips.join(',') } },
+  );

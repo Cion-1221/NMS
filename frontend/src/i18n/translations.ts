@@ -494,6 +494,7 @@ const t = {
   'proberesults.purgeOk':        { en: 'Deleted {n} records', zh: '已删除 {n} 条记录' },
   'proberesults.delConfirm':     { en: 'Delete this result?', zh: '确认删除此条记录？' },
   'proberesults.filterTargets': { en: 'Filter target agents (columns)', zh: '筛选目标 Agent（列）' },
+  'mtr.asn':                    { en: 'ASN', zh: 'ASN' },
   'agent.token.viewLast':  { en: 'View Last Token', zh: '查看上次 Token' },
   'agent.token.viewToken': { en: 'View', zh: '查看' },
 } as const;

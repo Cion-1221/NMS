@@ -1,8 +1,8 @@
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, message } from 'antd';
+import { Button, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, message } from 'antd';
 import { DeleteOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { getLatestProbeResults, getAgents, deleteProbeResultPair } from '../../../api/agent';
+import { getLatestProbeResults, getAgents, deleteProbeResultPair, lookupASN } from '../../../api/agent';
 import type { Agent, MtrHop, ProbeResult, TaskType } from '../../../types/agent';
 import { useT } from '../../../i18n';
 import { useDebounced } from '../../../utils/useDebounced';
@@ -24,6 +24,8 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
   const [total, setTotal]       = useState(0);
 
   const [mtrHops, setMtrHops] = useState<MtrHop[] | null>(null);
+  const [asnMap, setAsnMap]         = useState<Record<string, { asn: number; name: string } | null>>({});
+  const [asnLoading, setAsnLoading] = useState(false);
 
   const agentMap = useMemo(
     () => new Map(agents.map(a => [a.agent_id, a.hostname])),
@@ -68,6 +70,22 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
     }
   };
 
+  const openMtrDetail = useCallback(async (hops: MtrHop[]) => {
+    setMtrHops(hops);
+    setAsnMap({});
+    const ips = [...new Set(hops.map(h => h.host).filter(h => h && h !== '???'))];
+    if (ips.length === 0) return;
+    setAsnLoading(true);
+    try {
+      const r = await lookupASN(ips);
+      setAsnMap(r.data);
+    } catch {
+      // ASN lookup failure is non-critical; MTR hop table still displays without it.
+    } finally {
+      setAsnLoading(false);
+    }
+  }, []);
+
   const columns: ColumnsType<ProbeResult> = [
     {
       title: t('agent.list.hostname'), key: 'hostname', width: 160,
@@ -94,7 +112,7 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
             const hops: MtrHop[] = JSON.parse(v);
             const maxLoss = Math.max(...hops.map(h => h.loss_rate));
             return (
-              <Button type="link" size="small" style={{ padding: 0 }} onClick={() => setMtrHops(hops)}>
+              <Button type="link" size="small" style={{ padding: 0 }} onClick={() => { void openMtrDetail(hops); }}>
                 {hops.length} hops{maxLoss > 0 ? `, max loss ${maxLoss}%` : ''}
               </Button>
             );
@@ -165,9 +183,9 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
       <Modal
         title="MTR Hop Details"
         open={mtrHops !== null}
-        onCancel={() => setMtrHops(null)}
+        onCancel={() => { setMtrHops(null); setAsnMap({}); }}
         footer={null}
-        width={700}
+        width={900}
         destroyOnClose
       >
         <Table
@@ -178,6 +196,23 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
           columns={[
             { title: 'Hop', dataIndex: 'ttl', key: 'ttl', width: 55 },
             { title: 'Host', dataIndex: 'host', key: 'host' },
+            {
+              title: t('mtr.asn'),
+              key: 'asn',
+              width: 230,
+              render: (_: unknown, r: MtrHop) => {
+                if (r.host === '???') return <span style={{ color: '#aaa' }}>—</span>;
+                if (asnLoading) return <Spin size="small" />;
+                const info = asnMap[r.host];
+                if (!info) return <span style={{ color: '#aaa' }}>—</span>;
+                return (
+                  <span style={{ fontSize: 12 }}>
+                    <span style={{ color: '#888', marginRight: 6 }}>AS{info.asn}</span>
+                    {info.name}
+                  </span>
+                );
+              },
+            },
             {
               title: 'Loss%', dataIndex: 'loss_rate', key: 'loss_rate', width: 70, align: 'right' as const,
               render: (v: number) => <span style={{ color: v > 0 ? '#ff4d4f' : undefined }}>{v}%</span>,

@@ -3,6 +3,7 @@ module nms-backend
 go 1.26
 
 require (
+	github.com/gaissmai/bart v0.28.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/spf13/viper v1.21.0

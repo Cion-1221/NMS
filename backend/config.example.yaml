@@ -24,6 +24,28 @@ jwt:
   # Refresh Token 有效期（天），0 = 使用默认值 7 天
   refresh_token_days: 7
 
+# ASN 查询：MTR 逐跳 ASN 标注功能（整个 asndb 块可省略，省略时使用下列默认值）
+asndb:
+  # 是否启用 ASN 查询功能；关闭后不注册 /api/v1/asn 等路由，对其他功能无影响
+  enabled: false
+  # 数据文件路径（支持绝对路径）
+  v4_prefix_file: "data/asndb/pfx2as_v4.txt"
+  v6_prefix_file: "data/asndb/pfx2as_v6.txt"
+  names_file:     "data/asndb/asnames.txt"
+  # 每天几点执行自动下载更新（0–23，服务器本地时间）；建议选低峰时段
+  # CAIDA 数据约 400MB（解压后），RIPE 数据约 5MB
+  update_hour: 3
+  #
+  # 数据来源（固定 URL，无需修改）：
+  #   IPv4 前缀 → CAIDA RouteViews (routeviews-rv2-YYYYMMDD-1200.pfx2as.gz)
+  #   IPv6 前缀 → CAIDA RouteViews6 (routeviews-rv6-YYYYMMDD-1200.pfx2as.gz)
+  #   ASN 名称  → RIPE NCC (https://ftp.ripe.net/ripe/asnames/asn.txt)
+  #
+  # 手动触发下载（无需重启服务）：
+  #   POST /api/v1/admin/asndb/download  （需管理员 JWT）
+  # 手动重载已有文件（覆盖文件后调用）：
+  #   POST /api/v1/admin/asndb/reload    （需管理员 JWT）
+
 # 审计日志保留策略（可省略，省略时默认 180 天）
 audit:
   # IPAM / Devices 审计日志自动保留天数，超期每日自动清理；0 = 永久保留
