@@ -150,6 +150,24 @@ export interface AgentRelease {
   created_at: string;
 }
 
+export interface AgentReleaseProgressItem {
+  agent_id: string;
+  hostname: string;
+  current_version: string;
+  updated: boolean;
+  status: string;
+  last_seen_at: string | null;
+}
+
+export interface AgentReleaseProgress {
+  release_version: string;
+  os: string;
+  arch: string;
+  total: number;
+  updated_count: number;
+  agents: AgentReleaseProgressItem[];
+}
+
 export interface CreateAgentTokenResp {
   id: number;
   token: string;

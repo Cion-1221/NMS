@@ -1,14 +1,19 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Button, Form, Input, Modal, Space, Table, Tag, Tooltip, Upload, message } from 'antd';
-import { ExclamationCircleFilled, InboxOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Alert, Button, Form, Input, Modal, Space, Spin, Table, Tag, Tooltip, Upload, message } from 'antd';
+import { CheckCircleFilled, ExclamationCircleFilled, InboxOutlined, PlusOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { RcFile } from 'antd/es/upload';
-import { getAgentReleases, createAgentRelease, deleteAgentRelease, setAgentReleaseActive } from '../../../api/agent';
-import type { AgentRelease } from '../../../types/agent';
+import {
+  getAgentReleases, createAgentRelease, deleteAgentRelease,
+  setAgentReleaseActive, getAgentReleaseProgress,
+} from '../../../api/agent';
+import type { AgentRelease, AgentReleaseProgress, AgentReleaseProgressItem } from '../../../types/agent';
 import { useT } from '../../../i18n';
 
 const { confirm } = Modal;
 const { Dragger } = Upload;
+
+const REFRESH_MS = 10_000;
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -25,32 +30,81 @@ const TabReleases: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<RcFile | null>(null);
   const [form] = Form.useForm();
 
+  // Per-release summary badge: { [id]: { total, updated_count } }
+  const [summaries, setSummaries] = useState<Record<number, { total: number; updated_count: number }>>({});
+
+  // Progress modal
+  const [progressRelease, setProgressRelease] = useState<AgentRelease | null>(null);
+  const [progressData, setProgressData]       = useState<AgentReleaseProgress | null>(null);
+  const [progressLoading, setProgressLoading] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const loadSummaries = useCallback(async (rels: AgentRelease[]) => {
+    if (rels.length === 0) return;
+    const results = await Promise.allSettled(rels.map(r => getAgentReleaseProgress(r.id)));
+    setSummaries(prev => {
+      const next = { ...prev };
+      rels.forEach((r, i) => {
+        const res = results[i];
+        if (res.status === 'fulfilled') {
+          next[r.id] = { total: res.value.data.total, updated_count: res.value.data.updated_count };
+        }
+      });
+      return next;
+    });
+  }, []);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const r = await getAgentReleases();
       setReleases(r.data);
+      void loadSummaries(r.data);
     } catch (err: any) {
       message.error(err?.response?.data?.error ?? 'Failed to load releases');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadSummaries]);
 
   useEffect(() => { void loadData(); }, [loadData]);
+  useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
 
-  const handleCloseAdd = () => {
-    setAddOpen(false);
-    setSelectedFile(null);
-    form.resetFields();
-  };
+  const fetchDetail = useCallback(async (rel: AgentRelease) => {
+    setProgressLoading(true);
+    try {
+      const r = await getAgentReleaseProgress(rel.id);
+      setProgressData(r.data);
+      // keep summary badge in sync while modal is open
+      setSummaries(prev => ({
+        ...prev,
+        [rel.id]: { total: r.data.total, updated_count: r.data.updated_count },
+      }));
+    } catch (err: any) {
+      message.error(err?.response?.data?.error ?? 'Failed to load progress');
+    } finally {
+      setProgressLoading(false);
+    }
+  }, []);
+
+  const openProgress = useCallback((r: AgentRelease) => {
+    setProgressRelease(r);
+    setProgressData(null);
+    void fetchDetail(r);
+    timerRef.current = setInterval(() => { void fetchDetail(r); }, REFRESH_MS);
+  }, [fetchDetail]);
+
+  const closeProgress = useCallback(() => {
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    setProgressRelease(null);
+    setProgressData(null);
+  }, []);
+
+  const handleCloseAdd = () => { setAddOpen(false); setSelectedFile(null); form.resetFields(); };
 
   const handleAdd = async () => {
     const values = await form.validateFields();
-    if (!selectedFile) {
-      message.error(t('agent.release.uploadFile') + ' is required');
-      return;
-    }
+    if (!selectedFile) { message.error(t('agent.release.uploadFile') + ' is required'); return; }
     setUploading(true);
     try {
       const fd = new FormData();
@@ -75,9 +129,7 @@ const TabReleases: React.FC = () => {
       title: t('agent.release.delTitle'),
       icon: <ExclamationCircleFilled style={{ color: '#ff4d4f' }} />,
       content: t('agent.release.delBody'),
-      okText: t('common.delete'),
-      okType: 'danger',
-      cancelText: t('common.cancel'),
+      okText: t('common.delete'), okType: 'danger', cancelText: t('common.cancel'),
       onOk: async () => {
         try { await deleteAgentRelease(r.id); message.success(t('common.success')); void loadData(); }
         catch (err: any) { message.error(err?.response?.data?.error ?? 'Delete failed'); }
@@ -117,26 +169,68 @@ const TabReleases: React.FC = () => {
     },
     { title: t('agent.release.notes'), dataIndex: 'notes', key: 'notes', render: (v: string) => v || '—' },
     {
-      title: t('common.actions'), key: 'action', width: 180, fixed: 'right' as const,
+      title: t('agent.release.progress'), key: 'progress', width: 110,
+      render: (_: unknown, r: AgentRelease) => {
+        const s = summaries[r.id];
+        if (!s || s.total === 0) return <span style={{ color: '#aaa' }}>—</span>;
+        const done = s.updated_count === s.total;
+        return (
+          <Tag color={done ? 'success' : 'processing'} style={{ cursor: 'pointer' }} onClick={() => openProgress(r)}>
+            {s.updated_count}/{s.total}
+          </Tag>
+        );
+      },
+    },
+    {
+      title: t('common.actions'), key: 'action', width: 230, fixed: 'right' as const,
       render: (_: unknown, r: AgentRelease) => (
         <Space size={4}>
+          <Button type="link" size="small" onClick={() => openProgress(r)}>
+            {t('agent.release.progress')}
+          </Button>
           <Button type="link" size="small" onClick={() => handleToggleActive(r)}>
             {r.active ? t('agent.release.deactivate') : t('agent.release.activate')}
           </Button>
-          <Button type="text" size="small" danger onClick={() => handleDelete(r)}>{t('common.delete')}</Button>
+          <Button type="text" size="small" danger onClick={() => handleDelete(r)}>
+            {t('common.delete')}
+          </Button>
         </Space>
       ),
     },
   ];
 
+  const progressCols: ColumnsType<AgentReleaseProgressItem> = [
+    {
+      title: t('agent.list.hostname'), key: 'hostname', width: 160,
+      render: (_: unknown, r: AgentReleaseProgressItem) => (
+        <Tooltip title={r.agent_id}>
+          <span style={{ cursor: 'default' }}>{r.hostname || r.agent_id}</span>
+        </Tooltip>
+      ),
+    },
+    {
+      title: t('agent.list.version'), dataIndex: 'current_version', key: 'current_version', width: 110,
+      render: (v: string) => v || <span style={{ color: '#aaa' }}>—</span>,
+    },
+    {
+      title: t('agent.release.progress'), key: 'updated', width: 110,
+      render: (_: unknown, r: AgentReleaseProgressItem) => r.updated
+        ? <Tag icon={<CheckCircleFilled />} color="success">{t('agent.release.updated')}</Tag>
+        : <Tag icon={<SyncOutlined spin />} color="processing">{t('agent.release.pending')}</Tag>,
+    },
+    {
+      title: t('common.status'), dataIndex: 'status', key: 'status', width: 90,
+      render: (v: string) => <Tag color={v === 'online' ? 'green' : 'default'}>{v}</Tag>,
+    },
+    {
+      title: t('agent.list.lastSeen'), dataIndex: 'last_seen_at', key: 'last_seen_at',
+      render: (v: string | null) => v ? new Date(v).toLocaleString() : '—',
+    },
+  ];
+
   return (
     <div>
-      <Alert
-        type="info"
-        showIcon
-        message={t('agent.release.hint')}
-        style={{ marginBottom: 16 }}
-      />
+      <Alert type="info" showIcon message={t('agent.release.hint')} style={{ marginBottom: 16 }} />
       <Space style={{ marginBottom: 16 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddOpen(true)}>
           {t('agent.release.addRelease')}
@@ -155,6 +249,7 @@ const TabReleases: React.FC = () => {
         scroll={{ x: 'max-content' }}
       />
 
+      {/* Upload Release Modal */}
       <Modal
         title={t('agent.release.addRelease')}
         open={addOpen}
@@ -191,6 +286,47 @@ const TabReleases: React.FC = () => {
             </Dragger>
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* Progress Modal */}
+      <Modal
+        title={
+          progressRelease
+            ? `${t('agent.release.progress')}: ${progressRelease.version} (${progressRelease.os}/${progressRelease.arch})`
+            : t('agent.release.progress')
+        }
+        open={progressRelease !== null}
+        onCancel={closeProgress}
+        footer={null}
+        width={860}
+        destroyOnClose
+      >
+        <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+          {progressData ? (
+            <>
+              <Tag
+                color={progressData.updated_count === progressData.total && progressData.total > 0 ? 'success' : 'processing'}
+                style={{ fontSize: 13, padding: '3px 10px' }}
+              >
+                {progressData.updated_count} / {progressData.total} {t('agent.release.updated')}
+              </Tag>
+              <span style={{ color: '#888', fontSize: 12 }}>
+                <SyncOutlined spin={progressLoading} style={{ marginRight: 4 }} />
+                {t('agent.release.autoRefresh')}
+              </span>
+            </>
+          ) : (
+            <Spin size="small" />
+          )}
+        </div>
+        <Table
+          size="small"
+          dataSource={progressData?.agents ?? []}
+          rowKey="agent_id"
+          loading={progressLoading && !progressData}
+          pagination={false}
+          columns={progressCols}
+        />
       </Modal>
     </div>
   );

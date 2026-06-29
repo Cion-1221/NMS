@@ -784,6 +784,62 @@ func SetAgentReleaseActive(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// agentProgressItem 是 GetAgentReleaseProgress 的单条 Agent 记录。
+type agentProgressItem struct {
+	AgentID        string     `json:"agent_id"`
+	Hostname       string     `json:"hostname"`
+	CurrentVersion string     `json:"current_version"`
+	Updated        bool       `json:"updated"`
+	Status         string     `json:"status"`
+	LastSeenAt     *time.Time `json:"last_seen_at"`
+}
+
+// GetAgentReleaseProgress GET /api/v1/agent-releases/:id/progress
+// 返回与该 Release OS/Arch 匹配的所有 Agent 及其版本状态，供前端轮询展示更新进度。
+func GetAgentReleaseProgress(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := parseIDParam(c, "id")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		var rel models.AgentRelease
+		if err := db.First(&rel, id).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Release 不存在"})
+			return
+		}
+
+		var agents []models.Agent
+		db.Where("os = ? AND arch = ? AND revoked = ?", rel.OS, rel.Arch, false).Find(&agents)
+
+		items := make([]agentProgressItem, 0, len(agents))
+		updatedCount := 0
+		for _, a := range agents {
+			updated := a.Version == rel.Version
+			if updated {
+				updatedCount++
+			}
+			items = append(items, agentProgressItem{
+				AgentID:        a.AgentID,
+				Hostname:       a.Hostname,
+				CurrentVersion: a.Version,
+				Updated:        updated,
+				Status:         a.Status,
+				LastSeenAt:     a.LastSeenAt,
+			})
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"release_version": rel.Version,
+			"os":              rel.OS,
+			"arch":            rel.Arch,
+			"total":           len(items),
+			"updated_count":   updatedCount,
+			"agents":          items,
+		})
+	}
+}
+
 // ── Route Registration ─────────────────────────────────────────────────────
 
 // RegisterAgentAdminRoutes 注册不依赖 PKI 的 Agent 管理路由（agents/groups/tasks/tokens/releases），
@@ -829,6 +885,7 @@ func RegisterAgentAdminRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc
 	releases.Use(authMW, middleware.AdminRequired)
 	{
 		releases.GET("", ListAgentReleases(db))
+		releases.GET("/:id/progress", GetAgentReleaseProgress(db))
 		releases.POST("", CreateAgentRelease(db, releaseDir))
 		releases.DELETE("/:id", DeleteAgentRelease(db))
 		releases.POST("/:id/set-active", SetAgentReleaseActive(db))
