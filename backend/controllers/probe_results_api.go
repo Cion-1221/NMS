@@ -87,6 +87,7 @@ func GetLatestProbeResults(db *gorm.DB) gin.HandlerFunc {
 		agentID := c.Query("agent_id")
 		q := c.Query("q")
 		successStr := c.Query("success")
+		targetExact := c.Query("target") // 精确 target IP 过滤，供 MeshPing→MTR 跳转使用
 
 		buildQuery := func() *gorm.DB {
 			tx := db.Table("probe_results AS pr").
@@ -98,6 +99,9 @@ func GetLatestProbeResults(db *gorm.DB) gin.HandlerFunc {
 				Where("pr.type = ?", typeFilter)
 			if agentID != "" {
 				tx = tx.Where("pr.agent_id = ?", agentID)
+			}
+			if targetExact != "" {
+				tx = tx.Where("pr.target = ?", targetExact)
 			}
 			if q != "" {
 				agentSub := db.Model(&models.Agent{}).Select("agent_id").
@@ -205,6 +209,7 @@ func GetMeshPingMatrix(db *gorm.DB) gin.HandlerFunc {
 			}
 			srcMap[targetAgentID][protoKey] = gin.H{
 				"success": row.Success, "latency_ms": row.LatencyMs, "reported_at": row.ReportedAt,
+				"target_ip": row.Target, // 暴露实际探测 IP，供前端 MeshPing→MTR 跳转查询使用
 			}
 		}
 

@@ -185,6 +185,7 @@ export interface ProbeResultListParams {
   type: TaskType;
   q?: string;
   agent_id?: string;
+  target?: string;   // 精确 target IP，用于 MeshPing→MTR 跳转查询
   success?: boolean;
   /** ISO 8601 / RFC3339，配合 DatePicker.RangePicker 使用 */
   start?: string;
@@ -202,6 +203,7 @@ export interface MeshPingProto {
   success: boolean;
   latency_ms: number | null;
   reported_at: string;
+  target_ip?: string; // 实际探测 IP，用于从 MeshPing 格子跳转到 MTR 查询
 }
 
 export interface MeshPingCell {

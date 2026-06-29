@@ -1,15 +1,21 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Input, Select, Space, Table, Tag, Tooltip, message } from 'antd';
+import { Button, Dropdown, Input, Modal, Select, Space, Spin, Table, Tag, Tooltip, message } from 'antd';
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { getMeshPingMatrix, getAgentGroups } from '../../../api/agent';
-import type { MeshPingMatrixResp, MeshPingProto, AgentGroup } from '../../../types/agent';
+import { getMeshPingMatrix, getAgentGroups, getLatestProbeResults, lookupASN } from '../../../api/agent';
+import type { MeshPingMatrixResp, MeshPingProto, AgentGroup, MtrHop } from '../../../types/agent';
 import { useT } from '../../../i18n';
 import { useDebounced } from '../../../utils/useDebounced';
 
 type AgentRow = MeshPingMatrixResp['agents'][number];
 
 interface ActiveCell { rowId: string; colId: string }
+
+interface MtrModalState {
+  open: boolean;
+  title: string;
+  hops: MtrHop[] | null; // null = 加载中
+}
 
 const HL_ROW_COL = '#dbeeff';
 const HL_CROSS   = '#bbd6f7';
@@ -23,6 +29,11 @@ const TabMeshPingMatrix: React.FC = () => {
   const [search, setSearch]           = useState('');
   const [selectedTargets, setSelectedTargets] = useState<string[]>([]);
   const [activeCell, setActiveCell]   = useState<ActiveCell | null>(null);
+
+  const [mtrModal, setMtrModal] = useState<MtrModalState>({ open: false, title: '', hops: null });
+  const [asnMap, setAsnMap]         = useState<Record<string, { asn: number; name: string } | null>>({});
+  const [asnLoading, setAsnLoading] = useState(false);
+
   const debSearch = useDebounced(search);
   const reqSeq = useRef(0);
 
@@ -65,14 +76,83 @@ const TabMeshPingMatrix: React.FC = () => {
     return undefined;
   };
 
-  const renderProto = (p: MeshPingProto, label?: string) => (
-    <Tooltip title={new Date(p.reported_at).toLocaleString()}>
-      <Tag color={p.success ? 'green' : 'red'}>
-        {label && <span style={{ opacity: 0.7, marginRight: 3 }}>{label}</span>}
-        {p.success ? `${p.latency_ms?.toFixed(1) ?? '?'} ms` : t('proberesults.failed')}
-      </Tag>
-    </Tooltip>
-  );
+  // 打开两点之间的 MTR modal，先显示 loading，再异步拉取 MTR 数据 + ASN
+  const handleOpenMtr = useCallback(async (
+    srcAgentId: string,
+    targetIp: string,
+    proto: string,
+    srcName: string,
+    dstName: string,
+  ) => {
+    setMtrModal({ open: true, title: `MTR: ${srcName} → ${dstName} (${proto.toUpperCase()})`, hops: null });
+    setAsnMap({});
+
+    try {
+      const r = await getLatestProbeResults({
+        page: 1, page_size: 1, type: 'mtr',
+        agent_id: srcAgentId, target: targetIp,
+      });
+      const detail = r.data.items[0]?.detail;
+      if (!detail) {
+        setMtrModal(prev => ({ ...prev, hops: [] }));
+        return;
+      }
+      const hops: MtrHop[] = JSON.parse(detail);
+      setMtrModal(prev => ({ ...prev, hops }));
+
+      const ips = [...new Set(hops.map(h => h.host).filter(h => h && h !== '???'))];
+      if (ips.length === 0) return;
+      setAsnLoading(true);
+      try {
+        const asnR = await lookupASN(ips);
+        setAsnMap(asnR.data);
+      } catch { /* ASN 查询失败不阻断 MTR 基本显示 */ } finally {
+        setAsnLoading(false);
+      }
+    } catch {
+      setMtrModal(prev => ({ ...prev, hops: [] }));
+    }
+  }, []);
+
+  const closeMtrModal = () => {
+    setMtrModal({ open: false, title: '', hops: null });
+    setAsnMap({});
+  };
+
+  // 渲染单个协议标签，有 target_ip 时包裹 Dropdown 提供 MTR 跳转入口
+  const renderProto = (
+    p: MeshPingProto,
+    label: string | undefined,
+    onMtr?: () => void,
+  ) => {
+    const inner = (
+      <Tooltip title={new Date(p.reported_at).toLocaleString()}>
+        <Tag
+          color={p.success ? 'green' : 'red'}
+          style={{ cursor: onMtr ? 'pointer' : 'default', userSelect: 'none' }}
+        >
+          {label && <span style={{ opacity: 0.7, marginRight: 3 }}>{label}</span>}
+          {p.success ? `${p.latency_ms?.toFixed(1) ?? '?'} ms` : t('proberesults.failed')}
+        </Tag>
+      </Tooltip>
+    );
+    if (!onMtr) return inner;
+    return (
+      <Dropdown
+        trigger={['click']}
+        menu={{
+          items: [{ key: 'mtr', label: 'MTR' }],
+          onClick: ({ key, domEvent }) => {
+            domEvent.stopPropagation();
+            if (key === 'mtr') onMtr();
+          },
+        }}
+      >
+        {/* stopPropagation 防止触发外层格子的 activeCell 高亮切换 */}
+        <span onClick={e => e.stopPropagation()}>{inner}</span>
+      </Dropdown>
+    );
+  };
 
   const columns: ColumnsType<AgentRow> = [
     {
@@ -90,7 +170,7 @@ const TabMeshPingMatrix: React.FC = () => {
         </span>
       ),
       key: col.agent_id,
-      width: 130,
+      width: 145,
       align: 'center' as const,
       onCell: (row: AgentRow) => ({
         style: { background: cellBg(row.agent_id, col.agent_id), cursor: 'pointer' },
@@ -101,14 +181,72 @@ const TabMeshPingMatrix: React.FC = () => {
         const cell = matrix[row.agent_id]?.[col.agent_id];
         if (!cell?.v4 && !cell?.v6) return <span style={{ color: '#ccc' }}>{t('proberesults.noData')}</span>;
         const hasBoth = !!(cell.v4 && cell.v6);
+        const srcName = row.hostname || row.agent_id;
+        const dstName = col.hostname || col.agent_id;
         return (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-            {cell.v4 && renderProto(cell.v4, hasBoth ? 'v4' : undefined)}
-            {cell.v6 && renderProto(cell.v6, hasBoth ? 'v6' : undefined)}
+            {cell.v4 && renderProto(
+              cell.v4,
+              hasBoth ? 'v4' : undefined,
+              cell.v4.target_ip
+                ? () => { void handleOpenMtr(row.agent_id, cell.v4!.target_ip!, 'v4', srcName, dstName); }
+                : undefined,
+            )}
+            {cell.v6 && renderProto(
+              cell.v6,
+              hasBoth ? 'v6' : undefined,
+              cell.v6.target_ip
+                ? () => { void handleOpenMtr(row.agent_id, cell.v6!.target_ip!, 'v6', srcName, dstName); }
+                : undefined,
+            )}
           </div>
         );
       },
     })),
+  ];
+
+  // MTR hop 列定义（与 TabGenericResults modal 保持一致）
+  const mtrColumns = [
+    { title: 'Hop', dataIndex: 'ttl', key: 'ttl', width: 55 },
+    { title: 'Host', dataIndex: 'host', key: 'host' },
+    {
+      title: t('mtr.asn'),
+      key: 'asn',
+      width: 230,
+      render: (_: unknown, r: MtrHop) => {
+        if (r.host === '???') return <span style={{ color: '#aaa' }}>—</span>;
+        if (asnLoading) return <Spin size="small" />;
+        const info = asnMap[r.host];
+        if (!info) return <span style={{ color: '#aaa' }}>—</span>;
+        return (
+          <span style={{ fontSize: 12 }}>
+            <span style={{ color: '#888', marginRight: 6 }}>AS{info.asn}</span>
+            {info.name}
+          </span>
+        );
+      },
+    },
+    {
+      title: 'Loss%', dataIndex: 'loss_rate', key: 'loss_rate', width: 70, align: 'right' as const,
+      render: (v: number) => <span style={{ color: v > 0 ? '#ff4d4f' : undefined }}>{v}%</span>,
+    },
+    {
+      title: 'Avg', dataIndex: 'avg_rtt_ms', key: 'avg_rtt_ms', width: 80, align: 'right' as const,
+      render: (v: number, r: MtrHop) => r.loss_rate >= 100 ? '—' : `${v.toFixed(1)} ms`,
+    },
+    {
+      title: 'Best', dataIndex: 'best_rtt_ms', key: 'best_rtt_ms', width: 80, align: 'right' as const,
+      render: (v: number, r: MtrHop) => r.loss_rate >= 100 ? '—' : `${v.toFixed(1)} ms`,
+    },
+    {
+      title: 'Worst', dataIndex: 'worst_rtt_ms', key: 'worst_rtt_ms', width: 80, align: 'right' as const,
+      render: (v: number, r: MtrHop) => r.loss_rate >= 100 ? '—' : `${v.toFixed(1)} ms`,
+    },
+    {
+      title: 'Std Dev', dataIndex: 'stddev_rtt_ms', key: 'stddev_rtt_ms', width: 80, align: 'right' as const,
+      render: (v: number | undefined, r: MtrHop) =>
+        r.loss_rate >= 100 || v == null ? '—' : `${v.toFixed(1)} ms`,
+    },
   ];
 
   return (
@@ -145,6 +283,30 @@ const TabMeshPingMatrix: React.FC = () => {
         scroll={{ x: 'max-content' }}
         bordered
       />
+
+      {/* MTR 详情 Modal */}
+      <Modal
+        title={mtrModal.title}
+        open={mtrModal.open}
+        onCancel={closeMtrModal}
+        footer={null}
+        width={900}
+        destroyOnClose
+      >
+        {mtrModal.hops === null ? (
+          <div style={{ textAlign: 'center', padding: '40px 0' }}><Spin /></div>
+        ) : mtrModal.hops.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '40px 0', color: '#aaa' }}>{t('proberesults.noData')}</div>
+        ) : (
+          <Table
+            size="small"
+            dataSource={mtrModal.hops}
+            rowKey="ttl"
+            pagination={false}
+            columns={mtrColumns}
+          />
+        )}
+      </Modal>
     </div>
   );
 };
