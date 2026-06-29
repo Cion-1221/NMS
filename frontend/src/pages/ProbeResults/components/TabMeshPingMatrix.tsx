@@ -89,7 +89,7 @@ const TabMeshPingMatrix: React.FC = () => {
 
     try {
       const r = await getLatestProbeResults({
-        page: 1, page_size: 1, type: 'mtr',
+        page: 1, page_size: 1, type: 'meshmtr',
         agent_id: srcAgentId, target: targetIp,
       });
       const detail = r.data.items[0]?.detail;

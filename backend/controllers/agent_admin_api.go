@@ -68,8 +68,11 @@ func parseSourceIPOverride(raw string) (string, error) {
 
 var validTaskTypes = map[string]bool{
 	"ping": true, "tcpping": true, "httpcheck": true, "dnscheck": true,
-	"traceroute": true, "mtr": true, "meshping": true,
+	"traceroute": true, "mtr": true, "meshping": true, "meshmtr": true,
 }
+
+// meshAutoTypes：目标列表由 Server 动态解析的任务类型，不需要也不应校验 targets_raw。
+var meshAutoTypes = map[string]bool{"meshping": true, "meshmtr": true}
 
 // ── Agent 管理（List / 修改 SourceIP+Group / 删除 / 作废证书）──────────────────
 
@@ -364,7 +367,7 @@ func CreateAgentTasks(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的任务类型: " + ty})
 				return
 			}
-			if ty != "meshping" {
+			if !meshAutoTypes[ty] {
 				needsTargetValidation = true
 			}
 		}
@@ -372,9 +375,8 @@ func CreateAgentTasks(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 			return
 		}
-		// meshping 的 Target 由 Server 动态解析，忽略用户填写的内容；其余类型必须是
-		// 合法的 IPv4/IPv6 地址。多选类型时只要有一个非 meshping 类型就需要校验，因为
-		// 这些类型会真正使用 TargetsRaw。
+		// meshping/meshmtr 的 Target 由 Server 动态解析，忽略用户填写的内容；其余类型必须是
+		// 合法的 IPv4/IPv6 地址。多选类型时只要有一个需要手动指定 Target 的类型就触发校验。
 		if needsTargetValidation {
 			if msg := validateTargets(req.TargetsRaw); msg != "" {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
@@ -430,7 +432,7 @@ func UpdateAgentTask(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 			return
 		}
-		if req.Type != "meshping" {
+		if !meshAutoTypes[req.Type] {
 			if msg := validateTargets(req.TargetsRaw); msg != "" {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 				return

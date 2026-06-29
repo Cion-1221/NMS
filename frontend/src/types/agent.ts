@@ -1,5 +1,5 @@
 export type TaskType =
-  | 'ping' | 'tcpping' | 'httpcheck' | 'dnscheck' | 'traceroute' | 'mtr' | 'meshping';
+  | 'ping' | 'tcpping' | 'httpcheck' | 'dnscheck' | 'traceroute' | 'mtr' | 'meshping' | 'meshmtr';
 
 export type TaskScope = 'global' | 'group' | 'agent';
 

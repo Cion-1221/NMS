@@ -10,7 +10,10 @@ import { useT } from '../../../i18n';
 
 const { confirm } = Modal;
 
-const TASK_TYPES: TaskType[] = ['ping', 'tcpping', 'httpcheck', 'dnscheck', 'traceroute', 'mtr', 'meshping'];
+const TASK_TYPES: TaskType[] = ['ping', 'tcpping', 'httpcheck', 'dnscheck', 'traceroute', 'mtr', 'meshping', 'meshmtr'];
+
+// meshping/meshmtr：目标由 Server 动态解析，无需用户填写 targets_raw。
+const MESH_AUTO_TYPES = new Set<TaskType>(['meshping', 'meshmtr']);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Probe Config Tab：任务下发配置。
@@ -34,10 +37,10 @@ const TabProbeConfig: React.FC = () => {
   const selectedTypes: TaskType[] | undefined = Form.useWatch('types', form);
   const selectedType: TaskType | undefined    = Form.useWatch('type', form);
 
-  // 纯 meshping（无其他类型）时隐藏 Target IPs — targets 由 server 动态解析
-  const meshpingOnly = mode === 'create'
-    ? (selectedTypes ?? []).length === 1 && (selectedTypes ?? []).includes('meshping')
-    : selectedType === 'meshping';
+  // 所有选中类型均为自动解析目标时隐藏 Target IPs（meshping 和 meshmtr 均如此）
+  const meshAutoOnly = mode === 'create'
+    ? (selectedTypes ?? []).length > 0 && (selectedTypes ?? []).every(ty => MESH_AUTO_TYPES.has(ty))
+    : selectedType !== undefined && MESH_AUTO_TYPES.has(selectedType);
 
   const loadData = async () => {
     setLoading(true);
@@ -134,7 +137,7 @@ const TabProbeConfig: React.FC = () => {
     },
     {
       title: t('agent.task.targets'), dataIndex: 'targets_raw', key: 'targets_raw', ellipsis: true,
-      render: (v: string, r: AgentTask) => (r.type === 'meshping' ? t('agent.task.meshAuto') : (v || '—')),
+      render: (v: string, r: AgentTask) => (MESH_AUTO_TYPES.has(r.type) ? t('agent.task.meshAuto') : (v || '—')),
     },
     {
       title: t('agent.task.interval'), dataIndex: 'interval_seconds', key: 'interval_seconds', width: 100,
@@ -189,7 +192,7 @@ const TabProbeConfig: React.FC = () => {
               <Select options={TASK_TYPES.map(ty => ({ value: ty, label: ty }))} />
             </Form.Item>
           )}
-          {meshpingOnly ? (
+          {meshAutoOnly ? (
             <Alert
               type="info" showIcon style={{ marginBottom: 16 }}
               message={t('agent.task.meshAutoTargets')}

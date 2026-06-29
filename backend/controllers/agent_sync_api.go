@@ -56,7 +56,9 @@ func GetAgentTasks(db *gorm.DB) gin.HandlerFunc {
 		payloads := make([]taskPayload, 0, len(tasks))
 		for _, t := range tasks {
 			targets := t.Targets()
-			if t.Type == "meshping" {
+			if t.Type == "meshping" || t.Type == "meshmtr" {
+				// meshmtr 与 meshping 使用完全相同的目标解析逻辑：
+				// 自动枚举同组存活 Agent 的 IP，agent 侧负责具体的探测方式。
 				targets = resolveMeshPingTargets(db, agent, t)
 			}
 			payloads = append(payloads, taskPayload{
