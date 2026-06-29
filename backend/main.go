@@ -188,6 +188,11 @@ func main() {
 	sqlDB.SetConnMaxLifetime(time.Duration(cfg.Database.ConnMaxLifetimeMinutes) * time.Minute)
 	sqlDB.SetConnMaxIdleTime(time.Duration(cfg.Database.ConnMaxIdleTimeMinutes) * time.Minute)
 
+	// 一次性 schema 修正：agent_releases.download_url 在 URL 方案时期为 NOT NULL，
+	// 迁移到文件上传方案后 model 中已无此字段，但 AutoMigrate 不会自动删列。
+	// IF EXISTS 保证幂等，MySQL 8.0+ 支持。
+	db.Exec("ALTER TABLE agent_releases DROP COLUMN IF EXISTS download_url")
+
 	// 自动迁移：IPAM 模块 + Device 模块 + System 模块
 	// 迁移顺序：lookup 表必须先于引用它们的主表
 	if err := db.AutoMigrate(
