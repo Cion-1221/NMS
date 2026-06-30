@@ -6,6 +6,7 @@
 - ✅ **System 模块**：用户 & 用户组权限管理，JWT 认证，首次登录强制改密，登录防爆破
 - ✅ **Devices 模块**：设备台账管理（Site → PoP → Device 三层结构，角色、厂商、全操作审计日志）
 - ✅ **Agent 模块**：基于内置 CA + mTLS 自动引导注册的分布式探针体系，中心化任务调度，MeshPing 互测矩阵
+- ✅ **运行总览看板 + UI 重设计**：NOC Operations Overview 仪表盘（聚合端点 `/overview`），全站 SaaS 风格重皮（"Direction A / Clarity" 设计系统，亮/暗双主题，纯表现层、不改业务逻辑）
 
 ---
 
@@ -33,6 +34,10 @@
 | 📡 **中心化任务调度** | Server 按全局 / 分组 / 单 Agent 三级下发 ping / tcpping / httpcheck / dnscheck / traceroute / mtr / meshping 任务 |
 | 🕸️ **MeshPing 互测矩阵** | 同组存活 Agent 互相探测延迟，前端渲染 NxN 交叉矩阵，支持按分组/关键字过滤 |
 | 💓 **心跳即任务拉取** | mTLS 调用本身即心跳；离线 Agent 由后台扫描自动翻转状态，无需独立心跳接口 |
+| 🎨 **SaaS UI 设计系统** | "Direction A / Clarity"：Plus Jakarta Sans + IBM Plex Mono 字体，统一 Ant Design 6 令牌，亮/暗双主题，全宽流式布局 |
+| 📈 **NOC 运行总览看板** | 登录后首页 `/dashboard`：KPI 卡 + 探测量时序 + 设备状态环图 + Top mesh 延迟 + 活跃告警 + 分组健康度 |
+| 🕐 **全局相对时间** | Reported At / Last Seen / Cert Expiry 统一相对时间（"3 分钟前 / 2 天后"），随语言切换，悬停显示绝对时间 |
+| 🌗 **主题持久化** | 主题写入服务端用户偏好（跨设备同步）；登录页可预选；同一会话内手动选择优先，硬重载以账号偏好为准 |
 
 ---
 
@@ -66,6 +71,9 @@ NMS/
 │   ├── core/
 │   │   ├── ipam_calc.go               # 纯算法：CIDR 校验、拆分、合并
 │   │   └── pki.go                     # 内置 CA：生成/加载/轮换、签发服务端与客户端证书
+│   ├── asndb/                         # 可选：IP→ASN 前缀匹配（用于 MTR hop 的 ASN 列）
+│   │   ├── asndb.go                   # 前缀树查询
+│   │   └── downloader.go             # ASN 数据自动下载/定时更新
 │   ├── models/
 │   │   ├── ipam_models.go             # IPAM 数据模型
 │   │   ├── device_models.go           # Devices 数据模型（Site/PoP/Role/Vendor/Device/AuditLog）
@@ -85,51 +93,70 @@ NMS/
 │       ├── seed.go                    # 数据库初始化（幂等写入默认 admin）
 │       ├── agent_enroll_api.go        # Agent 注册引导（单向 HTTPS）+ 来源 IP 防爆破
 │       ├── agent_sync_api.go          # Agent 任务拉取 / 结果上报 / 证书续期（mTLS）+ 离线扫描
-│       ├── agent_admin_api.go         # Agent/Group/Task/Token 管理 + CA 状态/轮换 + 健康汇总（JWT）
-│       └── probe_results_api.go       # 探测结果查询 / 最新快照 / MeshPing 矩阵（JWT）
+│       ├── agent_admin_api.go         # Agent/Group/Task/Token/Release 管理 + CA 状态/轮换 + 健康汇总（JWT）
+│       ├── probe_results_api.go       # 探测结果查询 / 最新快照 / MeshPing 矩阵（JWT）
+│       ├── overview_api.go            # NOC 看板聚合：设备分面/Agent概要/探测时序/告警（仅需登录）
+│       └── asn_api.go                 # IP→ASN 查询（可选，enrich MTR hop 展示）
 │
 ├── agent-skeleton/                    # 独立 Go 模块（不参与 backend 构建/CI）
 │   ├── go.mod
 │   └── main.go                        # Agent 协议参考骨架：引导/mTLS/任务拉取/SourceIP 绑定/续期
 │
-└── frontend/                          # React + TypeScript 前端
-    ├── package.json
+└── frontend/                          # React 19 + TypeScript + Vite + Ant Design 6
+    ├── index.html                     # 字体引入（Plus Jakarta Sans / IBM Plex Mono）+ 全局 CSS 变量/动画
+    ├── package.json                   # 依赖含 @ant-design/charts（看板图表，基于 G2）
     ├── vite.config.ts
     └── src/
         ├── api/
-        │   ├── client.ts              # 共享 Axios 实例（自动携带 Token + 401 处理）
+        │   ├── client.ts              # 共享 Axios 实例（自动携带 Token + 401 处理，baseURL=/api/v1）
         │   ├── auth.ts / ipam.ts / device.ts / system.ts
-        │   └── agent.ts               # Agent / Probe Results 全部 API
+        │   ├── agent.ts               # Agent / Probe Results 全部 API
+        │   └── overview.ts            # NOC 看板聚合端点
         ├── types/
-        │   ├── auth.ts / ipam.ts / device.ts / system.ts
-        │   └── agent.ts               # Agent / AgentTask / ProbeResult / PKIStatus 等类型
+        │   ├── auth.ts / ipam.ts / device.ts / system.ts / agent.ts
+        │   └── overview.ts            # /overview 响应类型
+        ├── theme/
+        │   └── theme.ts               # 设计令牌：buildTheme(light/dark) + palette + FONT_MONO
         ├── i18n/
+        │   ├── index.ts               # useT() 语言钩子
         │   └── translations.ts        # 全局 EN/ZH 双语翻译键值
         ├── contexts/
-        │   └── AuthContext.tsx        # 全局认证状态（localStorage 持久化）
-        ├── components/
+        │   ├── AuthContext.tsx        # 认证状态 + Token 静默刷新（localStorage 持久化）
+        │   └── AppContext.tsx         # 主题/语言全局状态（亮暗 + 跟随系统 + 会话级覆盖）
+        ├── components/                # 跨页复用 UI 组件
+        │   ├── PageHeader.tsx         # 页头（标题/副标题/操作区）
+        │   ├── StatusTag.tsx          # 状态药丸（替代 <Tag color>，随主题着色）
+        │   ├── StatTile.tsx           # 指标小卡
+        │   ├── MetricCard.tsx         # 看板 KPI 卡（大号 mono 数字 + sparkline）
+        │   ├── RelativeTime.tsx       # 相对时间（dayjs，随语言，悬停绝对时间）
+        │   ├── ProfileModal.tsx       # 个人中心（账户 / 偏好 / 安全）
+        │   ├── SessionSettingsModal.tsx
         │   └── ChangePasswordModal.tsx
+        ├── utils/
+        │   └── cidr.ts / useDebounced.ts
         ├── layouts/
-        │   └── MainLayout.tsx         # 侧边栏（Devices / Agent / System 菜单）+ 顶栏
+        │   └── MainLayout.tsx         # 分组侧边栏（Overview/Infrastructure/Monitoring/Administration）+ 顶栏（搜索/主题切换/通知/用户菜单）+ 版权页脚
         └── pages/
-            ├── Login/
-            ├── IPAM/
-            ├── Devices/
+            ├── Login/                          # 双栏登录（品牌渐变 + 表单，含亮暗切换）
+            ├── Dashboard.tsx                   # ⭐ 登录后首页：NOC 运行总览
+            ├── IPAM/                           # 6 标签：根前缀/子网树(含利用率)/分组/类型/VRF/审计
+            ├── Devices/                        # 5 标签：设备/站点/角色/厂商/审计
             ├── System/
             │   ├── User/ Group/
-            │   └── Settings/                   # 安全设置（Tab：防护配置 / 锁定列表）
-            ├── Agent/                           # 管理员可见
-            │   ├── index.tsx                    # 4 标签页容器
+            │   └── Settings/                   # 安全设置（防护配置 / 锁定列表）
+            ├── Agent/                          # 管理员可见（5 标签）
+            │   ├── index.tsx
             │   └── components/
-            │       ├── TabAgentList.tsx         # 健康汇总卡片 + 列表（搜索/分页/批量删除·作废）
+            │       ├── TabAgentList.tsx         # 汇总 StatTile + 列表（System Profile 药丸 / 证书相对时间）
             │       ├── TabGroups.tsx            # 分组 CRUD
             │       ├── TabProbeConfig.tsx        # 任务下发（多选类型/Scope联动/多行Target）
-            │       └── TabTokens.tsx            # CA 状态/轮换面板 + 注册码生成（倒计时展示）
-            └── ProbeResults/                    # 任何已登录用户可见
-                ├── index.tsx                    # 5 标签页容器
+            │       ├── TabTokens.tsx            # CA 状态/轮换面板 + 注册码生成（倒计时展示）
+            │       └── TabReleases.tsx          # Agent 版本发布与更新进度
+            └── ProbeResults/                    # 任何已登录用户可见（5 标签）
+                ├── index.tsx
                 └── components/
                     ├── TabGenericResults.tsx    # ping/tcpping/httpcheck/mtr 复用（历史/最新快照切换）
-                    └── TabMeshPingMatrix.tsx     # NxN 交叉延迟矩阵
+                    └── TabMeshPingMatrix.tsx     # NxN 延迟热力图矩阵（自适应撑满 + 图例）
 ```
 
 ---
@@ -420,7 +447,34 @@ Agent 定时调用 `GET /api/v1/agent-sync/tasks` 拉取当前生效任务（同
 ### 健康监控
 
 - **Agent → Agent List** 顶部展示健康汇总卡片（在线/离线/已吊销数量、近 1 小时探测次数与失败率），以及每台 Agent 自报的软件版本号（通过请求头 `X-Agent-Version`，可选）。
-- **Probe Results** 下 ping/tcpping/httpcheck/mtr 四个 Tab 共用同一套组件：默认是按时间倒序的完整历史日志，支持按 Agent / 成功失败 / 时间范围 / 关键字组合过滤；打开「仅看最新」开关可切换为"每个 Agent+Target 只看最新一条"的当前状态快照视图。
+- **Probe Results** 下 ping/tcpping/httpcheck/mtr 四个 Tab 共用同一套组件：默认是按时间倒序的完整历史日志，支持按 Agent / 成功失败 / 时间范围 / 关键字组合过滤；打开「仅看最新」开关可切换为"每个 Agent+Target 只看最新一条"的当前状态快照视图。MeshPing Tab 渲染为延迟热力图矩阵（按时延分级着色 + 图例，自适应撑满主内容区）。
+- **Agent → Releases** 上传各 OS/Arch 的 Agent 二进制并标记激活版本，匹配的 Agent 在下次任务同步时自动收到更新指令；可实时查看每台 Agent 的更新进度。
+- 登录后首页的 **NOC 运行总览看板（`/dashboard`）** 提供全站聚合视角（见上文「前端设计系统 & 运行总览看板」）。
+
+---
+
+## 🎨 前端设计系统 & 运行总览看板
+
+前端整体采用 **"Direction A / Clarity"** SaaS 设计系统重皮——**纯表现层改造，不改动任何业务/数据逻辑**（`api/`、`types/`、`contexts/`、各页的分页/防抖/请求序号守卫/校验/Modal 均保持原样）。
+
+### 设计令牌与主题
+- **字体**：UI 用 **Plus Jakarta Sans**；所有 IP / ID / 指标 / 时间戳用 **IBM Plex Mono**（`src/index.html` 引入，并暴露 `--cion-mono` 全局变量）。
+- **主题**：`src/theme/theme.ts` 的 `buildTheme(mode)` 统一注入 Ant Design 6 令牌（颜色/圆角/密度/阴影），**亮 / 暗双主题**，启用 `cssVar`（注意 antd 6 中 `cssVar` 必须为对象 `{}`，且其 CSS 变量作用域在 antd 组件子树内——组件树之外的裸 DOM 需直接取 `palette` 原始 hex）。`palette` 同时导出供 canvas 图表（@ant-design/charts 基于 G2，无法解析 CSS 变量）使用。
+- **布局**：全宽流式（无最大宽度限制，左右 24px 内边距），底部版权页脚。
+- **主题持久化**：写入服务端用户偏好（个人中心 / 顶栏快切，跨设备同步）；登录页可预选主题；同一会话内手动选择优先（`AppContext` 的 override 标记），硬重载时以账号保存的偏好为准。
+
+### 导航信息架构
+侧边栏按**分组标题**组织：`Overview`（运行总览）/ `Infrastructure`（Devices、IPAM）/ `Monitoring`（Agents、Probe Results）/ `Administration`（Users、Groups、Security）。每个业务域一个叶子菜单，子功能由页面内部 Tabs 承载。登录后默认落地 `/dashboard`。
+
+### 运行总览看板（`/dashboard`）
+NOC Operations Overview，登录后首页：
+- **KPI 行**：设备总数 / 在线 Agent / 探测每小时 / 失败率（大号 mono 数字 + sparkline）。
+- **探测量时序**：按所选时间范围（1H / 24H / 7D）的 runs / failed 堆叠柱状图。
+- **设备状态环图**、**Top mesh 延迟**、**活跃告警**、**各分组 Agent 健康度**。
+- **数据来源**：聚合端点 `GET /api/v1/overview`（见下）提供探测时序与 KPI sparkline，其余由现有列表 / summary / mesh-matrix API 组合；30s 轮询，沿用列表页同款请求序号守卫丢弃乱序响应；`/overview` 不可用时优雅降级（示例时序 + 隐藏 sparkline）。
+
+### 共享组件
+`PageHeader`（页头）、`StatusTag`（状态药丸，替代散落的 `<Tag color>`，随主题着色）、`StatTile`（指标小卡）、`MetricCard`（看板 KPI 卡）、`RelativeTime`（全局相对时间，dayjs + 随语言 + 悬停绝对时间）。
 
 ---
 
@@ -437,6 +491,7 @@ Agent 定时调用 `GET /api/v1/agent-sync/tasks` 拉取当前生效任务（同
 | `GET` | `/me` | 获取当前登录用户信息 |
 | `POST` | `/change-password` | 自助改密（需提供旧密码），返回新 Token 对 |
 | `PUT` | `/settings` | 更新当前用户的会话令牌有效期（1–720 小时） |
+| `PUT` | `/profile` | 更新当前用户 UI 偏好（theme / language） |
 
 ### IPAM 接口（Base: `/api/v1/ipam`，全部需要 JWT）
 
@@ -513,6 +568,9 @@ Agent 定时调用 `GET /api/v1/agent-sync/tasks` 拉取当前生效任务（同
 | `GET/POST/PUT/DELETE` | `/agent-tasks` | 任务下发配置 CRUD（POST 支持多选类型批量创建） |
 | `GET/POST` | `/agent-tokens` | 注册码列表（分页）/ 生成（返回明文，仅此一次） |
 | `POST` | `/agent-tokens/:id/revoke` | 作废未使用的注册码 |
+| `GET/POST/DELETE` | `/agent-releases` | Agent 版本列表 / 上传二进制（流式写盘 + SHA256）/ 删除 |
+| `POST` | `/agent-releases/:id/set-active` | 设为激活版本（同 OS/Arch 互斥） |
+| `GET` | `/agent-releases/:id/progress` | 该版本在匹配 OS/Arch 的 Agent 上的更新进度 |
 
 **探测结果（Base: `/api/v1/probe-results`，主 JWT 端口，仅需登录）**
 
@@ -521,6 +579,18 @@ Agent 定时调用 `GET /api/v1/agent-sync/tasks` 拉取当前生效任务（同
 | `GET` | `/` | 分页历史查询（`?type=&q=&agent_id=&success=&start=&end=`） |
 | `GET` | `/latest` | "当前状态"快照：每个 Agent+Target 只返回最新一条 |
 | `GET` | `/meshping-matrix` | MeshPing 透视矩阵（`?group_id=&q=`） |
+
+### NOC 看板（Base: `/api/v1/overview`，主 JWT 端口，仅需登录）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/` | 仪表盘聚合（`?range=1h\|24h\|7d`）：设备状态分面 / Agent 概要 / 探测量时序（SQL `FLOOR(UNIX_TIMESTAMP/桶)` 分桶）/ KPI sparkline / 各分组健康度 / 最近告警 |
+
+### ASN 查询（Base: `/api/v1/asn`，可选，由 `asndb.enabled` 控制）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/` | 批量 IP→ASN 查询（`?ips=a,b,c`），用于 MTR hop 的 ASN 列展示 |
 
 ### 健康检查
 
