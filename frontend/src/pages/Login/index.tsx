@@ -3,6 +3,11 @@
  * KEEPS the original loginApi + useAuth flow and validation; only the layout
  * and styling change. The left brand panel is hidden under 900px (.cion-login-brand
  * media query in index.html) so the form centers on narrow viewports.
+ *
+ * NOTE: colours come from the raw `palette` keyed by resolvedTheme, NOT from
+ * `var(--ant-color-*)`. The login page's root is OUTSIDE any antd component, and
+ * under antd 6's cssVar mode those variables are scoped to antd component subtrees
+ * — a bare top-level div wouldn't resolve them (white bg + black text in dark mode).
  */
 import React, { useState } from 'react';
 import { Button, Checkbox, Form, Input, Tooltip, message } from 'antd';
@@ -11,6 +16,7 @@ import { login as loginApi } from '../../api/auth';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAppContext } from '../../contexts/AppContext';
 import { useT } from '../../i18n';
+import { palette } from '../../theme/theme';
 
 const MONO = "var(--cion-mono)";
 
@@ -24,6 +30,7 @@ const MiniStat: React.FC<{ value: string; label: string }> = ({ value, label }) 
 const LoginPage: React.FC = () => {
   const { login } = useAuth();
   const { resolvedTheme, setTheme } = useAppContext();
+  const c = palette[resolvedTheme];
   const t = useT();
   const [loading, setLoading] = useState(false);
 
@@ -40,7 +47,7 @@ const LoginPage: React.FC = () => {
   };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', position: 'relative', background: 'var(--ant-color-bg-layout)' }}>
+    <div style={{ minHeight: '100vh', display: 'flex', position: 'relative', background: c.bg }}>
       {/* light/dark toggle (top-right, available pre-login) */}
       <Tooltip title={t('common.theme')}>
         <span
@@ -48,8 +55,8 @@ const LoginPage: React.FC = () => {
           style={{
             position: 'absolute', top: 18, right: 18, zIndex: 10,
             width: 38, height: 38, borderRadius: 10,
-            border: '1px solid var(--ant-color-border)', background: 'var(--ant-color-bg-container)',
-            color: 'var(--ant-color-text-secondary)', cursor: 'pointer',
+            border: `1px solid ${c.border}`, background: c.surface,
+            color: c.textDim, cursor: 'pointer',
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
           }}
         >
@@ -57,7 +64,7 @@ const LoginPage: React.FC = () => {
         </span>
       </Tooltip>
 
-      {/* brand panel */}
+      {/* brand panel (fixed dark-blue gradient in both themes) */}
       <div className="cion-login-brand" style={{
         width: '46%', maxWidth: 620, padding: 46, color: '#fff',
         display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden',
@@ -93,10 +100,10 @@ const LoginPage: React.FC = () => {
       {/* form panel */}
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32 }}>
         <div style={{ width: '100%', maxWidth: 380 }}>
-          <h2 style={{ fontSize: 25, fontWeight: 700, margin: '0 0 7px', color: 'var(--ant-color-text)' }}>
+          <h2 style={{ fontSize: 25, fontWeight: 700, margin: '0 0 7px', color: c.text }}>
             {t('auth.login.title')}
           </h2>
-          <p style={{ fontSize: 14, color: 'var(--ant-color-text-secondary)', margin: '0 0 30px' }}>
+          <p style={{ fontSize: 14, color: c.textDim, margin: '0 0 30px' }}>
             {t('auth.login.subtitle')}
           </p>
 
@@ -105,12 +112,7 @@ const LoginPage: React.FC = () => {
               rules={[{ required: true, message: `${t('auth.login.username')} is required` }]}>
               <Input prefix={<UserOutlined />} placeholder={t('auth.login.username')} />
             </Form.Item>
-            <Form.Item name="password"
-              label={
-                <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                  <span>{t('auth.login.password')}</span>
-                </div>
-              }
+            <Form.Item name="password" label={t('auth.login.password')}
               rules={[{ required: true, message: `${t('auth.login.password')} is required` }]}>
               <Input.Password prefix={<LockOutlined />} placeholder={t('auth.login.password')} />
             </Form.Item>
@@ -124,11 +126,9 @@ const LoginPage: React.FC = () => {
             </Form.Item>
           </Form>
 
-          <div style={{
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            marginTop: 26, fontSize: 12, color: 'var(--ant-color-text-tertiary)',
-          }}>
-            <span style={{ fontFamily: MONO }}>v2.4.1 · SSO enabled</span>
+          <div style={{ marginTop: 26, fontSize: 12, color: c.textFaint }}>
+            Copyright © {new Date().getFullYear()}{' '}
+            <a href="https://github.com/Cion-1221/NMS" target="_blank" rel="noopener noreferrer" style={{ color: c.accent }}>CION</a>
           </div>
         </div>
       </div>
