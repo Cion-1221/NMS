@@ -213,6 +213,14 @@ jwt:
   # Refresh Token 有效期（天）
   refresh_token_days: 7
 
+# ASN 查询：MTR 逐跳 ASN 标注（整个 asndb 块可省略；enabled=false 时不注册 /api/v1/asn 路由，对其它功能无影响）
+asndb:
+  enabled: false                               # 是否启用 ASN 查询功能
+  v4_prefix_file: "data/asndb/pfx2as_v4.txt"   # CAIDA RouteViews IPv4 前缀表
+  v6_prefix_file: "data/asndb/pfx2as_v6.txt"   # CAIDA RouteViews6 IPv6 前缀表
+  names_file:     "data/asndb/asnames.txt"     # RIPE NCC ASN 名称表
+  update_hour: 3                               # 每天几点自动下载更新（0–23，服务器本地时间）
+
 # 审计日志 / 探测结果自动保留（可省略；0 = 永久保留）
 audit:
   max_age_days: 180                      # IPAM / Devices / Agent 审计日志
@@ -222,6 +230,7 @@ audit:
 agent_pki:
   enabled: true
   dir: "data/pki"                  # Root CA 持久化目录，务必纳入备份，不要纳入版本控制
+  releases_dir: "data/releases"    # Agent 二进制上传存储目录（Release 版本下发功能），建议纳入备份
   enroll_port: 8443                # Agent 首次注册引导（单向 HTTPS）
   sync_port: 8444                  # Agent 任务拉取/结果上报/证书续期（mTLS）
   server_san:                      # ⚠️ 必须覆盖 Agent 实际拨号使用的主机名/IP，否则握手失败
@@ -252,6 +261,7 @@ log:
 - `enroll_port`（8443）与 `sync_port`（8444）由 Go 进程自己用内置 CA 终结 mTLS，**必须放行 Agent 直连**，不要走 Nginx 反代——Nginx 不知道这套内置 CA，反代会破坏证书校验。
 - `server_san` 必须包含 Agent 实际拨号使用的主机名/IP；否则 Agent 侧 TLS 校验会因证书 SAN 不匹配而失败。
 - `data/pki/` 目录里的 `ca.key` 是整套信任体系的根密钥，**务必加入服务器备份**，且**绝不能提交进 Git**（仓库 `.gitignore` 已排除 `data/`）。
+- `data/releases/`（`agent_pki.releases_dir`）存放上传的 Agent 二进制，是版本下发的来源；建议一并纳入备份（丢失不影响已注册 Agent，但需重新上传才能继续下发更新）。
 
 ### 3. 配置 systemd 服务常驻
 

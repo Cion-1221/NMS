@@ -46,10 +46,12 @@ asndb:
   # 手动重载已有文件（覆盖文件后调用）：
   #   POST /api/v1/admin/asndb/reload    （需管理员 JWT）
 
-# 审计日志保留策略（可省略，省略时默认 180 天）
+# 审计日志 / 探测结果保留策略（可省略，省略时使用所示默认值）
 audit:
-  # IPAM / Devices 审计日志自动保留天数，超期每日自动清理；0 = 永久保留
+  # IPAM / Devices / Agent 审计日志自动保留天数，超期每日自动清理；0 = 永久保留
   max_age_days: 180
+  # Agent 周期探测写入的 probe_results 保留天数（量级远高于审计日志，默认更短）；0 = 永久保留
+  probe_results_max_age_days: 30
 
 # Agent PKI：内置 CA + mTLS 自动引导注册体系（整个 agent_pki 块可省略，省略时使用下列默认值）
 agent_pki:
@@ -57,6 +59,8 @@ agent_pki:
   enabled: true
   # Root CA + 证书存储目录（持久化，跨重启复用；删除等同于让所有已注册 Agent 失效）
   dir: "data/pki"
+  # Agent 二进制上传存储目录（Release 版本下发功能）；建议纳入备份，不要纳入版本控制
+  releases_dir: "data/releases"
   # Agent 首次注册引导端口（单向 HTTPS，不要求客户端证书）
   enroll_port: 8443
   # Agent 任务拉取 / 结果上报端口（强制 mTLS，要求客户端证书）
