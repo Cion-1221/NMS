@@ -11,6 +11,20 @@ const mono = (v: React.ReactNode) => (
   <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span>
 );
 
+// Audit time, stacked: HH:mm:ss over YYYY-MM-DD.
+const pad = (n: number) => String(n).padStart(2, '0');
+const timeCell = (v: string) => {
+  const d = new Date(v);
+  return (
+    <div style={{ fontFamily: FONT_MONO, lineHeight: 1.35, whiteSpace: 'nowrap' }}>
+      <div>{pad(d.getHours())}:{pad(d.getMinutes())}:{pad(d.getSeconds())}</div>
+      <div style={{ fontSize: 11, color: 'var(--ant-color-text-tertiary)' }}>
+        {d.getFullYear()}-{pad(d.getMonth() + 1)}-{pad(d.getDate())}
+      </div>
+    </div>
+  );
+};
+
 const ACTION_COLOR: Record<string, string> = {
   create_root: 'green',  update_root: 'blue',   delete_root: 'red',
   split: 'cyan',         merge: 'purple',        update_subnet: 'blue',
@@ -86,8 +100,8 @@ const TabAuditLog: React.FC = () => {
 
   const columns: ColumnsType<IPAMAuditLog> = [
     {
-      title: t('ipam.audit.time'), dataIndex: 'created_at', key: 'created_at', width: 170,
-      render: (v: string) => mono(new Date(v).toLocaleString()),
+      title: t('ipam.audit.time'), dataIndex: 'created_at', key: 'created_at', width: 130,
+      render: (v: string) => timeCell(v),
     },
     {
       title: t('ipam.audit.operator'), dataIndex: 'username', key: 'username', width: 120,

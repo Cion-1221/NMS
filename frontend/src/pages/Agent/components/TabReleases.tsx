@@ -10,6 +10,7 @@ import {
 import type { AgentRelease, AgentReleaseProgress, AgentReleaseProgressItem } from '../../../types/agent';
 import { useT } from '../../../i18n';
 import StatusTag from '../../../components/StatusTag';
+import RelativeTime from '../../../components/RelativeTime';
 import { FONT_MONO } from '../../../theme/theme';
 
 const mono = (v: React.ReactNode) => (
@@ -230,7 +231,7 @@ const TabReleases: React.FC = () => {
     },
     {
       title: t('agent.list.lastSeen'), dataIndex: 'last_seen_at', key: 'last_seen_at',
-      render: (v: string | null) => v ? mono(new Date(v).toLocaleString()) : '—',
+      render: (v: string | null) => <RelativeTime value={v} />,
     },
   ];
 

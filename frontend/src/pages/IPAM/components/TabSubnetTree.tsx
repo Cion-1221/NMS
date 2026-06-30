@@ -288,11 +288,11 @@ const TabSubnetTree: React.FC = () => {
     {
       title: t('ipam.root.cidr'), dataIndex: 'cidr', key: 'cidr',
       render: (v: string, r: UINode) => (
-        <span style={{ fontFamily: FONT_MONO, fontWeight: r.level === 'Root' ? 700 : 600, fontSize: r.level === 'Root' ? 14 : 13 }}>{v}</span>
+        <span style={{ fontFamily: FONT_MONO, fontWeight: r.level === 'Root' ? 700 : 600, fontSize: r.level === 'Root' ? 14 : 13, whiteSpace: 'nowrap' }}>{v}</span>
       ),
     },
     {
-      title: t('ipam.subnet.level'), dataIndex: 'level', key: 'level',
+      title: t('ipam.subnet.level'), dataIndex: 'level', key: 'level', width: 80,
       render: (l: string) => (
         <Tag color={l === 'Root' ? 'purple' : l === 'L1' ? 'blue' : 'cyan'}>{l}</Tag>
       ),
@@ -326,7 +326,7 @@ const TabSubnetTree: React.FC = () => {
         : '—',
     },
     {
-      title: t('common.actions'), key: 'action', width: 190,
+      title: t('common.actions'), key: 'action', width: 190, fixed: 'right' as const,
       render: (_: unknown, r: UINode) => (
         <Space size={0}>
           <Button type="link" size="small" onClick={() => openSplit(r)}>
@@ -397,6 +397,7 @@ const TabSubnetTree: React.FC = () => {
           indentSize:      20,
           expandRowByClick: false,
         }}
+        scroll={{ x: 'max-content' }}
         pagination={{
           defaultPageSize: 10,
           pageSizeOptions: ['10', '20', '50', '100'],

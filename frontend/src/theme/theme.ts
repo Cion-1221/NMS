@@ -101,7 +101,7 @@ export function buildTheme(mode: Mode): ThemeConfig {
         bodyBg: p.bg,
         headerBg: p.surface,
         headerHeight: 64,
-        headerPadding: '0 30px',
+        headerPadding: '0 24px',
         siderBg: p.surface, // A keeps the sidebar light/airy
       },
       Menu: {

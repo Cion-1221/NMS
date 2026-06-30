@@ -7,6 +7,7 @@ import type { Agent, MtrHop, ProbeResult, TaskType } from '../../../types/agent'
 import { useT } from '../../../i18n';
 import { useDebounced } from '../../../utils/useDebounced';
 import StatusTag from '../../../components/StatusTag';
+import RelativeTime from '../../../components/RelativeTime';
 import { FONT_MONO } from '../../../theme/theme';
 
 const mono = (v: React.ReactNode) => (
@@ -130,8 +131,8 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
       },
     },
     {
-      title: t('proberesults.reportedAt'), dataIndex: 'reported_at', key: 'reported_at', width: 180,
-      render: (v: string) => mono(new Date(v).toLocaleString()),
+      title: t('proberesults.reportedAt'), dataIndex: 'reported_at', key: 'reported_at', width: 150,
+      render: (v: string) => <RelativeTime value={v} />,
     },
     {
       title: t('common.actions'), key: 'action', width: 80, fixed: 'right' as const,

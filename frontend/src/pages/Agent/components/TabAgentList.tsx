@@ -9,6 +9,7 @@ import type { TranslationKey } from '../../../i18n/translations';
 import { useDebounced } from '../../../utils/useDebounced';
 import StatusTag from '../../../components/StatusTag';
 import StatTile from '../../../components/StatTile';
+import RelativeTime from '../../../components/RelativeTime';
 import { FONT_MONO } from '../../../theme/theme';
 
 const { confirm } = Modal;
@@ -199,8 +200,14 @@ const TabAgentList: React.FC = () => {
       },
     },
     { title: t('agent.list.version'), dataIndex: 'version', key: 'version', width: 110, render: (v: string | undefined) => (v ? mono(v) : '—') },
-    { title: t('agent.list.os'), dataIndex: 'os', key: 'os', width: 100, render: (v: string | undefined) => (v ? mono(v) : '—') },
-    { title: t('agent.list.arch'), dataIndex: 'arch', key: 'arch', width: 90, render: (v: string | undefined) => (v ? mono(v) : '—') },
+    {
+      title: t('agent.list.systemProfile'), key: 'system_profile', width: 150,
+      render: (_: unknown, r: Agent) => {
+        if (!r.os && !r.arch) return '—';
+        const osLabel = r.os ? r.os.charAt(0).toUpperCase() + r.os.slice(1) : '?';
+        return <StatusTag status="info" tone="neutral" label={`${osLabel} / ${r.arch || '?'}`} />;
+      },
+    },
     {
       title: t('common.status'), dataIndex: 'status', key: 'status', width: 110,
       render: (v: string, r: Agent) => r.revoked
@@ -208,21 +215,12 @@ const TabAgentList: React.FC = () => {
         : <StatusTag status={v} />,
     },
     {
-      title: t('agent.list.certExpiry'), dataIndex: 'cert_expiry', key: 'cert_expiry', width: 180,
-      render: (v: string) => {
-        const d = new Date(v);
-        const days = (d.getTime() - Date.now()) / 86_400_000;
-        const danger = days <= 14;
-        return (
-          <span style={{ fontFamily: FONT_MONO, fontWeight: danger ? 700 : 400, color: danger ? token.colorError : 'var(--ant-color-text-secondary)' }}>
-            {d.toLocaleString()}
-          </span>
-        );
-      },
+      title: t('agent.list.certExpiry'), dataIndex: 'cert_expiry', key: 'cert_expiry', width: 140,
+      render: (v: string) => <RelativeTime value={v} danger={(new Date(v).getTime() - Date.now()) / 86_400_000 <= 14} />,
     },
     {
-      title: t('agent.list.lastSeen'), dataIndex: 'last_seen_at', key: 'last_seen_at', width: 180,
-      render: (v: string | null) => (v ? mono(new Date(v).toLocaleString()) : '—'),
+      title: t('agent.list.lastSeen'), dataIndex: 'last_seen_at', key: 'last_seen_at', width: 140,
+      render: (v: string | null) => <RelativeTime value={v} />,
     },
     {
       title: t('common.actions'), key: 'action', width: 220, fixed: 'right' as const,

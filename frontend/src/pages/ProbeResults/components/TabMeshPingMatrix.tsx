@@ -185,7 +185,7 @@ const TabMeshPingMatrix: React.FC = () => {
   const columns: ColumnsType<AgentRow> = [
     {
       title: t('agent.list.hostname'), dataIndex: 'hostname', key: '__row_header',
-      fixed: 'left' as const, width: 160,
+      width: 150,
       render: (v: string, r: AgentRow) => (
         <Tooltip title={r.agent_id}>
           <b style={{ fontFamily: FONT_MONO, fontSize: 12.5 }}>{v || r.agent_id}</b>
@@ -202,7 +202,6 @@ const TabMeshPingMatrix: React.FC = () => {
         </span>
       ),
       key: col.agent_id,
-      width: 145,
       align: 'center' as const,
       onCell: (row: AgentRow) => {
         const highlight = cellBg(row.agent_id, col.agent_id);
@@ -333,7 +332,6 @@ const TabMeshPingMatrix: React.FC = () => {
         rowKey="agent_id"
         loading={loading}
         pagination={false}
-        scroll={{ x: 'max-content' }}
         sticky
         bordered
       />

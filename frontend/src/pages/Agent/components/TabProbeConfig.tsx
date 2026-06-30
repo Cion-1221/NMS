@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, message } from 'antd';
+import { Alert, Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd';
 import { ExclamationCircleFilled, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -141,8 +141,18 @@ const TabProbeConfig: React.FC = () => {
       },
     },
     {
-      title: t('agent.task.targets'), dataIndex: 'targets_raw', key: 'targets_raw', ellipsis: true,
-      render: (v: string, r: AgentTask) => (MESH_AUTO_TYPES.has(r.type) ? t('agent.task.meshAuto') : (v ? mono(v) : '—')),
+      title: t('agent.task.targets'), dataIndex: 'targets_raw', key: 'targets_raw',
+      width: 280, ellipsis: { showTitle: false },
+      render: (v: string, r: AgentTask) => {
+        if (MESH_AUTO_TYPES.has(r.type)) return t('agent.task.meshAuto');
+        if (!v) return '—';
+        const oneLine = v.split('\n').map(s => s.trim()).filter(Boolean).join(', ');
+        return (
+          <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{v}</span>} placement="topLeft">
+            <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{oneLine}</span>
+          </Tooltip>
+        );
+      },
     },
     {
       title: t('agent.task.interval'), dataIndex: 'interval_seconds', key: 'interval_seconds', width: 100,

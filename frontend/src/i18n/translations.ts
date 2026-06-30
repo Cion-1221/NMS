@@ -430,6 +430,7 @@ const t = {
   'agent.list.version':      { en: 'Version', zh: '版本' },
   'agent.list.os':           { en: 'OS', zh: '系统' },
   'agent.list.arch':         { en: 'Arch', zh: '架构' },
+  'agent.list.systemProfile':{ en: 'System Profile', zh: '系统 / 架构' },
   'agent.release.addRelease':  { en: 'Upload Release', zh: '上传版本' },
   'agent.release.version':     { en: 'Version', zh: '版本号' },
   'agent.release.os':          { en: 'OS', zh: '系统' },

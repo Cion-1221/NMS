@@ -130,14 +130,14 @@ const TabRootPrefix: React.FC = () => {
   }));
 
   const columns: ColumnsType<RootPrefix> = [
-    { title: t('common.id'),      dataIndex: 'id',         key: 'id', render: (v: number) => <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span> },
+    { title: t('common.id'),      dataIndex: 'id',         key: 'id', width: 64, render: (v: number) => <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span> },
     {
-      title: t('ipam.root.ipver'), dataIndex: 'ip_version', key: 'ip_version',
+      title: t('ipam.root.ipver'), dataIndex: 'ip_version', key: 'ip_version', width: 100,
       render: (v: number) => <StatusTag status={v === 4 ? 'planned' : 'used'} tone={v === 4 ? 'accent' : 'teal'} label={`IPv${v}`} />,
     },
     {
       title: t('ipam.root.cidr'), dataIndex: 'cidr', key: 'cidr',
-      render: (v: string) => <span style={{ fontFamily: FONT_MONO, fontWeight: 700 }}>{v}</span>,
+      render: (v: string) => <span style={{ fontFamily: FONT_MONO, fontWeight: 700, whiteSpace: 'nowrap' }}>{v}</span>,
     },
     { title: t('ipam.root.group'), key: 'group', render: (_, r) => r.group?.name || '—' },
     { title: t('ipam.root.type'),  key: 'type',  render: (_, r) => r.type?.name  || '—' },
@@ -152,7 +152,7 @@ const TabRootPrefix: React.FC = () => {
         : '—',
     },
     {
-      title: t('common.actions'), key: 'action', width: 120,
+      title: t('common.actions'), key: 'action', width: 120, fixed: 'right' as const,
       render: (_, r: RootPrefix) => (
         <Space size={4}>
           <Button type="link" size="small" onClick={() => openEdit(r)}>{t('ipam.root.editBtn')}</Button>
@@ -212,6 +212,7 @@ const TabRootPrefix: React.FC = () => {
         dataSource={filtered}
         rowKey="id"
         loading={loading}
+        scroll={{ x: 'max-content' }}
         pagination={{
           defaultPageSize: 10,
           pageSizeOptions: ['10', '20', '50', '100'],

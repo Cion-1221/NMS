@@ -26,7 +26,7 @@ import { updateProfile } from '../api/auth';
 import { useT } from '../i18n';
 import ProfileModal from '../components/ProfileModal';
 
-const { Header, Content, Sider } = Layout;
+const { Header, Content, Footer, Sider } = Layout;
 const { Text } = Typography;
 
 export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -165,11 +165,21 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
           </Header>
 
           <Content style={{ overflowY: 'auto' }}>
+            {/* Fluid full-width: no max-width cap, just side padding. */}
             {/* key=path re-triggers the subtle enter animation on each navigation */}
-            <div key={currentPath} className="cion-page" style={{ padding: 30, maxWidth: 1480, margin: '0 auto' }}>
+            <div key={currentPath} className="cion-page" style={{ padding: '24px 24px 12px' }}>
               {children}
             </div>
           </Content>
+          <Footer style={{
+            textAlign: 'center', padding: '14px 24px', fontSize: 13,
+            background: 'transparent', color: 'var(--ant-color-text-tertiary)',
+            borderTop: '1px solid var(--ant-color-border-secondary)',
+          }}>
+            Copyright © {new Date().getFullYear()}{' '}
+            <a href="https://github.com/Cion-1221/NMS" target="_blank" rel="noopener noreferrer"
+              style={{ color: 'var(--ant-color-primary)' }}>CION</a>
+          </Footer>
         </Layout>
       </Layout>
 

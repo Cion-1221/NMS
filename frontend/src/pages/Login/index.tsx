@@ -5,10 +5,11 @@
  * media query in index.html) so the form centers on narrow viewports.
  */
 import React, { useState } from 'react';
-import { Button, Checkbox, Form, Input, message } from 'antd';
-import { ArrowRightOutlined, LockOutlined, UserOutlined } from '@ant-design/icons';
+import { Button, Checkbox, Form, Input, Tooltip, message } from 'antd';
+import { ArrowRightOutlined, BulbOutlined, LockOutlined, MoonOutlined, UserOutlined } from '@ant-design/icons';
 import { login as loginApi } from '../../api/auth';
 import { useAuth } from '../../contexts/AuthContext';
+import { useAppContext } from '../../contexts/AppContext';
 import { useT } from '../../i18n';
 
 const MONO = "var(--cion-mono)";
@@ -22,6 +23,7 @@ const MiniStat: React.FC<{ value: string; label: string }> = ({ value, label }) 
 
 const LoginPage: React.FC = () => {
   const { login } = useAuth();
+  const { resolvedTheme, setTheme } = useAppContext();
   const t = useT();
   const [loading, setLoading] = useState(false);
 
@@ -38,7 +40,23 @@ const LoginPage: React.FC = () => {
   };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', background: 'var(--ant-color-bg-layout)' }}>
+    <div style={{ minHeight: '100vh', display: 'flex', position: 'relative', background: 'var(--ant-color-bg-layout)' }}>
+      {/* light/dark toggle (top-right, available pre-login) */}
+      <Tooltip title={t('common.theme')}>
+        <span
+          onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
+          style={{
+            position: 'absolute', top: 18, right: 18, zIndex: 10,
+            width: 38, height: 38, borderRadius: 10,
+            border: '1px solid var(--ant-color-border)', background: 'var(--ant-color-bg-container)',
+            color: 'var(--ant-color-text-secondary)', cursor: 'pointer',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          {resolvedTheme === 'dark' ? <BulbOutlined /> : <MoonOutlined />}
+        </span>
+      </Tooltip>
+
       {/* brand panel */}
       <div className="cion-login-brand" style={{
         width: '46%', maxWidth: 620, padding: 46, color: '#fff',
