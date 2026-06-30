@@ -51,7 +51,10 @@ export function buildTheme(mode: Mode): ThemeConfig {
   const p = palette[mode];
 
   return {
-    cssVar: true,
+    // antd 6 types cssVar as an object ({ prefix?, key? }), not a boolean.
+    // Empty object enables it with the default `--ant-*` variable prefix, which
+    // every `var(--ant-color-*)` reference in the app relies on.
+    cssVar: {},
     hashed: true,
     algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
 
