@@ -5,6 +5,11 @@ import type { ColumnsType } from 'antd/es/table';
 import { getVRFs, createVRF, updateVRF, deleteVRF } from '../../../api/ipam';
 import type { IPAMVRF } from '../../../types/ipam';
 import { useT } from '../../../i18n';
+import { FONT_MONO } from '../../../theme/theme';
+
+const mono = (v: React.ReactNode) => (
+  <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span>
+);
 
 const { confirm } = Modal;
 
@@ -66,9 +71,9 @@ const TabVRF: React.FC = () => {
   };
 
   const columns: ColumnsType<IPAMVRF> = [
-    { title: t('common.id'),     dataIndex: 'id',          key: 'id',   width: 70 },
-    { title: t('ipam.vrf.name'), dataIndex: 'name',        key: 'name', width: 160 },
-    { title: t('ipam.vrf.rd'),   dataIndex: 'rd',          key: 'rd',   width: 160, render: (v) => v || '—' },
+    { title: t('common.id'),     dataIndex: 'id',          key: 'id',   width: 70, render: (v: number) => mono(v) },
+    { title: t('ipam.vrf.name'), dataIndex: 'name',        key: 'name', width: 160, render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
+    { title: t('ipam.vrf.rd'),   dataIndex: 'rd',          key: 'rd',   width: 160, render: (v) => (v ? mono(v) : '—') },
     { title: t('ipam.vrf.desc'), dataIndex: 'description', key: 'description', ellipsis: true,
       render: (v) => v || '—' },
     {

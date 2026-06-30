@@ -1,11 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Input, Space, Table, Tag, message } from 'antd';
+import { Button, Input, Space, Table, message } from 'antd';
 import { ReloadOutlined, SearchOutlined, UnlockOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { listLockouts, unlockLockouts } from '../../../../api/system';
 import type { LockoutEntry } from '../../../../types/system';
 import { useT } from '../../../../i18n';
 import { useDebounced } from '../../../../utils/useDebounced';
+import StatusTag from '../../../../components/StatusTag';
+import { FONT_MONO } from '../../../../theme/theme';
+
+const mono = (v: React.ReactNode) => (
+  <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span>
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 锁定列表 Tab：服务端分页查看当前被锁定的「用户名 + IP」，
@@ -74,20 +80,20 @@ const TabLockouts: React.FC = () => {
     Math.max(0, Math.ceil((new Date(until).getTime() - Date.now()) / 60000));
 
   const columns: ColumnsType<LockoutEntry> = [
-    { title: t('sys.user.username'), dataIndex: 'username', key: 'username' },
-    { title: t('sysset.lockouts.ip'), dataIndex: 'ip', key: 'ip', width: 160 },
+    { title: t('sys.user.username'), dataIndex: 'username', key: 'username', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
+    { title: t('sysset.lockouts.ip'), dataIndex: 'ip', key: 'ip', width: 160, render: (v: string) => mono(v) },
     {
       title: t('sysset.lockouts.lockedAt'), dataIndex: 'locked_at', key: 'locked_at', width: 180,
-      render: (v: string) => new Date(v).toLocaleString(),
+      render: (v: string) => mono(new Date(v).toLocaleString()),
     },
     {
       title: t('sysset.lockouts.lockedUntil'), dataIndex: 'locked_until', key: 'locked_until', width: 180,
-      render: (v: string) => new Date(v).toLocaleString(),
+      render: (v: string) => mono(new Date(v).toLocaleString()),
     },
     {
       title: t('sysset.lockouts.remaining'), key: 'remaining', width: 110, align: 'center' as const,
       render: (_: unknown, r: LockoutEntry) => (
-        <Tag color="orange">{remainingMinutes(r.locked_until)} {t('sysset.lockouts.minutes')}</Tag>
+        <StatusTag status="warn" label={`${remainingMinutes(r.locked_until)} ${t('sysset.lockouts.minutes')}`} />
       ),
     },
     {

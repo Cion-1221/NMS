@@ -32,14 +32,55 @@ const t = {
   'common.success':     { en: 'Operation succeeded', zh: '操作成功' },
 
   // ── Auth / Login ────────────────────────────────────────────────────────────
-  'auth.login.title':    { en: 'CION NMS', zh: 'CION NMS' },
-  'auth.login.subtitle': { en: 'Network Management System', zh: '网络管理系统' },
+  'auth.login.title':    { en: 'Sign in', zh: '登录' },
+  'auth.login.subtitle': { en: 'Welcome back. Enter your credentials to continue.', zh: '欢迎回来，请输入登录凭据以继续。' },
   'auth.login.username': { en: 'Username', zh: '用户名' },
   'auth.login.password': { en: 'Password', zh: '密码' },
-  'auth.login.btn':      { en: 'Sign In', zh: '登录' },
+  'auth.login.remember': { en: 'Keep me signed in for 30 days', zh: '30 天内保持登录' },
+  'auth.login.btn':      { en: 'Sign in', zh: '登录' },
   'auth.login.errCred':  { en: 'Invalid username or password', zh: '用户名或密码错误' },
   'auth.logout':         { en: 'Sign Out', zh: '退出登录' },
   'auth.admin':          { en: 'Administrator', zh: '管理员' },
+
+  // ── Redesign: nav captions, topbar, dashboard ────────────────────────────────
+  'nav.overview':            { en: 'Overview', zh: '概览' },
+  'nav.infrastructure':      { en: 'Infrastructure', zh: '基础设施' },
+  'nav.monitoring':          { en: 'Monitoring', zh: '监控' },
+  'nav.administration':      { en: 'Administration', zh: '系统管理' },
+  'common.searchPlaceholder':{ en: 'Search devices, IPs, agents…', zh: '搜索设备、IP、Agent…' },
+  'common.theme':            { en: 'Toggle theme', zh: '切换主题' },
+  'common.export':           { en: 'Export', zh: '导出' },
+  'common.viewAll':          { en: 'View all', zh: '查看全部' },
+  'common.allSystemsOk':     { en: 'All systems operational', zh: '所有系统运行正常' },
+
+  'dashboard.title':       { en: 'Operations Overview', zh: '运行总览' },
+  'dashboard.subtitle':    { en: 'Real-time health across your network, devices and probes.', zh: '网络、设备与探测的实时健康状况。' },
+  'dashboard.probeVolume': { en: 'Probe volume & failures', zh: '探测量与失败' },
+  'dashboard.topLatency':  { en: 'Top mesh latency', zh: 'Mesh 时延 Top' },
+  'dashboard.deviceStatus':{ en: 'Device status', zh: '设备状态' },
+  'dashboard.activeAlerts':{ en: 'Active alerts', zh: '活跃告警' },
+  'dashboard.regionHealth':{ en: 'Agent health by group', zh: '各分组 Agent 健康度' },
+  'dashboard.sampleNote':  { en: 'Sample series — pending /overview endpoint', zh: '示例数据 — 待 /overview 端点' },
+  'dashboard.noAlerts':    { en: 'No active alerts', zh: '暂无活跃告警' },
+
+  'kpi.devices':       { en: 'Devices', zh: '设备' },
+  'kpi.agentsOnline':  { en: 'Agents online', zh: '在线 Agent' },
+  'kpi.probesPerHour': { en: 'Probes / hour', zh: '探测/小时' },
+  'kpi.failureRate':   { en: 'Failure rate', zh: '失败率' },
+
+  // Page subtitles (PageHeader)
+  'device.subtitle':       { en: 'Inventory of managed network devices.', zh: '受管网络设备清单。' },
+  'ipam.subtitle':         { en: 'Hierarchical prefixes, VRFs and utilization.', zh: '层级前缀、VRF 与使用率。' },
+  'agent.subtitle':        { en: 'Distributed probe agents and their health.', zh: '分布式探测 Agent 及其健康状况。' },
+  'proberesults.subtitle': { en: 'Latency, reachability and mesh measurements from all agents.', zh: '来自所有 Agent 的时延、可达性与 Mesh 测量。' },
+  'sys.user.subtitle':     { en: 'Manage accounts, roles and access.', zh: '管理账户、角色与访问权限。' },
+
+  // IPAM summary tiles
+  'ipam.stat.roots':   { en: 'Root prefixes', zh: '根前缀' },
+  'ipam.stat.vrfs':    { en: 'VRFs', zh: 'VRF' },
+  'ipam.stat.groups':  { en: 'Groups', zh: '分组' },
+  'ipam.stat.types':   { en: 'Types', zh: '类型' },
+  'ipam.subnet.utilization': { en: 'Utilization', zh: '使用率' },
 
   // ── Profile ─────────────────────────────────────────────────────────────────
   'profile.title':         { en: 'My Profile', zh: '个人中心' },
@@ -314,6 +355,7 @@ const t = {
   'sys.user.delOk':      { en: 'User deleted', zh: '用户已删除' },
 
   'sys.group.title':     { en: 'Group Management', zh: '用户组管理' },
+  'sys.group.subtitle':  { en: 'Define permission groups and admin privileges.', zh: '定义权限组与管理员权限。' },
   'sys.group.create':    { en: 'Create Group', zh: '创建用户组' },
   'sys.group.name':      { en: 'Group Name', zh: '用户组名称' },
   'sys.group.level':     { en: 'Permission Level', zh: '权限级别' },

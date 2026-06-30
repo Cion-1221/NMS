@@ -1,11 +1,9 @@
 import React, { useState } from 'react';
-import { Tabs, Typography } from 'antd';
-import { SafetyCertificateOutlined } from '@ant-design/icons';
+import { Tabs } from 'antd';
 import { useT } from '../../../i18n';
+import PageHeader from '../../../components/PageHeader';
 import TabSecuritySettings from './components/TabSecuritySettings';
 import TabLockouts from './components/TabLockouts';
-
-const { Title } = Typography;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 系统安全设置页：Tab 容器（与 IPAM / Devices 页面同款交互模式）。
@@ -40,10 +38,7 @@ const SystemSettingsPage: React.FC = () => {
 
   return (
     <div>
-      <Title level={4} style={{ marginBottom: 16 }}>
-        <SafetyCertificateOutlined style={{ marginRight: 8 }} />
-        {t('sysset.title')}
-      </Title>
+      <PageHeader title={t('sysset.title')} subtitle={t('sysset.desc')} />
       <Tabs
         activeKey={activeKey}
         onChange={handleTabChange}

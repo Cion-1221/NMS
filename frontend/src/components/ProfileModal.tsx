@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  Badge, Descriptions, Form, Input, message, Modal,
+  Badge, Button, Descriptions, Form, Input, message, Modal,
   Radio, Select, Space, Tabs, Typography,
 } from 'antd';
 import {
@@ -135,21 +135,9 @@ const PreferencesTab: React.FC = () => {
       </div>
 
       <div>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          style={{
-            padding: '6px 20px',
-            background: '#1677ff',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-            cursor: saving ? 'not-allowed' : 'pointer',
-            opacity: saving ? 0.7 : 1,
-          }}
-        >
-          {saving ? 'Saving…' : t('prefs.savePrefs')}
-        </button>
+        <Button type="primary" loading={saving} onClick={handleSave}>
+          {t('prefs.savePrefs')}
+        </Button>
       </div>
     </Space>
   );
@@ -203,21 +191,9 @@ const SecurityTab: React.FC = () => {
         <Input.Password prefix={<LockOutlined />} />
       </Form.Item>
       <Form.Item>
-        <button
-          onClick={handleChangePwd}
-          disabled={saving}
-          style={{
-            padding: '6px 20px',
-            background: '#1677ff',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-            cursor: saving ? 'not-allowed' : 'pointer',
-            opacity: saving ? 0.7 : 1,
-          }}
-        >
-          {saving ? 'Saving…' : t('security.changePwd')}
-        </button>
+        <Button type="primary" loading={saving} onClick={handleChangePwd}>
+          {t('security.changePwd')}
+        </Button>
       </Form.Item>
     </Form>
   );

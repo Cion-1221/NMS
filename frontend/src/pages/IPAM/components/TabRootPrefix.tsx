@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Button, Form, Input, Modal, Radio, Select, Space, Table, Tag, Tooltip, message,
+  Button, Form, Input, Modal, Radio, Select, Space, Table, Tooltip, message,
 } from 'antd';
 import { ExclamationCircleFilled, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { AxiosError } from 'axios';
@@ -12,6 +12,8 @@ import {
 import type { RootPrefix, IPAMGroup, IPAMType, IPAMVRF } from '../../../types/ipam';
 import { useT } from '../../../i18n';
 import { cidrMatchesSearch } from '../../../utils/cidr';
+import StatusTag from '../../../components/StatusTag';
+import { FONT_MONO } from '../../../theme/theme';
 
 const { confirm } = Modal;
 
@@ -128,14 +130,14 @@ const TabRootPrefix: React.FC = () => {
   }));
 
   const columns: ColumnsType<RootPrefix> = [
-    { title: t('common.id'),      dataIndex: 'id',         key: 'id' },
+    { title: t('common.id'),      dataIndex: 'id',         key: 'id', render: (v: number) => <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span> },
     {
       title: t('ipam.root.ipver'), dataIndex: 'ip_version', key: 'ip_version',
-      render: (v: number) => <Tag color={v === 4 ? 'blue' : 'green'}>IPv{v}</Tag>,
+      render: (v: number) => <StatusTag status={v === 4 ? 'planned' : 'used'} tone={v === 4 ? 'accent' : 'teal'} label={`IPv${v}`} />,
     },
     {
       title: t('ipam.root.cidr'), dataIndex: 'cidr', key: 'cidr',
-      render: (v: string) => <strong>{v}</strong>,
+      render: (v: string) => <span style={{ fontFamily: FONT_MONO, fontWeight: 700 }}>{v}</span>,
     },
     { title: t('ipam.root.group'), key: 'group', render: (_, r) => r.group?.name || '—' },
     { title: t('ipam.root.type'),  key: 'type',  render: (_, r) => r.type?.name  || '—' },

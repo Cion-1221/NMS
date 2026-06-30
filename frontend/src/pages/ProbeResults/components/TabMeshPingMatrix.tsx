@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Dropdown, Input, Modal, Select, Space, Spin, Table, Tag, Tooltip, message } from 'antd';
+import { Button, Dropdown, Input, Modal, Select, Space, Spin, Table, theme, Tooltip, message } from 'antd';
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { getMeshPingMatrix, getAgentGroups, getLatestProbeResults, lookupASN } from '../../../api/agent';
-import type { MeshPingMatrixResp, MeshPingProto, AgentGroup, MtrHop } from '../../../types/agent';
+import type { MeshPingMatrixResp, MeshPingCell, MeshPingProto, AgentGroup, MtrHop } from '../../../types/agent';
 import { useT } from '../../../i18n';
 import { useDebounced } from '../../../utils/useDebounced';
+import { FONT_MONO } from '../../../theme/theme';
 
 type AgentRow = MeshPingMatrixResp['agents'][number];
 
@@ -17,11 +18,34 @@ interface MtrModalState {
   hops: MtrHop[] | null; // null = 加载中
 }
 
-const HL_ROW_COL = '#dbeeff';
-const HL_CROSS   = '#bbd6f7';
+// Cross-hair highlight tints track the theme (primary @ low alpha).
+const HL_ROW_COL = 'var(--ant-color-primary-bg)';
+const HL_CROSS   = 'var(--ant-color-primary-bg-hover)';
+
+const TEAL = '#0d9488';
+const TEAL_BG = 'rgba(13,148,136,.12)';
 
 const TabMeshPingMatrix: React.FC = () => {
   const t = useT();
+  const { token } = theme.useToken();
+
+  // Latency → heatmap tone. ≤60 success · ≤120 teal · ≤180 warning · >180/fail danger.
+  const toneFor = (ms: number, success: boolean) => {
+    if (!success)  return { fg: token.colorError,   bg: token.colorErrorBg };
+    if (ms <= 60)  return { fg: token.colorSuccess, bg: token.colorSuccessBg };
+    if (ms <= 120) return { fg: TEAL,               bg: TEAL_BG };
+    if (ms <= 180) return { fg: token.colorWarning, bg: token.colorWarningBg };
+    return { fg: token.colorError, bg: token.colorErrorBg };
+  };
+
+  // Cell-level background = worst case across the v4/v6 protocols present.
+  const cellHeatBg = (cell: MeshPingCell | undefined): string | undefined => {
+    const protos = [cell?.v4, cell?.v6].filter(Boolean) as MeshPingProto[];
+    if (!protos.length) return undefined;
+    if (protos.some(p => !p.success)) return toneFor(0, false).bg;
+    const maxMs = Math.max(...protos.map(p => p.latency_ms ?? 0));
+    return toneFor(maxMs, true).bg;
+  };
   const [matrixData, setMatrixData] = useState<MeshPingMatrixResp>({ agents: [], matrix: {} });
   const [groups, setGroups]           = useState<AgentGroup[]>([]);
   const [groupId, setGroupId]         = useState<number | undefined>(undefined);
@@ -119,21 +143,25 @@ const TabMeshPingMatrix: React.FC = () => {
     setAsnMap({});
   };
 
-  // 渲染单个协议标签，有 target_ip 时包裹 Dropdown 提供 MTR 跳转入口
+  // 渲染单个协议数值（mono + 按时延着色），有 target_ip 时包裹 Dropdown 提供 MTR 跳转入口
   const renderProto = (
     p: MeshPingProto,
     label: string | undefined,
     onMtr?: () => void,
   ) => {
+    const tone = toneFor(p.latency_ms ?? 0, p.success);
     const inner = (
       <Tooltip title={new Date(p.reported_at).toLocaleString()}>
-        <Tag
-          color={p.success ? 'green' : 'red'}
-          style={{ cursor: onMtr ? 'pointer' : 'default', userSelect: 'none' }}
+        <span
+          style={{
+            fontFamily: FONT_MONO, fontSize: 12.5, fontWeight: 600, color: tone.fg,
+            cursor: onMtr ? 'pointer' : 'default', userSelect: 'none',
+            textDecoration: onMtr ? 'underline dotted' : undefined, textUnderlineOffset: 3,
+          }}
         >
-          {label && <span style={{ opacity: 0.7, marginRight: 3 }}>{label}</span>}
-          {p.success ? `${p.latency_ms?.toFixed(1) ?? '?'} ms` : t('proberesults.failed')}
-        </Tag>
+          {label && <span style={{ opacity: 0.6, marginRight: 4 }}>{label}</span>}
+          {p.success ? (p.latency_ms?.toFixed(0) ?? '?') : t('proberesults.failed')}
+        </span>
       </Tooltip>
     );
     if (!onMtr) return inner;
@@ -158,28 +186,36 @@ const TabMeshPingMatrix: React.FC = () => {
     {
       title: t('agent.list.hostname'), dataIndex: 'hostname', key: '__row_header',
       fixed: 'left' as const, width: 160,
-      render: (v: string, r: AgentRow) => <Tooltip title={r.agent_id}><b>{v || r.agent_id}</b></Tooltip>,
+      render: (v: string, r: AgentRow) => (
+        <Tooltip title={r.agent_id}>
+          <b style={{ fontFamily: FONT_MONO, fontSize: 12.5 }}>{v || r.agent_id}</b>
+        </Tooltip>
+      ),
       onCell: (row: AgentRow) => ({
         style: { background: activeCell?.rowId === row.agent_id ? HL_ROW_COL : undefined },
       }),
     },
     ...colAgents.map(col => ({
       title: (
-        <span style={{ background: activeCell?.colId === col.agent_id ? HL_ROW_COL : undefined, borderRadius: 4, padding: '0 4px' }}>
+        <span style={{ background: activeCell?.colId === col.agent_id ? HL_ROW_COL : undefined, borderRadius: 4, padding: '0 4px', fontFamily: FONT_MONO, fontSize: 12 }}>
           <Tooltip title={col.agent_id}>{col.hostname || col.agent_id}</Tooltip>
         </span>
       ),
       key: col.agent_id,
       width: 145,
       align: 'center' as const,
-      onCell: (row: AgentRow) => ({
-        style: { background: cellBg(row.agent_id, col.agent_id), cursor: 'pointer' },
-        onClick: () => handleCellClick(row.agent_id, col.agent_id),
-      }),
+      onCell: (row: AgentRow) => {
+        const highlight = cellBg(row.agent_id, col.agent_id);
+        const heat = row.agent_id === col.agent_id ? undefined : cellHeatBg(matrix[row.agent_id]?.[col.agent_id]);
+        return {
+          style: { background: highlight ?? heat, cursor: 'pointer' },
+          onClick: () => handleCellClick(row.agent_id, col.agent_id),
+        };
+      },
       render: (_: unknown, row: AgentRow) => {
-        if (row.agent_id === col.agent_id) return <span style={{ color: '#ccc' }}>—</span>;
+        if (row.agent_id === col.agent_id) return <span style={{ color: 'var(--ant-color-text-quaternary)' }}>—</span>;
         const cell = matrix[row.agent_id]?.[col.agent_id];
-        if (!cell?.v4 && !cell?.v6) return <span style={{ color: '#ccc' }}>{t('proberesults.noData')}</span>;
+        if (!cell?.v4 && !cell?.v6) return <span style={{ color: 'var(--ant-color-text-quaternary)', fontSize: 12 }}>{t('proberesults.noData')}</span>;
         const hasBoth = !!(cell.v4 && cell.v6);
         const srcName = row.hostname || row.agent_id;
         const dstName = col.hostname || col.agent_id;
@@ -249,31 +285,48 @@ const TabMeshPingMatrix: React.FC = () => {
     },
   ];
 
+  const legend: { label: string; fg: string; bg: string }[] = [
+    { label: '< 60ms',       fg: token.colorSuccess, bg: token.colorSuccessBg },
+    { label: '< 120ms',      fg: TEAL,               bg: TEAL_BG },
+    { label: '< 180ms',      fg: token.colorWarning, bg: token.colorWarningBg },
+    { label: '≥ 180 / fail', fg: token.colorError,   bg: token.colorErrorBg },
+  ];
+
   return (
     <div>
-      <Space style={{ marginBottom: 16 }} wrap>
-        <Select
-          allowClear placeholder={t('agent.list.group')} style={{ width: 160 }}
-          value={groupId} onChange={setGroupId}
-          options={groups.map(g => ({ value: g.id, label: g.name }))}
-        />
-        <Input
-          prefix={<SearchOutlined />}
-          placeholder={t('proberesults.search')}
-          value={search} onChange={e => setSearch(e.target.value)} allowClear style={{ width: 260 }}
-        />
-        <Select
-          mode="multiple"
-          allowClear
-          placeholder={t('proberesults.filterTargets')}
-          style={{ minWidth: 220 }}
-          value={selectedTargets}
-          onChange={setSelectedTargets}
-          maxTagCount="responsive"
-          options={agents.map(a => ({ value: a.agent_id, label: a.hostname || a.agent_id }))}
-        />
-        <Button icon={<ReloadOutlined />} onClick={() => { void loadData(); }} loading={loading}>{t('common.refresh')}</Button>
-      </Space>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
+        <Space wrap>
+          <Select
+            allowClear placeholder={t('agent.list.group')} style={{ width: 160 }}
+            value={groupId} onChange={setGroupId}
+            options={groups.map(g => ({ value: g.id, label: g.name }))}
+          />
+          <Input
+            prefix={<SearchOutlined />}
+            placeholder={t('proberesults.search')}
+            value={search} onChange={e => setSearch(e.target.value)} allowClear style={{ width: 260 }}
+          />
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder={t('proberesults.filterTargets')}
+            style={{ minWidth: 220 }}
+            value={selectedTargets}
+            onChange={setSelectedTargets}
+            maxTagCount="responsive"
+            options={agents.map(a => ({ value: a.agent_id, label: a.hostname || a.agent_id }))}
+          />
+          <Button icon={<ReloadOutlined />} onClick={() => { void loadData(); }} loading={loading}>{t('common.refresh')}</Button>
+        </Space>
+        <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+          {legend.map(l => (
+            <span key={l.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--ant-color-text-secondary)' }}>
+              <span style={{ width: 11, height: 11, borderRadius: 3, background: l.bg, border: `1px solid ${l.fg}` }} />
+              {l.label}
+            </span>
+          ))}
+        </div>
+      </div>
       <Table
         columns={columns}
         dataSource={agents}
@@ -281,6 +334,7 @@ const TabMeshPingMatrix: React.FC = () => {
         loading={loading}
         pagination={false}
         scroll={{ x: 'max-content' }}
+        sticky
         bordered
       />
 

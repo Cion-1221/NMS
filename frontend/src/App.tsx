@@ -1,13 +1,17 @@
-import React, { useEffect } from 'react';
+import React, { Suspense, useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
-import { ConfigProvider, Spin, theme as antdTheme } from 'antd';
+import { ConfigProvider, Spin } from 'antd';
 import enUS from 'antd/locale/en_US';
 import zhCN from 'antd/locale/zh_CN';
 
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AppProvider, useAppContext } from './contexts/AppContext';
+import { buildTheme } from './theme/theme';
 import { MainLayout } from './layouts/MainLayout';
 import LoginPage from './pages/Login';
+// Dashboard pulls in @ant-design/charts (g2, heavy) — lazy-load so login and the
+// other routes don't carry that chunk.
+const Dashboard = React.lazy(() => import('./pages/Dashboard'));
 import IPAMPage from './pages/IPAM';
 import DevicesPage from './pages/Devices';
 import AgentPage from './pages/Agent';
@@ -28,7 +32,7 @@ const ThemedShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   return (
     <ConfigProvider
-      theme={{ algorithm: resolvedTheme === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm }}
+      theme={buildTheme(resolvedTheme)}
       locale={language === 'zh' ? zhCN : enUS}
     >
       {children}
@@ -61,8 +65,10 @@ const AppRouter: React.FC = () => {
 
   return (
     <MainLayout>
+      <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', padding: 80 }}><Spin size="large" /></div>}>
       <Routes>
-        <Route path="/"             element={<Navigate to="/ipam" replace />} />
+        <Route path="/"             element={<Navigate to="/dashboard" replace />} />
+        <Route path="/dashboard"    element={<Dashboard />} />
         <Route path="/ipam"         element={<IPAMPage />} />
         <Route path="/devices"      element={<DevicesPage />} />
         <Route path="/probe-results" element={<ProbeResultsPage />} />
@@ -74,9 +80,10 @@ const AppRouter: React.FC = () => {
             <Route path="/system/settings" element={<SystemSettingsPage />} />
           </>
         )}
-        <Route path="/system/*" element={<Navigate to="/ipam" replace />} />
-        <Route path="*"         element={<Navigate to="/ipam" replace />} />
+        <Route path="/system/*" element={<Navigate to="/dashboard" replace />} />
+        <Route path="*"         element={<Navigate to="/dashboard" replace />} />
       </Routes>
+      </Suspense>
     </MainLayout>
   );
 };

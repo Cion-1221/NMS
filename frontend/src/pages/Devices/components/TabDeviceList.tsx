@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, Button, Form, Input, Modal, Select, Space, Table, Tag, Tooltip, message,
+  Alert, Button, Form, Input, Modal, Select, Space, Table, Tooltip, message,
 } from 'antd';
 import {
   ExclamationCircleFilled, PlusOutlined, ReloadOutlined, SearchOutlined,
@@ -14,16 +14,15 @@ import type { Device, DeviceSite, DevicePoP, DeviceRole, DeviceVendor } from '..
 import type { TranslationKey } from '../../../i18n/translations';
 import { useT } from '../../../i18n';
 import { useDebounced } from '../../../utils/useDebounced';
+import StatusTag from '../../../components/StatusTag';
+import { FONT_MONO } from '../../../theme/theme';
 
 const { confirm } = Modal;
 
-// ── Status config ─────────────────────────────────────────────────────────────
-const STATUS_COLOR: Record<string, string> = {
-  active:      'green',
-  offline:     'red',
-  maintenance: 'orange',
-  planned:     'blue',
-};
+// IPs / IDs render in the mono stack against a dimmed colour (Direction A).
+const mono = (v: React.ReactNode) => (
+  <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span>
+);
 
 const STATUS_VALUES = ['active', 'offline', 'maintenance', 'planned'] as const;
 
@@ -342,23 +341,22 @@ const TabDeviceList: React.FC = () => {
 
   // ── Columns ───────────────────────────────────────────────────────────────────
   const columns: ColumnsType<Device> = [
-    { title: t('common.id'),       dataIndex: 'id',       key: 'id',  width: 60 },
-    { title: t('device.hostname'), dataIndex: 'hostname', key: 'hostname', width: 180 },
+    { title: t('common.id'),       dataIndex: 'id',       key: 'id',  width: 60, render: (v: number) => mono(v) },
+    {
+      title: t('device.hostname'), dataIndex: 'hostname', key: 'hostname', width: 180,
+      render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span>,
+    },
     {
       title: t('device.mgmtIp'), dataIndex: 'management_ip', key: 'management_ip', width: 140,
-      render: (v: string | null) => v || '—',
+      render: (v: string | null) => (v ? mono(v) : '—'),
     },
     {
       title: t('device.mgmtIpV6'), dataIndex: 'management_ipv6', key: 'management_ipv6', width: 200,
-      render: (v: string | null) => v || '—',
+      render: (v: string | null) => (v ? mono(v) : '—'),
     },
     {
       title: t('device.status'), dataIndex: 'status', key: 'status', width: 120,
-      render: (v: string) => (
-        <Tag color={STATUS_COLOR[v] ?? 'default'}>
-          {t(`device.status.${v}` as TranslationKey) ?? v}
-        </Tag>
-      ),
+      render: (v: string) => <StatusTag status={v} label={t(`device.status.${v}` as TranslationKey)} />,
     },
     { title: t('device.site'),   key: 'site',   width: 120, render: (_, r) => r.site?.name   ?? '—' },
     { title: t('device.pop'),    key: 'pop',    width: 120, render: (_, r) => r.pop?.name    ?? '—' },

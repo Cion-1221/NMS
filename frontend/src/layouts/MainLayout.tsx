@@ -1,150 +1,175 @@
+/**
+ * MainLayout — re-skinned app shell (Direction A "Clarity").
+ *
+ * KEEPS the original behavior: admin-gated nav, react-router navigate,
+ * ProfileModal, logout. CHANGES: airy surface-colored sidebar with grouped
+ * captions + pill active state, brand lockup, status footer, and a richer
+ * topbar (search affordance, theme toggle, notifications, user menu).
+ *
+ * Nav IA note: the prototype flattens to ONE leaf per domain (each page already
+ * has its own Tabs for Sites/Roles/VRF/etc.), with the old parent menus becoming
+ * non-clickable group captions. Routes are unchanged. The System domain keeps its
+ * three real routes (Users / Groups / Security) as leaves under one caption so
+ * nothing is orphaned.
+ */
 import React, { useState } from 'react';
-import { Avatar, Dropdown, Layout, Menu, Space, Typography } from 'antd';
+import { Avatar, Badge, Dropdown, Input, Layout, Menu, Tooltip, Typography } from 'antd';
 import {
-  ClusterOutlined,
-  CloudServerOutlined,
-  DesktopOutlined,
-  LogoutOutlined,
-  SafetyCertificateOutlined,
-  SettingOutlined,
-  TeamOutlined,
-  UserOutlined,
+  AppstoreOutlined, BellOutlined, BulbOutlined, CloudServerOutlined, DesktopOutlined,
+  LogoutOutlined, MoonOutlined, RadarChartOutlined, SafetyCertificateOutlined, SearchOutlined,
+  ShareAltOutlined, TeamOutlined, UserOutlined,
 } from '@ant-design/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useAppContext } from '../contexts/AppContext';
+import { updateProfile } from '../api/auth';
 import { useT } from '../i18n';
 import ProfileModal from '../components/ProfileModal';
 
-const { Header, Content, Footer, Sider } = Layout;
+const { Header, Content, Sider } = Layout;
 const { Text } = Typography;
 
 export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
+  const { resolvedTheme, setTheme } = useAppContext();
   const t = useT();
   const [profileOpen, setProfileOpen] = useState(false);
 
   const currentPath = location.pathname;
-  const defaultOpen = currentPath.startsWith('/system')
-    ? ['system']
-    : currentPath.startsWith('/devices')
-      ? ['devices']
-      : currentPath.startsWith('/agents') || currentPath.startsWith('/probe-results')
-        ? ['agent_system']
-        : ['network_services'];
 
-  const sidebarItems = [
+  // Quick light/dark toggle. Persist to the server too (fire-and-forget) so the
+  // choice is durable on next login — otherwise AppContext would re-sync from the
+  // stale server `user.theme`. System mode stays available via the profile modal.
+  const toggleTheme = () => {
+    const next = resolvedTheme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    updateProfile({ theme: next }).catch(() => {});
+  };
+
+  // Flattened, grouped nav. type:'group' renders a non-clickable caption.
+  const items = [
+    { key: '/dashboard', icon: <AppstoreOutlined />, label: t('nav.overview') },
     {
-      key:      'network_services',
-      icon:     <ClusterOutlined />,
-      label:    t('nav.networkServices'),
-      children: [{ key: '/ipam', label: t('nav.ipam') }],
-    },
-    {
-      key:      'devices',
-      icon:     <DesktopOutlined />,
-      label:    t('nav.devices'),
-      children: [{ key: '/devices', label: t('nav.deviceList') }],
-    },
-    {
-      key:      'agent_system',
-      icon:     <CloudServerOutlined />,
-      label:    t('nav.agent'),
-      // Agent 管理（注册码/证书等安全凭证）仅管理员可见；Probe Results 监控数据任何
-      // 已登录用户可查看——与后端 RegisterAgentAdminRoutes / RegisterProbeResultsRoutes
-      // 的权限划分保持一致。
+      type: 'group' as const, label: t('nav.infrastructure'),
       children: [
-        ...(user?.is_admin ? [{ key: '/agents', label: t('nav.agentManagement') }] : []),
-        { key: '/probe-results', label: t('nav.probeResults') },
+        { key: '/devices', icon: <DesktopOutlined />, label: t('nav.devices') },
+        { key: '/ipam', icon: <ShareAltOutlined />, label: t('nav.ipam') },
+      ],
+    },
+    {
+      type: 'group' as const, label: t('nav.monitoring'),
+      children: [
+        ...(user?.is_admin ? [{ key: '/agents', icon: <CloudServerOutlined />, label: t('nav.agentManagement') }] : []),
+        { key: '/probe-results', icon: <RadarChartOutlined />, label: t('nav.probeResults') },
       ],
     },
     ...(user?.is_admin
       ? [{
-          key:      'system',
-          icon:     <SettingOutlined />,
-          label:    t('nav.system'),
+          type: 'group' as const, label: t('nav.administration'),
           children: [
-            { key: '/system/users',    icon: <UserOutlined />,              label: t('nav.users') },
-            { key: '/system/groups',   icon: <TeamOutlined />,              label: t('nav.groups') },
+            { key: '/system/users', icon: <TeamOutlined />, label: t('nav.users') },
+            { key: '/system/groups', icon: <UserOutlined />, label: t('nav.groups') },
             { key: '/system/settings', icon: <SafetyCertificateOutlined />, label: t('nav.settings') },
           ],
         }]
       : []),
   ];
 
-  const dropdownItems = [
-    {
-      key:     'profile',
-      icon:    <UserOutlined />,
-      label:   t('profile.title'),
-      onClick: () => setProfileOpen(true),
-    },
+  const userMenu = [
+    { key: 'profile', icon: <UserOutlined />, label: t('profile.title'), onClick: () => setProfileOpen(true) },
     { type: 'divider' as const },
-    {
-      key:     'logout',
-      icon:    <LogoutOutlined />,
-      label:   t('auth.logout'),
-      danger:  true,
-      onClick: () => logout(),
-    },
+    { key: 'logout', icon: <LogoutOutlined />, label: t('auth.logout'), danger: true, onClick: () => logout() },
   ];
 
   return (
     <>
       <Layout style={{ minHeight: '100vh' }}>
-        <Sider width={220} theme="dark">
-          <div
-            style={{
-              height: 40, margin: '12px 16px', borderRadius: 6,
-              background: 'rgba(255,255,255,0.12)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: '#fff', fontWeight: 700, fontSize: 15, letterSpacing: 1,
-            }}
-          >
-            {t('nav.brand')}
+        <Sider
+          width={258}
+          theme="light"
+          style={{
+            borderRight: '1px solid var(--ant-color-border-secondary)',
+            padding: '18px 14px',
+            position: 'sticky', top: 0, height: '100vh',
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+            {/* brand */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '6px 8px 20px' }}>
+              <div style={{
+                width: 38, height: 38, borderRadius: 11, display: 'flex', alignItems: 'center',
+                justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: 19,
+                background: 'linear-gradient(150deg,#3b82f6,#1e40af)',
+                boxShadow: '0 4px 12px -3px rgba(37,99,235,.6)',
+              }}>C</div>
+              <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.05 }}>
+                <span style={{ fontSize: 15.5, fontWeight: 800, letterSpacing: '-.01em', color: 'var(--ant-color-text)' }}>CION</span>
+                <span style={{ fontSize: 9.5, fontWeight: 600, letterSpacing: '.3em', color: 'var(--ant-color-text-tertiary)' }}>NMS</span>
+              </div>
+            </div>
+
+            <Menu
+              mode="inline"
+              selectedKeys={[currentPath]}
+              items={items}
+              onSelect={({ key }) => navigate(key)}
+              style={{ border: 'none', background: 'transparent', flex: 1, overflowY: 'auto' }}
+            />
+
+            {/* status footer */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '12px 10px 4px',
+              fontSize: 12, color: 'var(--ant-color-text-secondary)',
+            }}>
+              <span style={{
+                width: 8, height: 8, borderRadius: '50%', background: 'var(--ant-color-success)',
+                animation: 'cionPulse 2s infinite',
+              }} />
+              {t('common.allSystemsOk')}
+            </div>
           </div>
-          <Menu
-            theme="dark"
-            mode="inline"
-            selectedKeys={[currentPath]}
-            defaultOpenKeys={defaultOpen}
-            items={sidebarItems}
-            onSelect={({ key }) => navigate(key)}
-          />
         </Sider>
 
         <Layout>
-          <Header
-            style={{
-              background: 'inherit',
-              padding: '0 24px',
-              boxShadow: '0 1px 4px rgba(0,0,0,.08)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'flex-end',
-            }}
-          >
-            <Dropdown menu={{ items: dropdownItems }} placement="bottomRight" trigger={['click']}>
-              <Space style={{ cursor: 'pointer', userSelect: 'none' }}>
-                <Avatar size="small" icon={<UserOutlined />} style={{ background: '#1677ff' }} />
-                <Text style={{ fontSize: 14 }}>{user?.username}</Text>
-                {user?.is_admin && (
-                  <Text type="secondary" style={{ fontSize: 12 }}>{t('auth.admin')}</Text>
-                )}
-              </Space>
+          <Header style={{ display: 'flex', alignItems: 'center', gap: 16, borderBottom: '1px solid var(--ant-color-border-secondary)' }}>
+            <div style={{ flex: 1 }} />
+            <Input
+              prefix={<SearchOutlined style={{ color: 'var(--ant-color-text-tertiary)' }} />}
+              suffix={<span style={{ fontSize: 11, color: 'var(--ant-color-text-tertiary)', fontFamily: 'var(--cion-mono)' }}>⌘K</span>}
+              placeholder={t('common.searchPlaceholder')}
+              variant="filled"
+              style={{ maxWidth: 260 }}
+            />
+            <Tooltip title={t('common.theme')}>
+              <span onClick={toggleTheme} style={iconBtn}>
+                {resolvedTheme === 'dark' ? <BulbOutlined /> : <MoonOutlined />}
+              </span>
+            </Tooltip>
+            <Badge dot color="#dc2626" offset={[-4, 4]}>
+              <span style={iconBtn}><BellOutlined /></span>
+            </Badge>
+
+            <Dropdown menu={{ items: userMenu }} placement="bottomRight" trigger={['click']}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '4px 6px', borderRadius: 10 }}>
+                <Avatar size={34} style={{ background: 'linear-gradient(135deg,#2563eb,#1e40af)', fontWeight: 700 }}>
+                  {user?.username?.slice(0, 2).toUpperCase()}
+                </Avatar>
+                <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25 }}>
+                  <Text style={{ fontSize: 13, fontWeight: 600 }}>{user?.username}</Text>
+                  {user?.is_admin && <Text type="secondary" style={{ fontSize: 11 }}>{t('auth.admin')}</Text>}
+                </div>
+              </div>
             </Dropdown>
           </Header>
 
-          <Content style={{ margin: 16 }}>
-            <div style={{ padding: 24, minHeight: 360, borderRadius: 8 }}>
+          <Content style={{ overflowY: 'auto' }}>
+            {/* key=path re-triggers the subtle enter animation on each navigation */}
+            <div key={currentPath} className="cion-page" style={{ padding: 30, maxWidth: 1480, margin: '0 auto' }}>
               {children}
             </div>
           </Content>
-          <Footer style={{ textAlign: 'center', padding: '12px 24px', fontSize: 13, color: '#888' }}>
-            Copyright© 2026{' '}
-            <a href="https://github.com/Cion-1221/NMS" target="_blank" rel="noopener noreferrer">CION</a>
-          </Footer>
         </Layout>
       </Layout>
 
@@ -152,3 +177,11 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     </>
   );
 };
+
+const iconBtn: React.CSSProperties = {
+  width: 38, height: 38, borderRadius: 10, border: '1px solid var(--ant-color-border)',
+  background: 'var(--ant-color-bg-container)', color: 'var(--ant-color-text-secondary)',
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+};
+
+export default MainLayout;

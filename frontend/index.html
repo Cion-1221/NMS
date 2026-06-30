@@ -4,6 +4,29 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CION NMS</title>
+
+  <!-- Fonts: Plus Jakarta Sans (UI) + IBM Plex Mono (IPs / IDs / metrics) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+    :root { --cion-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace; }
+
+    html, body, #root { height: 100%; }
+    body { margin: 0; font-family: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+
+    /* Pulsing "live" dot (online agents, etc.) */
+    @keyframes cionPulse { 0%, 100% { opacity: 1 } 50% { opacity: .4 } }
+
+    /* Page enter: subtle slide-up. Base opacity stays 1 so print/export
+       (where the animation clock is frozen) is never left blank. */
+    @keyframes cionEnter { from { transform: translateY(8px) } to { transform: none } }
+    .cion-page { animation: cionEnter .4s cubic-bezier(.22, 1, .36, 1) both; }
+
+    /* Login brand panel collapses on narrow viewports → form centers. */
+    @media (max-width: 900px) { .cion-login-brand { display: none !important; } }
+  </style>
 </head>
 <body>
   <div id="root"></div>

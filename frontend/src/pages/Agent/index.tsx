@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Tabs } from 'antd';
 import { useT } from '../../i18n';
+import PageHeader from '../../components/PageHeader';
 import TabAgentList   from './components/TabAgentList';
 import TabGroups      from './components/TabGroups';
 import TabProbeConfig from './components/TabProbeConfig';
@@ -19,7 +20,7 @@ const AgentPage: React.FC = () => {
 
   return (
     <div>
-      <h2 style={{ marginBottom: 24, fontWeight: 700 }}>{t('agent.title')}</h2>
+      <PageHeader title={t('agent.title')} subtitle={t('agent.subtitle')} />
       <Tabs
         activeKey={activeKey}
         onChange={handleTabChange}

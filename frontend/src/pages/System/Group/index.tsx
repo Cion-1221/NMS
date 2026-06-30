@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Badge, Button, Form, Input, message, Modal, Space, Switch, Table, Tag, Typography,
+  Button, Form, Input, message, Modal, Space, Switch, Table,
 } from 'antd';
 import { ExclamationCircleFilled, PlusOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { listGroups, createGroup, updateGroup, deleteGroup } from '../../../api/system';
 import { SysGroup } from '../../../types/system';
 import { useT } from '../../../i18n';
+import PageHeader from '../../../components/PageHeader';
+import StatusTag from '../../../components/StatusTag';
+import { FONT_MONO } from '../../../theme/theme';
 
 const { confirm } = Modal;
 
@@ -91,14 +94,14 @@ const SystemGroupPage: React.FC = () => {
   };
 
   const columns: ColumnsType<SysGroup> = [
-    { title: t('common.id'),       dataIndex: 'id',   key: 'id',   width: 60 },
+    { title: t('common.id'),       dataIndex: 'id',   key: 'id',   width: 60, render: (v: number) => <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span> },
     { title: t('sys.group.name'),  dataIndex: 'name', key: 'name', render: (v) => <strong>{v}</strong> },
     {
       title:  t('sys.group.level'),
       key:    'level',
       render: (_, g) => isAdmin(g)
-        ? <Badge status="error"   text={<Tag color="red">{t('sys.group.admin')}</Tag>} />
-        : <Badge status="default" text={<Tag>{t('sys.group.regular')}</Tag>} />,
+        ? <StatusTag status="planned" tone="accent" label={t('sys.group.admin')} />
+        : <StatusTag status="unknown" tone="neutral" label={t('sys.group.regular')} />,
     },
     {
       title:  t('common.actions'),
@@ -126,12 +129,15 @@ const SystemGroupPage: React.FC = () => {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>{t('sys.group.title')}</Typography.Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-          {t('sys.group.create')}
-        </Button>
-      </div>
+      <PageHeader
+        title={t('sys.group.title')}
+        subtitle={t('sys.group.subtitle')}
+        actions={
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+            {t('sys.group.create')}
+          </Button>
+        }
+      />
 
       <Table columns={columns} dataSource={groups} rowKey="id" loading={loading} pagination={{ pageSize: 10 }} />
 

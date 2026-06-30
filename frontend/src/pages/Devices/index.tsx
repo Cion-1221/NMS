@@ -1,13 +1,12 @@
 import React, { useState } from 'react';
-import { Tabs, Typography } from 'antd';
+import { Tabs } from 'antd';
 import { useT } from '../../i18n';
+import PageHeader from '../../components/PageHeader';
 import TabDeviceList from './components/TabDeviceList';
 import TabSites from './components/TabSites';
 import TabRoles from './components/TabRoles';
 import TabVendors from './components/TabVendors';
 import TabDeviceAuditLog from './components/TabDeviceAuditLog';
-
-const { Title } = Typography;
 
 const DevicesPage: React.FC = () => {
   const t = useT();
@@ -51,7 +50,7 @@ const DevicesPage: React.FC = () => {
 
   return (
     <div>
-      <Title level={4} style={{ marginBottom: 16 }}>{t('device.title')}</Title>
+      <PageHeader title={t('device.title')} subtitle={t('device.subtitle')} />
       <Tabs
         activeKey={activeKey}
         onChange={handleTabChange}

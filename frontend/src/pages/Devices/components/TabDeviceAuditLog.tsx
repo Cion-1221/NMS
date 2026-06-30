@@ -5,6 +5,11 @@ import type { ColumnsType } from 'antd/es/table';
 import { getDeviceAuditLogs, purgeDeviceAuditLogs } from '../../../api/device';
 import type { DeviceAuditLog } from '../../../types/device';
 import { useT } from '../../../i18n';
+import { FONT_MONO } from '../../../theme/theme';
+
+const mono = (v: React.ReactNode) => (
+  <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span>
+);
 
 const ACTION_COLOR: Record<string, string> = {
   create_device: 'green',  update_device: 'blue',   delete_device: 'red',
@@ -97,7 +102,7 @@ const TabDeviceAuditLog: React.FC = () => {
   const columns: ColumnsType<DeviceAuditLog> = [
     {
       title: t('device.audit.time'), dataIndex: 'created_at', key: 'created_at', width: 170,
-      render: (v: string) => new Date(v).toLocaleString(),
+      render: (v: string) => mono(new Date(v).toLocaleString()),
     },
     {
       title: t('device.audit.operator'), dataIndex: 'username', key: 'username', width: 120,
@@ -112,7 +117,7 @@ const TabDeviceAuditLog: React.FC = () => {
     },
     {
       title: t('device.audit.resourceId'), dataIndex: 'resource_id', key: 'resource_id', width: 70,
-      render: (v) => v ?? '—',
+      render: (v) => (v != null ? mono(v) : '—'),
     },
     {
       title: t('device.audit.detail'), dataIndex: 'detail', key: 'detail', ellipsis: true,

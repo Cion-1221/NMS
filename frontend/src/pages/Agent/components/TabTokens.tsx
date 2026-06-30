@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Card, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Statistic, Table, Tag, Typography, message } from 'antd';
+import { Button, Card, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Statistic, Table, Typography, message } from 'antd';
 import { CopyOutlined, EyeOutlined, PlusOutlined, ReloadOutlined, StopOutlined, SyncOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -8,6 +8,12 @@ import {
 } from '../../../api/agent';
 import type { AgentToken, AgentGroup, PKIStatus } from '../../../types/agent';
 import { useT } from '../../../i18n';
+import StatusTag from '../../../components/StatusTag';
+import { FONT_MONO } from '../../../theme/theme';
+
+const mono = (v: React.ReactNode) => (
+  <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span>
+);
 
 const { Countdown } = Statistic;
 const { Text, Paragraph } = Typography;
@@ -161,25 +167,25 @@ const TabTokens: React.FC = () => {
   };
 
   const statusTag = (r: AgentToken) => {
-    if (r.status === 'used') return <Tag color="blue">{t('agent.token.used')}</Tag>;
-    if (r.status === 'revoked') return <Tag color="default">{t('agent.token.revokedStatus')}</Tag>;
-    if (new Date(r.expires_at).getTime() < Date.now()) return <Tag color="default">{t('agent.token.expired')}</Tag>;
-    return <Tag color="green">{t('agent.token.unused')}</Tag>;
+    if (r.status === 'used') return <StatusTag status="used" tone="accent" label={t('agent.token.used')} />;
+    if (r.status === 'revoked') return <StatusTag status="revoked" tone="neutral" label={t('agent.token.revokedStatus')} />;
+    if (new Date(r.expires_at).getTime() < Date.now()) return <StatusTag status="expired" tone="neutral" label={t('agent.token.expired')} />;
+    return <StatusTag status="unused" tone="success" label={t('agent.token.unused')} />;
   };
 
   const columns: ColumnsType<AgentToken> = [
-    { title: t('common.id'), dataIndex: 'id', key: 'id', width: 70 },
+    { title: t('common.id'), dataIndex: 'id', key: 'id', width: 70, render: (v: number) => mono(v) },
     { title: t('agent.list.group'), key: 'group', width: 120, render: (_: unknown, r: AgentToken) => r.preset_group?.name ?? '—' },
     { title: t('common.status'), key: 'status', width: 100, render: (_: unknown, r: AgentToken) => statusTag(r) },
     {
       title: t('agent.token.expiresAt'), dataIndex: 'expires_at', key: 'expires_at', width: 220,
       render: (v: string, r: AgentToken) => (
         r.status === 'unused' && new Date(v).getTime() > Date.now()
-          ? <Countdown value={new Date(v).getTime()} format="HH:mm:ss" valueStyle={{ fontSize: 14 }} />
-          : new Date(v).toLocaleString()
+          ? <Countdown value={new Date(v).getTime()} format="HH:mm:ss" valueStyle={{ fontSize: 14, fontFamily: FONT_MONO }} />
+          : mono(new Date(v).toLocaleString())
       ),
     },
-    { title: t('agent.token.usedBy'), dataIndex: 'used_by_agent_id', key: 'used_by_agent_id', width: 140, render: (v: string | null) => v || '—' },
+    { title: t('agent.token.usedBy'), dataIndex: 'used_by_agent_id', key: 'used_by_agent_id', width: 140, render: (v: string | null) => (v ? mono(v) : '—') },
     { title: t('agent.token.createdBy'), dataIndex: 'created_by', key: 'created_by', width: 120 },
     {
       title: t('common.actions'), key: 'action', width: 100, fixed: 'right' as const,
@@ -206,12 +212,12 @@ const TabTokens: React.FC = () => {
         {caStatus ? (
           <Descriptions size="small" column={2}>
             <Descriptions.Item label={t('agent.ca.activeExpiry')}>
-              {new Date(caStatus.active_ca_expiry).toLocaleString()}
+              {mono(new Date(caStatus.active_ca_expiry).toLocaleString())}
             </Descriptions.Item>
             <Descriptions.Item label={t('agent.ca.pendingRotation')}>
               {caStatus.has_pending_previous
-                ? <Tag color="orange">{t('agent.ca.pending')}</Tag>
-                : <Tag color="green">{t('agent.ca.none')}</Tag>}
+                ? <StatusTag status="warn" label={t('agent.ca.pending')} />
+                : <StatusTag status="ok" label={t('agent.ca.none')} />}
             </Descriptions.Item>
           </Descriptions>
         ) : <Text type="secondary">{t('common.loading')}</Text>}

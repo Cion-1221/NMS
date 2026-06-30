@@ -9,6 +9,12 @@ import {
 } from '../../../api/agent';
 import type { AgentRelease, AgentReleaseProgress, AgentReleaseProgressItem } from '../../../types/agent';
 import { useT } from '../../../i18n';
+import StatusTag from '../../../components/StatusTag';
+import { FONT_MONO } from '../../../theme/theme';
+
+const mono = (v: React.ReactNode) => (
+  <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span>
+);
 
 const { confirm } = Modal;
 const { Dragger } = Upload;
@@ -148,23 +154,23 @@ const TabReleases: React.FC = () => {
   };
 
   const columns: ColumnsType<AgentRelease> = [
-    { title: t('agent.release.version'), dataIndex: 'version', key: 'version', width: 110 },
-    { title: t('agent.release.os'),      dataIndex: 'os',      key: 'os',      width: 90 },
-    { title: t('agent.release.arch'),    dataIndex: 'arch',    key: 'arch',    width: 90 },
+    { title: t('agent.release.version'), dataIndex: 'version', key: 'version', width: 110, render: (v: string) => <span style={{ fontFamily: FONT_MONO, fontWeight: 600 }}>{v}</span> },
+    { title: t('agent.release.os'),      dataIndex: 'os',      key: 'os',      width: 90, render: (v: string) => mono(v) },
+    { title: t('agent.release.arch'),    dataIndex: 'arch',    key: 'arch',    width: 90, render: (v: string) => mono(v) },
     {
       title: t('agent.release.active'), dataIndex: 'active', key: 'active', width: 100,
       render: (v: boolean) => v
-        ? <Tag color="green">{t('agent.release.active')}</Tag>
-        : <span style={{ color: '#aaa' }}>—</span>,
+        ? <StatusTag status="active" label={t('agent.release.active')} />
+        : <span style={{ color: 'var(--ant-color-text-tertiary)' }}>—</span>,
     },
     {
       title: t('agent.release.fileSize'), dataIndex: 'file_size', key: 'file_size', width: 110,
-      render: (v: number) => fmtSize(v),
+      render: (v: number) => mono(fmtSize(v)),
     },
     {
       title: t('agent.release.sha256'), dataIndex: 'sha256', key: 'sha256', width: 130,
       render: (v: string) => v
-        ? <Tooltip title={v}><code style={{ fontSize: 11 }}>{v.slice(0, 12)}…</code></Tooltip>
+        ? <Tooltip title={v}><code style={{ fontFamily: FONT_MONO, fontSize: 11, color: 'var(--ant-color-text-secondary)' }}>{v.slice(0, 12)}…</code></Tooltip>
         : '—',
     },
     { title: t('agent.release.notes'), dataIndex: 'notes', key: 'notes', render: (v: string) => v || '—' },
@@ -210,7 +216,7 @@ const TabReleases: React.FC = () => {
     },
     {
       title: t('agent.list.version'), dataIndex: 'current_version', key: 'current_version', width: 110,
-      render: (v: string) => v || <span style={{ color: '#aaa' }}>—</span>,
+      render: (v: string) => v ? mono(v) : <span style={{ color: 'var(--ant-color-text-tertiary)' }}>—</span>,
     },
     {
       title: t('agent.release.progress'), key: 'updated', width: 110,
@@ -220,11 +226,11 @@ const TabReleases: React.FC = () => {
     },
     {
       title: t('common.status'), dataIndex: 'status', key: 'status', width: 90,
-      render: (v: string) => <Tag color={v === 'online' ? 'green' : 'default'}>{v}</Tag>,
+      render: (v: string) => <StatusTag status={v} />,
     },
     {
       title: t('agent.list.lastSeen'), dataIndex: 'last_seen_at', key: 'last_seen_at',
-      render: (v: string | null) => v ? new Date(v).toLocaleString() : '—',
+      render: (v: string | null) => v ? mono(new Date(v).toLocaleString()) : '—',
     },
   ];
 

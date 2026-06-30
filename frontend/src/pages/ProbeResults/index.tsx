@@ -3,6 +3,7 @@ import { Button, Form, InputNumber, Modal, Tabs, message } from 'antd';
 import { DeleteOutlined } from '@ant-design/icons';
 import { useT } from '../../i18n';
 import { purgeProbeResults } from '../../api/agent';
+import PageHeader from '../../components/PageHeader';
 import TabGenericResults from './components/TabGenericResults';
 import TabMeshPingMatrix from './components/TabMeshPingMatrix';
 
@@ -51,10 +52,11 @@ const ProbeResultsPage: React.FC = () => {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 24, gap: 12 }}>
-        <h2 style={{ margin: 0, fontWeight: 700, flex: 1 }}>{t('proberesults.title')}</h2>
-        <Button danger icon={<DeleteOutlined />} onClick={openPurge}>{t('proberesults.purge')}</Button>
-      </div>
+      <PageHeader
+        title={t('proberesults.title')}
+        subtitle={t('proberesults.subtitle')}
+        actions={<Button danger icon={<DeleteOutlined />} onClick={openPurge}>{t('proberesults.purge')}</Button>}
+      />
       <Tabs
         activeKey={activeKey}
         onChange={handleTabChange}

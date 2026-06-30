@@ -7,6 +7,11 @@ import {
 } from '../../../api/agent';
 import type { AgentTask, AgentGroup, Agent, TaskType, TaskScope } from '../../../types/agent';
 import { useT } from '../../../i18n';
+import { FONT_MONO } from '../../../theme/theme';
+
+const mono = (v: React.ReactNode) => (
+  <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span>
+);
 
 const { confirm } = Modal;
 
@@ -124,9 +129,9 @@ const TabProbeConfig: React.FC = () => {
   };
 
   const columns: ColumnsType<AgentTask> = [
-    { title: t('common.id'), dataIndex: 'id', key: 'id', width: 60 },
-    { title: t('common.name'), dataIndex: 'name', key: 'name' },
-    { title: t('agent.task.type'), dataIndex: 'type', key: 'type', width: 110, render: (v: string) => <Tag>{v}</Tag> },
+    { title: t('common.id'), dataIndex: 'id', key: 'id', width: 60, render: (v: number) => mono(v) },
+    { title: t('common.name'), dataIndex: 'name', key: 'name', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
+    { title: t('agent.task.type'), dataIndex: 'type', key: 'type', width: 110, render: (v: string) => <Tag style={{ fontFamily: FONT_MONO }}>{v}</Tag> },
     {
       title: t('agent.task.scope'), key: 'scope', width: 180,
       render: (_: unknown, r: AgentTask) => {
@@ -137,11 +142,11 @@ const TabProbeConfig: React.FC = () => {
     },
     {
       title: t('agent.task.targets'), dataIndex: 'targets_raw', key: 'targets_raw', ellipsis: true,
-      render: (v: string, r: AgentTask) => (MESH_AUTO_TYPES.has(r.type) ? t('agent.task.meshAuto') : (v || '—')),
+      render: (v: string, r: AgentTask) => (MESH_AUTO_TYPES.has(r.type) ? t('agent.task.meshAuto') : (v ? mono(v) : '—')),
     },
     {
       title: t('agent.task.interval'), dataIndex: 'interval_seconds', key: 'interval_seconds', width: 100,
-      render: (v: number) => `${v}s`,
+      render: (v: number) => mono(`${v}s`),
     },
     {
       title: t('common.status'), key: 'enabled', width: 90,

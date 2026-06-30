@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Badge, Button, Form, Input, message, Modal, Select, Space, Table, Tag, Typography,
+  Avatar, Badge, Button, Form, Input, message, Modal, Select, Space, Table, Typography,
 } from 'antd';
 import { ExclamationCircleFilled, PlusOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
@@ -8,6 +8,8 @@ import { listUsers, createUser, updateUser, deleteUser, listGroups } from '../..
 import { SysUser, SysGroup } from '../../../types/system';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useT } from '../../../i18n';
+import PageHeader from '../../../components/PageHeader';
+import StatusTag from '../../../components/StatusTag';
 
 const { confirm } = Modal;
 const { Text }    = Typography;
@@ -100,18 +102,25 @@ const SystemUserPage: React.FC = () => {
       title:     t('sys.user.username'),
       dataIndex: 'username',
       key:       'username',
-      render:    (v, r) => r.id === me?.id
-        ? <><Text strong>{v}</Text> <Tag color="blue">{t('sys.user.current')}</Tag></>
-        : v,
+      render:    (v: string, r) => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Avatar size={30} style={{ background: 'linear-gradient(135deg,#2563eb,#1e40af)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}>
+            {v.slice(0, 2).toUpperCase()}
+          </Avatar>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Text strong>{v}</Text>
+            {r.id === me?.id && <StatusTag status="info" label={t('sys.user.current')} tone="accent" />}
+          </span>
+        </div>
+      ),
     },
     {
       title:  t('sys.user.group'),
       key:    'group',
-      render: (_,r) => (
-        <Tag color={r.group?.permissions?.includes('"admin"') ? 'red' : 'default'}>
-          {r.group?.name ?? '-'}
-        </Tag>
-      ),
+      render: (_, r) => {
+        const isAdmin = r.group?.permissions?.includes('"admin"');
+        return <StatusTag status={isAdmin ? 'planned' : 'unknown'} tone={isAdmin ? 'accent' : 'neutral'} label={r.group?.name ?? '—'} />;
+      },
     },
     {
       title:     t('sys.user.pwdStatus'),
@@ -142,12 +151,15 @@ const SystemUserPage: React.FC = () => {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>{t('sys.user.title')}</Typography.Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-          {t('sys.user.create')}
-        </Button>
-      </div>
+      <PageHeader
+        title={t('sys.user.title')}
+        subtitle={t('sys.user.subtitle')}
+        actions={
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+            {t('sys.user.create')}
+          </Button>
+        }
+      />
 
       <Table columns={columns} dataSource={users} rowKey="id" loading={loading} pagination={{ pageSize: 10 }} />
 

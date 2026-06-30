@@ -290,6 +290,8 @@ func main() {
 	// 无论 agent_pki.enabled 是否开启都注册，确保前端页面始终可用。
 	controllers.RegisterAgentAdminRoutes(r, db, authMW, releasesDir)
 	controllers.RegisterProbeResultsRoutes(r, db, authMW)
+	// NOC 看板聚合端点（任何已登录用户可访问，只读）
+	controllers.RegisterOverviewRoutes(r, db, authMW)
 	if pki != nil {
 		// CA 管理路由（ca-cert/status/rotate/finalize）和 mTLS 监听端口需要 PKI。
 		controllers.RegisterAgentPKIRoutes(r, db, pki, cfg.AgentPKI.CACertDays, authMW)

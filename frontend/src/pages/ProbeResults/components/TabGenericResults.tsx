@@ -1,11 +1,17 @@
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, message } from 'antd';
+import { Button, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tooltip, message } from 'antd';
 import { DeleteOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { getLatestProbeResults, getAgents, deleteProbeResultPair, lookupASN } from '../../../api/agent';
 import type { Agent, MtrHop, ProbeResult, TaskType } from '../../../types/agent';
 import { useT } from '../../../i18n';
 import { useDebounced } from '../../../utils/useDebounced';
+import StatusTag from '../../../components/StatusTag';
+import { FONT_MONO } from '../../../theme/theme';
+
+const mono = (v: React.ReactNode) => (
+  <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span>
+);
 
 interface Props {
   type: TaskType;
@@ -95,14 +101,14 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
         </Tooltip>
       ),
     },
-    { title: t('proberesults.target'), dataIndex: 'target', key: 'target' },
+    { title: t('proberesults.target'), dataIndex: 'target', key: 'target', render: (v: string) => mono(v) },
     {
       title: t('common.status'), dataIndex: 'success', key: 'success', width: 100,
-      render: (v: boolean) => <Tag color={v ? 'green' : 'red'}>{v ? t('proberesults.success') : t('proberesults.failed')}</Tag>,
+      render: (v: boolean) => <StatusTag status={v ? 'success' : 'failed'} label={v ? t('proberesults.success') : t('proberesults.failed')} />,
     },
     {
       title: t('proberesults.latency'), dataIndex: 'latency_ms', key: 'latency_ms', width: 110,
-      render: (v: number | null) => (v == null ? '—' : `${v.toFixed(1)} ms`),
+      render: (v: number | null) => (v == null ? '—' : mono(`${v.toFixed(1)} ms`)),
     },
     {
       title: t('proberesults.detail'), dataIndex: 'detail', key: 'detail',
@@ -125,7 +131,7 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
     },
     {
       title: t('proberesults.reportedAt'), dataIndex: 'reported_at', key: 'reported_at', width: 180,
-      render: (v: string) => new Date(v).toLocaleString(),
+      render: (v: string) => mono(new Date(v).toLocaleString()),
     },
     {
       title: t('common.actions'), key: 'action', width: 80, fixed: 'right' as const,

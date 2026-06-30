@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Card, Checkbox, Col, Form, Input, Modal, Row, Select, Space, Statistic, Table, Tag, Tooltip, message } from 'antd';
+import { Button, Checkbox, Col, Form, Input, Modal, Row, Select, Space, Table, theme, Tooltip, message } from 'antd';
 import { ExclamationCircleFilled, ReloadOutlined, SearchOutlined, StopOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { getAgents, getAgentSummary, updateAgent, deleteAgent, revokeAgent, getAgentGroups } from '../../../api/agent';
@@ -7,8 +7,15 @@ import type { Agent, AgentGroup, AgentSummary } from '../../../types/agent';
 import { useT } from '../../../i18n';
 import type { TranslationKey } from '../../../i18n/translations';
 import { useDebounced } from '../../../utils/useDebounced';
+import StatusTag from '../../../components/StatusTag';
+import StatTile from '../../../components/StatTile';
+import { FONT_MONO } from '../../../theme/theme';
 
 const { confirm } = Modal;
+
+const mono = (v: React.ReactNode) => (
+  <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span>
+);
 
 function splitSourceIP(raw: string | null | undefined): { ipv4: string; ipv6: string } {
   const parts = (raw ?? '').split('/').map(s => s.trim()).filter(Boolean);
@@ -26,6 +33,7 @@ function splitSourceIP(raw: string | null | undefined): { ipv4: string; ipv6: st
 
 const TabAgentList: React.FC = () => {
   const t = useT();
+  const { token } = theme.useToken();
   const [agents, setAgents]         = useState<Agent[]>([]);
   const [groups, setGroups]         = useState<AgentGroup[]>([]);
   const [summary, setSummary]       = useState<AgentSummary | null>(null);
@@ -178,34 +186,43 @@ const TabAgentList: React.FC = () => {
       render: (_: unknown, r: Agent) => {
         const v4 = r.connection_ipv4 || (r.connection_ip && !r.connection_ip.includes(':') ? r.connection_ip : '');
         const v6 = r.connection_ipv6 || (r.connection_ip && r.connection_ip.includes(':') ? r.connection_ip : '');
-        if (v4 && v6) return <span>{v4}<br /><span style={{ color: '#888', fontSize: 12 }}>{v6}</span></span>;
-        return <span>{v4 || v6 || '—'}</span>;
+        if (v4 && v6) return <span style={{ fontFamily: FONT_MONO }}>{v4}<br /><span style={{ color: 'var(--ant-color-text-tertiary)', fontSize: 12 }}>{v6}</span></span>;
+        return mono(v4 || v6 || '—');
       },
     },
     {
       title: t('agent.list.sourceIp'), key: 'source_ip_override', width: 170,
       render: (_: unknown, r: Agent) => {
         const { ipv4, ipv6 } = splitSourceIP(r.source_ip_override);
-        if (ipv4 && ipv6) return <span>{ipv4}<br /><span style={{ color: '#888', fontSize: 12 }}>{ipv6}</span></span>;
-        return <span>{ipv4 || ipv6 || '—'}</span>;
+        if (ipv4 && ipv6) return <span style={{ fontFamily: FONT_MONO }}>{ipv4}<br /><span style={{ color: 'var(--ant-color-text-tertiary)', fontSize: 12 }}>{ipv6}</span></span>;
+        return mono(ipv4 || ipv6 || '—');
       },
     },
-    { title: t('agent.list.version'), dataIndex: 'version', key: 'version', width: 110, render: (v: string | undefined) => v || '—' },
-    { title: t('agent.list.os'), dataIndex: 'os', key: 'os', width: 100, render: (v: string | undefined) => v || '—' },
-    { title: t('agent.list.arch'), dataIndex: 'arch', key: 'arch', width: 90, render: (v: string | undefined) => v || '—' },
+    { title: t('agent.list.version'), dataIndex: 'version', key: 'version', width: 110, render: (v: string | undefined) => (v ? mono(v) : '—') },
+    { title: t('agent.list.os'), dataIndex: 'os', key: 'os', width: 100, render: (v: string | undefined) => (v ? mono(v) : '—') },
+    { title: t('agent.list.arch'), dataIndex: 'arch', key: 'arch', width: 90, render: (v: string | undefined) => (v ? mono(v) : '—') },
     {
       title: t('common.status'), dataIndex: 'status', key: 'status', width: 110,
       render: (v: string, r: Agent) => r.revoked
-        ? <Tag color="red">{t('agent.list.revoked')}</Tag>
-        : <Tag color={v === 'online' ? 'green' : 'default'}>{v}</Tag>,
+        ? <StatusTag status="revoked" label={t('agent.list.revoked')} />
+        : <StatusTag status={v} />,
     },
     {
       title: t('agent.list.certExpiry'), dataIndex: 'cert_expiry', key: 'cert_expiry', width: 180,
-      render: (v: string) => new Date(v).toLocaleString(),
+      render: (v: string) => {
+        const d = new Date(v);
+        const days = (d.getTime() - Date.now()) / 86_400_000;
+        const danger = days <= 14;
+        return (
+          <span style={{ fontFamily: FONT_MONO, fontWeight: danger ? 700 : 400, color: danger ? token.colorError : 'var(--ant-color-text-secondary)' }}>
+            {d.toLocaleString()}
+          </span>
+        );
+      },
     },
     {
       title: t('agent.list.lastSeen'), dataIndex: 'last_seen_at', key: 'last_seen_at', width: 180,
-      render: (v: string | null) => (v ? new Date(v).toLocaleString() : '—'),
+      render: (v: string | null) => (v ? mono(new Date(v).toLocaleString()) : '—'),
     },
     {
       title: t('common.actions'), key: 'action', width: 220, fixed: 'right' as const,
@@ -224,23 +241,13 @@ const TabAgentList: React.FC = () => {
   return (
     <div>
       {summary && (
-        <Row gutter={16} style={{ marginBottom: 16 }}>
-          <Col span={4}><Card size="small"><Statistic title={t('agent.summary.total')} value={summary.total_agents} /></Card></Col>
-          <Col span={4}><Card size="small"><Statistic title={t('agent.summary.online')} value={summary.online_agents} valueStyle={{ color: '#3f8600' }} /></Card></Col>
-          <Col span={4}><Card size="small"><Statistic title={t('agent.summary.offline')} value={summary.offline_agents} /></Card></Col>
-          <Col span={4}><Card size="small"><Statistic title={t('agent.summary.revoked')} value={summary.revoked_agents} valueStyle={{ color: '#cf1322' }} /></Card></Col>
-          <Col span={4}><Card size="small"><Statistic title={t('agent.summary.probes1h')} value={summary.recent_probes_1h} /></Card></Col>
-          <Col span={4}>
-            <Card size="small">
-              <Statistic
-                title={t('agent.summary.failureRate1h')}
-                value={summary.recent_failure_rate_pct}
-                precision={1}
-                suffix="%"
-                valueStyle={{ color: summary.recent_failure_rate_pct > 10 ? '#cf1322' : undefined }}
-              />
-            </Card>
-          </Col>
+        <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+          <Col xs={12} md={8} xl={4}><StatTile label={t('agent.summary.total')} value={summary.total_agents} /></Col>
+          <Col xs={12} md={8} xl={4}><StatTile label={t('agent.summary.online')} value={summary.online_agents} valueColor={token.colorSuccess} live={summary.online_agents > 0} /></Col>
+          <Col xs={12} md={8} xl={4}><StatTile label={t('agent.summary.offline')} value={summary.offline_agents} valueColor={summary.offline_agents > 0 ? token.colorError : undefined} /></Col>
+          <Col xs={12} md={8} xl={4}><StatTile label={t('agent.summary.revoked')} value={summary.revoked_agents} /></Col>
+          <Col xs={12} md={8} xl={4}><StatTile label={t('agent.summary.probes1h')} value={summary.recent_probes_1h.toLocaleString()} /></Col>
+          <Col xs={12} md={8} xl={4}><StatTile label={t('agent.summary.failureRate1h')} value={`${summary.recent_failure_rate_pct.toFixed(1)}%`} valueColor={summary.recent_failure_rate_pct > 10 ? token.colorError : undefined} /></Col>
         </Row>
       )}
 

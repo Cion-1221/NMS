@@ -5,6 +5,11 @@ import type { ColumnsType } from 'antd/es/table';
 import { getAuditLogs, purgeAuditLogs } from '../../../api/ipam';
 import type { IPAMAuditLog } from '../../../types/ipam';
 import { useT } from '../../../i18n';
+import { FONT_MONO } from '../../../theme/theme';
+
+const mono = (v: React.ReactNode) => (
+  <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span>
+);
 
 const ACTION_COLOR: Record<string, string> = {
   create_root: 'green',  update_root: 'blue',   delete_root: 'red',
@@ -82,7 +87,7 @@ const TabAuditLog: React.FC = () => {
   const columns: ColumnsType<IPAMAuditLog> = [
     {
       title: t('ipam.audit.time'), dataIndex: 'created_at', key: 'created_at', width: 170,
-      render: (v: string) => new Date(v).toLocaleString(),
+      render: (v: string) => mono(new Date(v).toLocaleString()),
     },
     {
       title: t('ipam.audit.operator'), dataIndex: 'username', key: 'username', width: 120,
@@ -97,7 +102,7 @@ const TabAuditLog: React.FC = () => {
     },
     {
       title: t('ipam.audit.resourceId'), dataIndex: 'resource_id', key: 'resource_id', width: 80,
-      render: (v) => v ?? '—',
+      render: (v) => (v != null ? mono(v) : '—'),
     },
     {
       title: t('ipam.audit.detail'), dataIndex: 'detail', key: 'detail', ellipsis: true,

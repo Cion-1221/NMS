@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, Button, Form, Modal, Input, message, Select, Space, Table, Tag, Tooltip,
+  Alert, Button, Form, Modal, Input, message, Select, Space, Table, Tag, theme, Tooltip,
 } from 'antd';
 import { SearchOutlined } from '@ant-design/icons';
 import { AxiosError } from 'axios';
@@ -12,6 +12,7 @@ import {
 import type { RootPrefix, SubnetNode, IPAMGroup, IPAMType, IPAMVRF } from '../../../types/ipam';
 import { useT } from '../../../i18n';
 import { cidrMatchesSearch } from '../../../utils/cidr';
+import { FONT_MONO } from '../../../theme/theme';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -72,10 +73,32 @@ function filterTree(
   }, []);
 }
 
+/**
+ * Allocation of a node into its direct children, derived purely from CIDR math:
+ * Σ(child address space) / (node address space). Returns null for leaves (no
+ * children loaded yet → utilization unknown). A real per-address utilization would
+ * need a backend aggregate; this reflects how much of the block is carved out.
+ */
+function nodeUtilization(node: UINode): number | null {
+  const kids = node.children;
+  if (!kids || kids.length === 0) return null;
+  const maxBits = node.is_v4 ? 32 : 128;
+  const np = parseInt(node.cidr.split('/')[1] ?? '0', 10);
+  if (Number.isNaN(np)) return null;
+  let frac = 0;
+  for (const c of kids) {
+    const cp = parseInt(c.cidr.split('/')[1] ?? '0', 10);
+    if (Number.isNaN(cp) || cp < np || cp > maxBits) continue;
+    frac += Math.pow(2, np - cp);
+  }
+  return Math.min(100, frac * 100);
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 const TabSubnetTree: React.FC = () => {
   const t = useT();
+  const { token } = theme.useToken();
 
   const [roots, setRoots]       = useState<RootPrefix[]>([]);
   const [treeData, setTreeData] = useState<UINode[]>([]);
@@ -264,8 +287,9 @@ const TabSubnetTree: React.FC = () => {
   const columns: ColumnsType<UINode> = [
     {
       title: t('ipam.root.cidr'), dataIndex: 'cidr', key: 'cidr',
-      render: (v: string, r: UINode) =>
-        r.level === 'Root' ? <strong style={{ fontSize: 15 }}>{v}</strong> : v,
+      render: (v: string, r: UINode) => (
+        <span style={{ fontFamily: FONT_MONO, fontWeight: r.level === 'Root' ? 700 : 600, fontSize: r.level === 'Root' ? 14 : 13 }}>{v}</span>
+      ),
     },
     {
       title: t('ipam.subnet.level'), dataIndex: 'level', key: 'level',
@@ -278,6 +302,22 @@ const TabSubnetTree: React.FC = () => {
     {
       title: t('ipam.root.vrf'), key: 'vrf',
       render: (_, r) => r.vrf ? `${r.vrf.name}${r.vrf.rd ? ` (${r.vrf.rd})` : ''}` : '—',
+    },
+    {
+      title: t('ipam.subnet.utilization'), key: 'util', width: 170,
+      render: (_, r: UINode) => {
+        const u = nodeUtilization(r);
+        if (u == null) return <span style={{ color: 'var(--ant-color-text-tertiary)' }}>—</span>;
+        const color = u >= 80 ? token.colorError : u >= 60 ? token.colorWarning : token.colorSuccess;
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ flex: 1, minWidth: 60, height: 6, borderRadius: 4, background: token.colorFillTertiary }}>
+              <div style={{ height: '100%', width: `${u}%`, borderRadius: 4, background: color }} />
+            </div>
+            <span style={{ fontFamily: FONT_MONO, fontSize: 12, fontWeight: 600, color }}>{u.toFixed(0)}%</span>
+          </div>
+        );
+      },
     },
     {
       title: t('ipam.root.remark'), key: 'remark', ellipsis: true, width: 200,
