@@ -21,6 +21,9 @@ interface AuthContextType {
   logout: () => void;
   /** Refresh Token 换 Token 成功后更新 session（同 login，逻辑复用） */
   refreshSession: (bundle: TokenBundle) => void;
+  /** 局部更新已登录用户的偏好（theme/language 等）并同步到 localStorage，
+   *  使下次重载从 nms_user 恢复时保持一致（不重新拉取 Token）。 */
+  updateStoredUser: (partial: Partial<AuthUser>) => void;
 }
 
 // ─── Context ──────────────────────────────────────────────────────────────────
@@ -32,6 +35,7 @@ const AuthContext = createContext<AuthContextType>({
   login: () => {},
   logout: () => {},
   refreshSession: () => {},
+  updateStoredUser: () => {},
 });
 
 // ─── Provider ─────────────────────────────────────────────────────────────────
@@ -164,8 +168,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     scheduleRefresh(bundle.access_token_expires_at);
   }, [scheduleRefresh]);
 
+  const updateStoredUser = useCallback((partial: Partial<AuthUser>) => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, ...partial };
+      localStorage.setItem(storageKeys.user, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, logout, refreshSession }}>
+    <AuthContext.Provider value={{ user, token, loading, login, logout, refreshSession, updateStoredUser }}>
       {children}
     </AuthContext.Provider>
   );

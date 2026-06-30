@@ -3,6 +3,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from 'react';
 import { useAuth } from './AuthContext';
@@ -46,6 +47,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
   const [systemDark, setSystemDark] = useState(readSystemDark);
 
+  // True once the user explicitly picks a theme this session (including the
+  // pre-login toggle on the sign-in page). While set, the login/refresh sync
+  // below won't override that choice with the server's stored value.
+  const manualThemeOverride = useRef(false);
+
   // Listen for OS colour-scheme changes
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
@@ -54,21 +60,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => mq.removeEventListener('change', handler);
   }, []);
 
-  // Sync with server-side user preferences on login / user change
+  // Sync with server-side user preferences on login / user change.
+  // Language always follows the server value; theme only does so when the user
+  // hasn't made an explicit choice this session — otherwise signing in would
+  // overwrite e.g. a dark theme picked on the login screen.
   useEffect(() => {
-    if (!user) return;
-    const t = (user.theme as ThemeMode)    ?? 'system';
-    const l = (user.language as Language)  ?? 'en';
-    setThemeState(t);
+    // Logged out (mount or logout) → clear the override so the next login starts
+    // clean and adopts that account's stored prefs.
+    if (!user) { manualThemeOverride.current = false; return; }
+    const l = (user.language as Language) ?? 'en';
     setLanguageState(l);
-    localStorage.setItem(LS_THEME, t);
-    localStorage.setItem(LS_LANG,  l);
+    localStorage.setItem(LS_LANG, l);
+    if (!manualThemeOverride.current) {
+      const t = (user.theme as ThemeMode) ?? 'system';
+      setThemeState(t);
+      localStorage.setItem(LS_THEME, t);
+    }
   }, [user]);
 
   const resolvedTheme: 'light' | 'dark' =
     theme === 'system' ? (systemDark ? 'dark' : 'light') : (theme as 'light' | 'dark');
 
   const setTheme = useCallback((t: ThemeMode) => {
+    manualThemeOverride.current = true;
     setThemeState(t);
     localStorage.setItem(LS_THEME, t);
   }, []);

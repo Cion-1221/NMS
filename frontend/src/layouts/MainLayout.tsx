@@ -32,7 +32,7 @@ const { Text } = Typography;
 export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, logout } = useAuth();
+  const { user, logout, updateStoredUser } = useAuth();
   const { resolvedTheme, setTheme } = useAppContext();
   const t = useT();
   const [profileOpen, setProfileOpen] = useState(false);
@@ -46,6 +46,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     const next = resolvedTheme === 'dark' ? 'light' : 'dark';
     setTheme(next);
     updateProfile({ theme: next }).catch(() => {});
+    updateStoredUser({ theme: next }); // keep nms_user in sync so a reload doesn't revert
   };
 
   // Flattened, grouped nav. type:'group' renders a non-clickable caption.

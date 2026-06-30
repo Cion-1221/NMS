@@ -97,39 +97,41 @@ const LoginPage: React.FC = () => {
         </div>
       </div>
 
-      {/* form panel */}
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32 }}>
-        <div style={{ width: '100%', maxWidth: 380 }}>
-          <h2 style={{ fontSize: 25, fontWeight: 700, margin: '0 0 7px', color: c.text }}>
-            {t('auth.login.title')}
-          </h2>
-          <p style={{ fontSize: 14, color: c.textDim, margin: '0 0 30px' }}>
-            {t('auth.login.subtitle')}
-          </p>
+      {/* form panel: form vertically centered, copyright pinned to the bottom */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 32 }}>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ width: '100%', maxWidth: 380 }}>
+            <h2 style={{ fontSize: 25, fontWeight: 700, margin: '0 0 7px', color: c.text }}>
+              {t('auth.login.title')}
+            </h2>
+            <p style={{ fontSize: 14, color: c.textDim, margin: '0 0 30px' }}>
+              {t('auth.login.subtitle')}
+            </p>
 
-          <Form layout="vertical" onFinish={handleFinish} autoComplete="off" size="large" requiredMark={false}>
-            <Form.Item name="username" label={t('auth.login.username')}
-              rules={[{ required: true, message: `${t('auth.login.username')} is required` }]}>
-              <Input prefix={<UserOutlined />} placeholder={t('auth.login.username')} />
-            </Form.Item>
-            <Form.Item name="password" label={t('auth.login.password')}
-              rules={[{ required: true, message: `${t('auth.login.password')} is required` }]}>
-              <Input.Password prefix={<LockOutlined />} placeholder={t('auth.login.password')} />
-            </Form.Item>
-            <Form.Item>
-              <Checkbox defaultChecked>{t('auth.login.remember')}</Checkbox>
-            </Form.Item>
-            <Form.Item style={{ marginBottom: 0 }}>
-              <Button type="primary" htmlType="submit" block loading={loading} iconPosition="end" icon={<ArrowRightOutlined />}>
-                {t('auth.login.btn')}
-              </Button>
-            </Form.Item>
-          </Form>
-
-          <div style={{ marginTop: 26, fontSize: 12, color: c.textFaint }}>
-            Copyright © {new Date().getFullYear()}{' '}
-            <a href="https://github.com/Cion-1221/NMS" target="_blank" rel="noopener noreferrer" style={{ color: c.accent }}>CION</a>
+            <Form layout="vertical" onFinish={handleFinish} autoComplete="off" size="large" requiredMark={false}>
+              <Form.Item name="username" label={t('auth.login.username')}
+                rules={[{ required: true, message: `${t('auth.login.username')} is required` }]}>
+                <Input prefix={<UserOutlined />} placeholder={t('auth.login.username')} />
+              </Form.Item>
+              <Form.Item name="password" label={t('auth.login.password')}
+                rules={[{ required: true, message: `${t('auth.login.password')} is required` }]}>
+                <Input.Password prefix={<LockOutlined />} placeholder={t('auth.login.password')} />
+              </Form.Item>
+              <Form.Item>
+                <Checkbox defaultChecked>{t('auth.login.remember')}</Checkbox>
+              </Form.Item>
+              <Form.Item style={{ marginBottom: 0 }}>
+                <Button type="primary" htmlType="submit" block loading={loading} iconPosition="end" icon={<ArrowRightOutlined />}>
+                  {t('auth.login.btn')}
+                </Button>
+              </Form.Item>
+            </Form>
           </div>
+        </div>
+
+        <div style={{ textAlign: 'center', fontSize: 12, color: c.textFaint }}>
+          Copyright © {new Date().getFullYear()}{' '}
+          <a href="https://github.com/Cion-1221/NMS" target="_blank" rel="noopener noreferrer" style={{ color: c.accent }}>CION</a>
         </div>
       </div>
     </div>

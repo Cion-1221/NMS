@@ -6,7 +6,7 @@ import zhCN from 'antd/locale/zh_CN';
 
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AppProvider, useAppContext } from './contexts/AppContext';
-import { buildTheme } from './theme/theme';
+import { buildTheme, palette } from './theme/theme';
 import { MainLayout } from './layouts/MainLayout';
 import LoginPage from './pages/Login';
 // Dashboard pulls in @ant-design/charts (g2, heavy) — lazy-load so login and the
@@ -30,6 +30,12 @@ const ThemedShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     document.title = 'CION NMS';
   }, [language]);
 
+  // Keep the document body bg in sync with the theme so nothing flashes white in
+  // dark mode behind full-height screens (body is outside React/antd's cssVar scope).
+  useEffect(() => {
+    document.body.style.background = palette[resolvedTheme].bg;
+  }, [resolvedTheme]);
+
   return (
     <ConfigProvider
       theme={buildTheme(resolvedTheme)}
@@ -44,10 +50,14 @@ const ThemedShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
 const AppRouter: React.FC = () => {
   const { user, token, loading } = useAuth();
+  const { resolvedTheme } = useAppContext();
+  // These two screens render outside any antd component, so their bg must be a
+  // real palette hex (cssVar refs don't resolve here) — otherwise white in dark mode.
+  const bg = palette[resolvedTheme].bg;
 
   if (loading) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: bg }}>
         <Spin size="large" />
       </div>
     );
@@ -57,7 +67,7 @@ const AppRouter: React.FC = () => {
 
   if (user.must_change_password) {
     return (
-      <div style={{ minHeight: '100vh' }}>
+      <div style={{ minHeight: '100vh', background: bg }}>
         <ChangePasswordModal open forced onClose={() => {}} />
       </div>
     );
