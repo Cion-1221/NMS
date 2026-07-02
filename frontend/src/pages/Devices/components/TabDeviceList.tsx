@@ -12,7 +12,7 @@ import {
 } from '../../../api/device';
 import type { Device, DeviceSite, DevicePoP, DeviceRole, DeviceVendor } from '../../../types/device';
 import type { TranslationKey } from '../../../i18n/translations';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 import { useDebounced } from '../../../utils/useDebounced';
 import StatusTag from '../../../components/StatusTag';
 import { FONT_MONO } from '../../../theme/theme';
@@ -144,7 +144,7 @@ const TabDeviceList: React.FC = () => {
       setTotal(r.data.total);
     } catch (err: unknown) {
       if (seq === reqSeq.current) {
-        message.error(err instanceof Error ? err.message : 'Failed to load devices');
+        message.error(apiErrMsg(err));
       }
     } finally {
       if (seq === reqSeq.current) setLoading(false);
@@ -170,7 +170,7 @@ const TabDeviceList: React.FC = () => {
       // Surface the error so operators know filter options may be stale,
       // but do NOT block the main device table — it loads independently.
       setLookupsError(true);
-      message.warning(err instanceof Error ? err.message : '筛选选项加载失败');
+      message.warning(apiErrMsg(err));
     } finally {
       setLookupsLoading(false);
     }
@@ -315,7 +315,7 @@ const TabDeviceList: React.FC = () => {
       setIsModalOpen(false);
       loadData();
     } catch (err: unknown) {
-      message.error(err instanceof Error ? err.message : 'Operation failed');
+      message.error(apiErrMsg(err));
     }
   };
 
@@ -333,7 +333,7 @@ const TabDeviceList: React.FC = () => {
           message.success(t('device.delDone'));
           loadData();
         } catch (err: unknown) {
-          message.error(err instanceof Error ? err.message : 'Delete failed');
+          message.error(apiErrMsg(err));
         }
       },
     });

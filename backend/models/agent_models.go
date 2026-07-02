@@ -105,19 +105,28 @@ func (t *AgentTask) Targets() []string {
 
 // ── ProbeResult ──────────────────────────────────────────────────────────────
 
-// 索引设计：绝大多数查询（历史列表、latest-snapshot、meshping 矩阵）都先按 Type 过滤
-// 再按 ReportedAt 排序/取最新，因此用复合索引 (type, reported_at) 取代各自独立的单列
-// 索引——MySQL 的最左前缀规则下，仅按 Type 过滤的查询同样能命中该索引。
+// 索引设计（probe_results 是全库写入最热的表，每个索引都要有明确归属）：
+//   - idx_probe_type_reported (type, reported_at)：历史列表按 Type 过滤 + 时间排序；
+//     最左前缀规则下仅按 Type 过滤的查询同样命中。
+//   - idx_probe_latest (type, agent_id, target, reported_at)：latest 快照与 meshping
+//     矩阵的核心子查询 `WHERE type=? GROUP BY agent_id,target 取 MAX(reported_at)`
+//     可走纯索引扫描，避免对该 Type 的全部行做全表扫描（这两个端点被前端 30s 轮询）；
+//     DeleteProbeResultPair 的 (type, agent_id, target) 精确删除同样命中前缀。
+//   - reported_at 单列索引：overview 看板的时间窗聚合（WHERE reported_at >= ?，不带
+//     type 条件）与保留策略清理（reported_at < cutoff）使用。
+//   - Target 不再单独建索引（模糊搜索 LIKE '%..%' 本就用不上索引，精确匹配已由
+//     idx_probe_latest 覆盖）；AutoMigrate 不会删除既有索引，旧部署可手动
+//     `DROP INDEX idx_probe_results_target ON probe_results` 回收写放大。
 type ProbeResult struct {
 	ID         uint      `gorm:"primaryKey" json:"id"`
-	AgentID    string    `gorm:"type:varchar(64);not null;index" json:"agent_id"`
+	AgentID    string    `gorm:"type:varchar(64);not null;index;index:idx_probe_latest,priority:2" json:"agent_id"`
 	TaskID     *uint     `gorm:"index" json:"task_id"`
-	Type       string    `gorm:"type:varchar(20);not null;index:idx_probe_type_reported,priority:1" json:"type"`
-	Target     string    `gorm:"type:varchar(255);not null;index" json:"target"`
+	Type       string    `gorm:"type:varchar(20);not null;index:idx_probe_type_reported,priority:1;index:idx_probe_latest,priority:1" json:"type"`
+	Target     string    `gorm:"type:varchar(255);not null;index:idx_probe_latest,priority:3" json:"target"`
 	Success    bool      `gorm:"not null" json:"success"`
 	LatencyMs  *float64  `json:"latency_ms"`
 	Detail     string    `gorm:"type:text" json:"detail"`
-	ReportedAt time.Time `gorm:"not null;index:idx_probe_type_reported,priority:2" json:"reported_at"`
+	ReportedAt time.Time `gorm:"not null;index;index:idx_probe_type_reported,priority:2;index:idx_probe_latest,priority:4" json:"reported_at"`
 }
 
 func (ProbeResult) TableName() string { return "probe_results" }

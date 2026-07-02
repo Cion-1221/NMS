@@ -4,7 +4,7 @@ import { DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { getAuditLogs, purgeAuditLogs } from '../../../api/ipam';
 import type { IPAMAuditLog } from '../../../types/ipam';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 import { FONT_MONO } from '../../../theme/theme';
 
 const mono = (v: React.ReactNode) => (
@@ -64,8 +64,8 @@ const TabAuditLog: React.FC = () => {
       });
       setData(r.data.items ?? []);
       setTotal(r.data.total);
-    } catch {
-      message.error('Failed to load audit logs');
+    } catch (err) {
+      message.error(apiErrMsg(err));
     } finally {
       setLoading(false);
     }
@@ -93,7 +93,7 @@ const TabAuditLog: React.FC = () => {
           message.success(`${t('ipam.audit.purgeOk')} (${r.data.deleted} rows)`);
           loadLogs(1, pageSize, filterUser, filterAction, filterResource);
           setPage(1);
-        } catch { message.error('Purge failed'); }
+        } catch (err) { message.error(apiErrMsg(err)); }
       },
     });
   };

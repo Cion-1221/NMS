@@ -15,7 +15,7 @@ import { ArrowRightOutlined, BulbOutlined, LockOutlined, MoonOutlined, UserOutli
 import { login as loginApi } from '../../api/auth';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAppContext } from '../../contexts/AppContext';
-import { useT } from '../../i18n';
+import { useApiError, useT } from '../../i18n';
 import { palette } from '../../theme/theme';
 
 const MONO = "var(--cion-mono)";
@@ -32,6 +32,7 @@ const LoginPage: React.FC = () => {
   const { resolvedTheme, setTheme } = useAppContext();
   const c = palette[resolvedTheme];
   const t = useT();
+  const apiErr = useApiError();
   const [loading, setLoading] = useState(false);
 
   const handleFinish = async (values: { username: string; password: string }) => {
@@ -40,7 +41,7 @@ const LoginPage: React.FC = () => {
       const res = await loginApi(values.username, values.password);
       login(res.data);
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? t('auth.login.errCred'));
+      message.error(apiErr(err, t('auth.login.errCred')));
     } finally {
       setLoading(false);
     }

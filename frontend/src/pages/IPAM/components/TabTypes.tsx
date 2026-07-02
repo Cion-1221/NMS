@@ -4,7 +4,7 @@ import { ExclamationCircleFilled, PlusOutlined, SearchOutlined } from '@ant-desi
 import type { ColumnsType } from 'antd/es/table';
 import { getIPAMTypes, createIPAMType, updateIPAMType, deleteIPAMType } from '../../../api/ipam';
 import type { IPAMType } from '../../../types/ipam';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 
 const { confirm } = Modal;
 
@@ -21,7 +21,7 @@ const TabTypes: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try { const r = await getIPAMTypes(); setData(r.data); }
-    catch { message.error('Failed to load types'); }
+    catch (err) { message.error(apiErrMsg(err)); }
     finally { setLoading(false); }
   };
 
@@ -49,7 +49,7 @@ const TabTypes: React.FC = () => {
       cancelText: t('common.cancel'),
       onOk: async () => {
         try { await deleteIPAMType(r.id); message.success(t('ipam.type.delDone')); loadData(); }
-        catch { message.error('Delete failed'); }
+        catch (err) { message.error(apiErrMsg(err)); }
       },
     });
   };
@@ -60,7 +60,7 @@ const TabTypes: React.FC = () => {
       if (mode === 'create') { await createIPAMType(values); message.success(t('ipam.type.createOk')); }
       else { await updateIPAMType(editing!.id, values); message.success(t('ipam.type.saveOk')); }
       setOpen(false); loadData();
-    } catch { message.error('Request failed'); }
+    } catch (err) { message.error(apiErrMsg(err)); }
   };
 
   const columns: ColumnsType<IPAMType> = [

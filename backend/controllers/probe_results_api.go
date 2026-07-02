@@ -81,7 +81,7 @@ func GetLatestProbeResults(db *gorm.DB) gin.HandlerFunc {
 		}
 		typeFilter := c.Query("type")
 		if typeFilter == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 type 参数"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 type 参数", "code": "bad_request"})
 			return
 		}
 		agentID := c.Query("agent_id")
@@ -231,15 +231,18 @@ func DeleteProbeResultPair(db *gorm.DB) gin.HandlerFunc {
 		target := c.Query("target")
 		typeFilter := c.Query("type")
 		if agentID == "" || target == "" || typeFilter == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少必要参数 agent_id / target / type"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少必要参数 agent_id / target / type", "code": "bad_request"})
 			return
 		}
 		result := db.Where("agent_id = ? AND target = ? AND type = ?", agentID, target, typeFilter).
 			Delete(&models.ProbeResult{})
 		if result.Error != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败: " + result.Error.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败: " + result.Error.Error(), "code": "server_error"})
 			return
 		}
+		// 与 PurgeProbeResults 同口径：管理员删数据必须留审计痕迹
+		writeAgentAudit(db, getUsername(c), "delete_probe_pair", "probe_results", "",
+			fmt.Sprintf("Deleted probe results for agent=%s target=%s type=%s (%d rows)", agentID, target, typeFilter, result.RowsAffected))
 		c.JSON(http.StatusOK, gin.H{"deleted": result.RowsAffected})
 	}
 }
@@ -251,7 +254,7 @@ func PurgeProbeResults(db *gorm.DB) gin.HandlerFunc {
 		daysStr := c.DefaultQuery("days", "")
 		days, err := strconv.Atoi(daysStr)
 		if err != nil || days < 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 days 参数（0 = 全部清空，正整数 = 清理 N 天前的数据）"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 days 参数（0 = 全部清空，正整数 = 清理 N 天前的数据）", "code": "bad_request"})
 			return
 		}
 		var result *gorm.DB
@@ -262,7 +265,7 @@ func PurgeProbeResults(db *gorm.DB) gin.HandlerFunc {
 			result = db.Where("reported_at < ?", cutoff).Delete(&models.ProbeResult{})
 		}
 		if result.Error != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "清理失败: " + result.Error.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "清理失败: " + result.Error.Error(), "code": "server_error"})
 			return
 		}
 		writeAgentAudit(db, getUsername(c), "purge_probe_results", "probe_results", "",

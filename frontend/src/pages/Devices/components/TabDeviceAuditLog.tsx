@@ -4,7 +4,7 @@ import { DeleteOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icon
 import type { ColumnsType } from 'antd/es/table';
 import { getDeviceAuditLogs, purgeDeviceAuditLogs } from '../../../api/device';
 import type { DeviceAuditLog } from '../../../types/device';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 import { FONT_MONO } from '../../../theme/theme';
 
 const mono = (v: React.ReactNode) => (
@@ -80,7 +80,7 @@ const TabDeviceAuditLog: React.FC = () => {
       setData(r.data.items ?? []);
       setTotal(r.data.total);
     } catch (err: unknown) {
-      message.error(err instanceof Error ? err.message : 'Failed to load audit logs');
+      message.error(apiErrMsg(err));
     } finally {
       setLoading(false);
     }
@@ -108,7 +108,7 @@ const TabDeviceAuditLog: React.FC = () => {
           message.success(`${t('device.audit.purgeOk')} (${r.data.deleted} rows)`);
           loadLogs(1, pageSize, filterUser, filterAction, filterResource);
           setPage(1);
-        } catch (err: unknown) { message.error(err instanceof Error ? err.message : 'Purge failed'); }
+        } catch (err: unknown) { message.error(apiErrMsg(err)); }
       },
     });
   };

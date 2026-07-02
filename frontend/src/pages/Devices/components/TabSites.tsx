@@ -11,7 +11,7 @@ import {
   getDevicePoPs, createDevicePoP, updateDevicePoP, deleteDevicePoP,
 } from '../../../api/device';
 import type { DeviceSite, DevicePoP } from '../../../types/device';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 
 const { confirm } = Modal;
 
@@ -56,7 +56,7 @@ const TabSites: React.FC = () => {
       const r = await getDeviceSites();
       setData(r.data);
     } catch (err: unknown) {
-      message.error(err instanceof Error ? err.message : 'Failed to load sites');
+      message.error(apiErrMsg(err));
     } finally {
       setLoading(false);
     }
@@ -82,7 +82,7 @@ const TabSites: React.FC = () => {
       const r = await getDevicePoPs(siteId);
       setPops(r.data);
     } catch (err: unknown) {
-      message.error(err instanceof Error ? err.message : 'Failed to load PoPs');
+      message.error(apiErrMsg(err));
     } finally {
       setPopLoading(false);
     }
@@ -105,7 +105,7 @@ const TabSites: React.FC = () => {
       setCreateOpen(false);
       loadData();
     } catch (err: unknown) {
-      message.error(err instanceof Error ? err.message : 'Create failed');
+      message.error(apiErrMsg(err));
     } finally {
       setCreateSaving(false);
     }
@@ -138,7 +138,7 @@ const TabSites: React.FC = () => {
       message.success(t('device.site.saveOk'));
       loadData();
     } catch (err: unknown) {
-      message.error(err instanceof Error ? err.message : 'Save failed');
+      message.error(apiErrMsg(err));
     } finally {
       setSiteSaving(false);
     }
@@ -160,7 +160,7 @@ const TabSites: React.FC = () => {
           if (selectedSite?.id === site.id) setDrawerOpen(false);
           loadData();
         } catch (err: unknown) {
-          message.error(err instanceof Error ? err.message : 'Delete failed');
+          message.error(apiErrMsg(err));
         }
       },
     });
@@ -207,7 +207,7 @@ const TabSites: React.FC = () => {
       // the user to manually close the Drawer and click Refresh.
       void loadData();
     } catch (err: unknown) {
-      message.error(err instanceof Error ? err.message : 'Request failed');
+      message.error(apiErrMsg(err));
     } finally {
       setPopSaving(false);
     }
@@ -229,7 +229,7 @@ const TabSites: React.FC = () => {
           // Refresh Sites table so pop_count Tag stays in sync.
           void loadData();
         } catch (err: unknown) {
-          message.error(err instanceof Error ? err.message : 'Delete failed');
+          message.error(apiErrMsg(err));
         }
       },
     });

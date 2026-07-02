@@ -17,15 +17,14 @@ import (
 //     远高于审计日志，默认保留期应更短）。
 //
 // 任一参数 <= 0 即视为该项不启用（永久保留，仍可通过各模块的手动清理接口删除）。
+// 后台 goroutine 始终启动：除上述两项可配置保留外，还承担过期 Refresh Token 的
+// 每日兜底清理（不依赖配置，始终执行）。
 func StartAuditRetention(db *gorm.DB, auditMaxAgeDays int, probeResultMaxAgeDays int) {
 	if auditMaxAgeDays <= 0 {
 		slog.Info("审计日志自动保留未启用 (audit.max_age_days = 0)")
 	}
 	if probeResultMaxAgeDays <= 0 {
 		slog.Info("探测结果自动保留未启用 (audit.probe_results_max_age_days = 0)")
-	}
-	if auditMaxAgeDays <= 0 && probeResultMaxAgeDays <= 0 {
-		return
 	}
 	go func() {
 		ticker := time.NewTicker(24 * time.Hour)
@@ -37,9 +36,24 @@ func StartAuditRetention(db *gorm.DB, auditMaxAgeDays int, probeResultMaxAgeDays
 			if probeResultMaxAgeDays > 0 {
 				purgeExpiredProbeResults(db, probeResultMaxAgeDays)
 			}
+			purgeExpiredRefreshTokens(db)
 			<-ticker.C
 		}
 	}()
+}
+
+// purgeExpiredRefreshTokens 全局清理已过期的 Refresh Token。按用户的清理只在该用户
+// 登录/刷新时触发（见 auth_api.go 的 cleanupExpiredTokens），不再回来的用户会永远
+// 留下过期记录，这里每日兜底回收。
+func purgeExpiredRefreshTokens(db *gorm.DB) {
+	result := db.Where("expires_at < ?", time.Now()).Delete(&models.SysRefreshToken{})
+	if result.Error != nil {
+		slog.Error("过期 Refresh Token 清理失败", "err", result.Error)
+		return
+	}
+	if result.RowsAffected > 0 {
+		slog.Info("过期 Refresh Token 清理完成", "deleted", result.RowsAffected)
+	}
 }
 
 func purgeExpiredAuditLogs(db *gorm.DB, maxAgeDays int) {

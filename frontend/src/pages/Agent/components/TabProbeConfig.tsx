@@ -6,7 +6,7 @@ import {
   getAgentTasks, createAgentTasks, updateAgentTask, deleteAgentTask, getAgentGroups, getAgents,
 } from '../../../api/agent';
 import type { AgentTask, AgentGroup, Agent, TaskType, TaskScope } from '../../../types/agent';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 import { FONT_MONO } from '../../../theme/theme';
 
 const mono = (v: React.ReactNode) => (
@@ -50,7 +50,7 @@ const TabProbeConfig: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try { const r = await getAgentTasks(); setData(r.data); }
-    catch (err: unknown) { message.error(err instanceof Error ? err.message : 'Failed to load tasks'); }
+    catch (err: unknown) { message.error(apiErrMsg(err)); }
     finally { setLoading(false); }
   };
 
@@ -87,7 +87,7 @@ const TabProbeConfig: React.FC = () => {
       cancelText: t('common.cancel'),
       onOk: async () => {
         try { await deleteAgentTask(r.id); message.success(t('common.success')); loadData(); }
-        catch (err: unknown) { message.error(err instanceof Error ? err.message : 'Delete failed'); }
+        catch (err: unknown) { message.error(apiErrMsg(err)); }
       },
     });
   };
@@ -114,7 +114,7 @@ const TabProbeConfig: React.FC = () => {
       message.success(t('common.success'));
       setOpen(false); loadData();
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? (err instanceof Error ? err.message : 'Request failed'));
+      message.error(apiErrMsg(err));
     }
   };
 
@@ -125,7 +125,7 @@ const TabProbeConfig: React.FC = () => {
         scope: r.scope, group_id: r.group_id, agent_id: r.agent_id, enabled,
       });
       loadData();
-    } catch (err: any) { message.error(err?.response?.data?.error ?? 'Update failed'); }
+    } catch (err: any) { message.error(apiErrMsg(err)); }
   };
 
   const columns: ColumnsType<AgentTask> = [

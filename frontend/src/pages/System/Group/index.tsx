@@ -6,7 +6,7 @@ import { ExclamationCircleFilled, PlusOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { listGroups, createGroup, updateGroup, deleteGroup } from '../../../api/system';
 import { SysGroup } from '../../../types/system';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 import PageHeader from '../../../components/PageHeader';
 import StatusTag from '../../../components/StatusTag';
 import { FONT_MONO } from '../../../theme/theme';
@@ -35,7 +35,7 @@ const SystemGroupPage: React.FC = () => {
   const fetchData = async () => {
     setLoading(true);
     try { const r = await listGroups(); setGroups(r.data); }
-    catch { message.error('Failed to load groups'); }
+    catch (err) { message.error(apiErrMsg(err)); }
     finally { setLoading(false); }
   };
 
@@ -52,7 +52,7 @@ const SystemGroupPage: React.FC = () => {
       setCreateOpen(false);
       createForm.resetFields();
       fetchData();
-    } catch (err: any) { message.error(err?.response?.data?.error ?? 'Create failed'); }
+    } catch (err: any) { message.error(apiErrMsg(err)); }
     finally { setCreating(false); }
   };
 
@@ -74,7 +74,7 @@ const SystemGroupPage: React.FC = () => {
       setEditOpen(false);
       editForm.resetFields();
       fetchData();
-    } catch (err: any) { message.error(err?.response?.data?.error ?? 'Update failed'); }
+    } catch (err: any) { message.error(apiErrMsg(err)); }
     finally { setEditing(false); }
   };
 
@@ -88,7 +88,7 @@ const SystemGroupPage: React.FC = () => {
       cancelText: t('common.cancel'),
       onOk: async () => {
         try { await deleteGroup(g.id); message.success(t('sys.group.delOk')); fetchData(); }
-        catch (err: any) { message.error(err?.response?.data?.error ?? 'Delete failed'); }
+        catch (err: any) { message.error(apiErrMsg(err)); }
       },
     });
   };

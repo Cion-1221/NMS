@@ -7,7 +7,7 @@ import {
   getCAStatus, rotateCA, finalizeCA,
 } from '../../../api/agent';
 import type { AgentToken, AgentGroup, PKIStatus } from '../../../types/agent';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 import StatusTag from '../../../components/StatusTag';
 import { FONT_MONO } from '../../../theme/theme';
 
@@ -54,7 +54,7 @@ const TabTokens: React.FC = () => {
       setTokens(r.data.items);
       setTotal(r.data.total);
     } catch (err: any) {
-      if (seq === reqSeq.current) message.error(err?.response?.data?.error ?? 'Failed to load tokens');
+      if (seq === reqSeq.current) message.error(apiErrMsg(err));
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
@@ -78,7 +78,7 @@ const TabTokens: React.FC = () => {
           message.success(r.data.message);
           void loadCAStatus();
         } catch (err: any) {
-          message.error(err?.response?.data?.error ?? 'Rotate failed');
+          message.error(apiErrMsg(err));
         } finally {
           setCaBusy(false);
         }
@@ -100,7 +100,7 @@ const TabTokens: React.FC = () => {
           message.success(r.data.message);
           void loadCAStatus();
         } catch (err: any) {
-          message.error(err?.response?.data?.error ?? 'Finalize failed');
+          message.error(apiErrMsg(err));
         } finally {
           setCaBusy(false);
         }
@@ -126,7 +126,7 @@ const TabTokens: React.FC = () => {
       setResultOpen(true);
       void loadData();
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? 'Create failed');
+      message.error(apiErrMsg(err));
     }
   };
 
@@ -149,7 +149,7 @@ const TabTokens: React.FC = () => {
       } catch { /* ignore */ }
     }
     if (copied) message.success(t('agent.token.copied'));
-    else message.error('Copy failed — please select and copy manually');
+    else message.error(t('agent.token.copyFailed'));
   };
 
   const handleRevoke = (r: AgentToken) => {
@@ -161,7 +161,7 @@ const TabTokens: React.FC = () => {
       cancelText: t('common.cancel'),
       onOk: async () => {
         try { await revokeAgentToken(r.id); message.success(t('common.success')); void loadData(); }
-        catch (err: any) { message.error(err?.response?.data?.error ?? 'Revoke failed'); }
+        catch (err: any) { message.error(apiErrMsg(err)); }
       },
     });
   };

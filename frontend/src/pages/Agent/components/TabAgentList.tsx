@@ -4,7 +4,7 @@ import { ExclamationCircleFilled, ReloadOutlined, SearchOutlined, StopOutlined }
 import type { ColumnsType } from 'antd/es/table';
 import { getAgents, getAgentSummary, updateAgent, deleteAgent, revokeAgent, getAgentGroups } from '../../../api/agent';
 import type { Agent, AgentGroup, AgentSummary } from '../../../types/agent';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 import type { TranslationKey } from '../../../i18n/translations';
 import { useDebounced } from '../../../utils/useDebounced';
 import StatusTag from '../../../components/StatusTag';
@@ -68,7 +68,7 @@ const TabAgentList: React.FC = () => {
       setTotal(r.data.total);
       setSelectedKeys([]);
     } catch (err: any) {
-      if (seq === reqSeq.current) message.error(err?.response?.data?.error ?? 'Failed to load agents');
+      if (seq === reqSeq.current) message.error(apiErrMsg(err));
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
@@ -100,7 +100,7 @@ const TabAgentList: React.FC = () => {
       setEditOpen(false);
       void loadData();
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? 'Update failed');
+      message.error(apiErrMsg(err));
     }
   };
 
@@ -133,7 +133,7 @@ const TabAgentList: React.FC = () => {
       cancelText: t('common.cancel'),
       onOk: async () => {
         try { await revokeAgent(r.agent_id); message.success(t('common.success')); void loadData(); void loadSummary(); }
-        catch (err: any) { message.error(err?.response?.data?.error ?? 'Revoke failed'); }
+        catch (err: any) { message.error(apiErrMsg(err)); }
       },
     });
   };

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Button, Form, InputNumber, Modal, Tabs, message } from 'antd';
 import { DeleteOutlined } from '@ant-design/icons';
-import { useT } from '../../i18n';
+import { apiErrMsg, useT } from '../../i18n';
 import { purgeProbeResults } from '../../api/agent';
 import PageHeader from '../../components/PageHeader';
 import TabGenericResults from './components/TabGenericResults';
@@ -42,7 +42,7 @@ const ProbeResultsPage: React.FC = () => {
           // bump all tab versions so they reload
           setVersions({ '1': 1, '2': 1, '3': 1, '4': 1, '5': 1 });
         } catch (err: any) {
-          message.error(err?.response?.data?.error ?? 'Purge failed');
+          message.error(apiErrMsg(err));
         } finally {
           setPurging(false);
         }

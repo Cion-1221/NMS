@@ -27,6 +27,11 @@ jobs:
         with:
           node-version: '24'
 
+      # 后端 gin.H "code" / core.CodedError Code 与前端 apiErrors.ts 词条必须一一对应，
+      # 漏配会导致 EN 用户看到中文回退文案
+      - name: Check API error-code consistency
+        run: node scripts/check-error-codes.mjs
+
       - name: Build frontend
         working-directory: ./frontend
         run: |

@@ -11,12 +11,14 @@ import (
 func ValidateStrictCIDR(cidrStr string) (netip.Prefix, error) {
 	prefix, err := netip.ParsePrefix(cidrStr)
 	if err != nil {
-		return netip.Prefix{}, fmt.Errorf("无效的 CIDR 格式: %v", err)
+		return netip.Prefix{}, codedf("ipam.invalid_cidr", nil, "无效的 CIDR 格式: %v", err)
 	}
 
 	masked := prefix.Masked()
 	if masked != prefix {
-		return netip.Prefix{}, fmt.Errorf("地址不标准，您需要的是否是 %s？", masked.String())
+		return netip.Prefix{}, codedf("ipam.cidr_not_canonical",
+			map[string]string{"suggest": masked.String()},
+			"地址不标准，您需要的是否是 %s？", masked.String())
 	}
 
 	return prefix, nil
@@ -57,17 +59,21 @@ func CalculateSplitSubnets(cidr string, targetBits int) ([]string, error) {
 	}
 
 	if targetBits <= prefix.Bits() {
-		return nil, fmt.Errorf("目标掩码 /%d 必须大于当前掩码 /%d", targetBits, prefix.Bits())
+		return nil, codedf("ipam.split_bits_too_small",
+			map[string]string{"target": fmt.Sprint(targetBits), "current": fmt.Sprint(prefix.Bits())},
+			"目标掩码 /%d 必须大于当前掩码 /%d", targetBits, prefix.Bits())
 	}
 
 	maxBits := prefix.Addr().BitLen()
 	if targetBits > maxBits {
-		return nil, fmt.Errorf("目标掩码 /%d 超出合法范围", targetBits)
+		return nil, codedf("ipam.split_bits_out_of_range",
+			map[string]string{"target": fmt.Sprint(targetBits)},
+			"目标掩码 /%d 超出合法范围", targetBits)
 	}
 
 	shift := targetBits - prefix.Bits()
 	if shift > 16 {
-		return nil, fmt.Errorf("单次拆分生成的网段数量过多")
+		return nil, codedf("ipam.split_too_many", nil, "单次拆分生成的网段数量过多（上限 65536）")
 	}
 
 	count := 1 << shift
@@ -90,7 +96,7 @@ func CalculateSplitSubnets(cidr string, targetBits int) ([]string, error) {
 
 func CalculateMergeSubnets(cidrList []string) (string, error) {
 	if len(cidrList) < 2 {
-		return "", fmt.Errorf("至少需要选择两个子网进行合并")
+		return "", codedf("ipam.merge_min_two", nil, "至少需要选择两个子网进行合并")
 	}
 
 	var prefixes []netip.Prefix
@@ -107,16 +113,18 @@ func CalculateMergeSubnets(cidrList []string) (string, error) {
 
 	for _, p := range prefixes {
 		if p.Addr().Is4() != is4 {
-			return "", fmt.Errorf("所选子网的 IP 版本不一致")
+			return "", codedf("ipam.merge_family_mismatch", nil, "所选子网的 IP 版本不一致")
 		}
 		if p.Bits() != maskBits {
-			return "", fmt.Errorf("所选子网的掩码长度必须相同")
+			return "", codedf("ipam.merge_mask_mismatch", nil, "所选子网的掩码长度必须相同")
 		}
 	}
 
 	count := len(prefixes)
 	if count&(count-1) != 0 {
-		return "", fmt.Errorf("所选子网数量 (%d) 不是 2 的整数次幂，无法合并为标准网段", count)
+		return "", codedf("ipam.merge_not_power_of_two",
+			map[string]string{"count": fmt.Sprint(count)},
+			"所选子网数量 (%d) 不是 2 的整数次幂，无法合并为标准网段", count)
 	}
 
 	sort.Slice(prefixes, func(i, j int) bool {
@@ -131,7 +139,7 @@ func CalculateMergeSubnets(cidrList []string) (string, error) {
 
 	targetPrefix := netip.PrefixFrom(prefixes[0].Addr(), targetBits)
 	if targetPrefix.Masked() != targetPrefix {
-		return "", fmt.Errorf("所选子网不相邻或无法构成标准聚合网段")
+		return "", codedf("ipam.merge_not_adjacent", nil, "所选子网不相邻或无法构成标准聚合网段")
 	}
 
 	ipInt := ipToBigInt(prefixes[0].Addr())
@@ -142,7 +150,7 @@ func CalculateMergeSubnets(cidrList []string) (string, error) {
 	for i := 0; i < count; i++ {
 		expectedAddr, _ := bigIntToIP(ipInt, is4)
 		if prefixes[i].Addr() != expectedAddr {
-			return "", fmt.Errorf("所选子网不相邻或缺失片段，无法构成标准聚合网段")
+			return "", codedf("ipam.merge_not_adjacent", nil, "所选子网不相邻或缺失片段，无法构成标准聚合网段")
 		}
 		ipInt.Add(ipInt, step)
 	}

@@ -3,7 +3,7 @@ import { Form, Input, message, Modal } from 'antd';
 import { LockOutlined, WarningOutlined } from '@ant-design/icons';
 import { changePassword } from '../api/auth';
 import { useAuth } from '../contexts/AuthContext';
-import { useT } from '../i18n';
+import { useApiError, useT } from '../i18n';
 
 interface Props {
   open: boolean;
@@ -14,6 +14,7 @@ interface Props {
 const ChangePasswordModal: React.FC<Props> = ({ open, forced, onClose }) => {
   const { refreshSession } = useAuth();
   const t = useT();
+  const apiErr = useApiError();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
 
@@ -33,7 +34,7 @@ const ChangePasswordModal: React.FC<Props> = ({ open, forced, onClose }) => {
       refreshSession(res.data);
       onClose();
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? 'Failed');
+      message.error(apiErr(err));
     } finally {
       setLoading(false);
     }

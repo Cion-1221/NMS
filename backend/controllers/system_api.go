@@ -18,7 +18,7 @@ import (
 func parseUserID(c *gin.Context) (uint, bool) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil || id == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的用户 ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的用户 ID", "code": "bad_request"})
 		return 0, false
 	}
 	return uint(id), true
@@ -27,7 +27,7 @@ func parseUserID(c *gin.Context) (uint, bool) {
 func parseGroupIDParam(c *gin.Context) (uint, bool) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil || id == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的用户组 ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的用户组 ID", "code": "bad_request"})
 		return 0, false
 	}
 	return uint(id), true
@@ -88,19 +88,19 @@ func CreateUser(db *gorm.DB) gin.HandlerFunc {
 			GroupID  uint   `json:"group_id" binding:"required"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error(), "code": "bad_request"})
 			return
 		}
 
 		var group models.SysGroup
 		if err := db.First(&group, req.GroupID).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "指定的用户组不存在"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "指定的用户组不存在", "code": "not_found"})
 			return
 		}
 
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "密码处理失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "密码处理失败", "code": "server_error"})
 			return
 		}
 
@@ -111,7 +111,11 @@ func CreateUser(db *gorm.DB) gin.HandlerFunc {
 			MustChangePassword: true, // 新用户首次登录必须改密
 		}
 		if err := db.Create(&user).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "用户创建失败: " + err.Error()})
+			if isDuplicateErr(err) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "用户名已存在，请使用其他用户名", "code": "sys.username_taken"})
+				return
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": "用户创建失败: " + err.Error(), "code": "server_error"})
 			return
 		}
 		db.Preload("Group").First(&user, user.ID)
@@ -133,19 +137,19 @@ func UpdateUser(db *gorm.DB) gin.HandlerFunc {
 			Password string `json:"password"` // 留空则不修改
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "bad_request"})
 			return
 		}
 
 		var user models.SysUser
 		if err := db.Preload("Group").First(&user, targetID).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在", "code": "not_found"})
 			return
 		}
 
 		// 防止管理员将自己移出管理员组（避免权限锁死）
 		if claims.UserID == targetID && req.GroupID != nil && *req.GroupID != user.GroupID {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "不能修改自己的用户组，如需调整请联系其他管理员"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "不能修改自己的用户组，如需调整请联系其他管理员", "code": "sys.cannot_change_own_group"})
 			return
 		}
 
@@ -154,7 +158,7 @@ func UpdateUser(db *gorm.DB) gin.HandlerFunc {
 		if req.GroupID != nil && *req.GroupID != user.GroupID {
 			var newGroup models.SysGroup
 			if err := db.First(&newGroup, *req.GroupID).Error; err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "目标用户组不存在"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "目标用户组不存在", "code": "not_found"})
 				return
 			}
 			updates["group_id"] = *req.GroupID
@@ -162,12 +166,12 @@ func UpdateUser(db *gorm.DB) gin.HandlerFunc {
 
 		if req.Password != "" {
 			if len(req.Password) < 8 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "新密码至少需要 8 位"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "新密码至少需要 8 位", "code": "auth.pwd_too_short"})
 				return
 			}
 			hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "密码处理失败"})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "密码处理失败", "code": "server_error"})
 				return
 			}
 			updates["password_hash"] = string(hash)
@@ -175,14 +179,22 @@ func UpdateUser(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		if len(updates) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "未提供任何可更新的字段"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "未提供任何可更新的字段", "code": "bad_request"})
 			return
 		}
 
 		if err := db.Model(&user).Updates(updates).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败: " + err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败: " + err.Error(), "code": "server_error"})
 			return
 		}
+
+		// 管理员重置密码属于安全事件（区别于自助改密）：吊销该用户全部 Refresh Token，
+		// 让既有会话无法续期——否则若重置原因正是"账号疑似被盗"，攻击者手里的旧
+		// Refresh Token 依然可以无限换新，重置形同虚设。
+		if _, changed := updates["password_hash"]; changed {
+			db.Where("user_id = ?", user.ID).Delete(&models.SysRefreshToken{})
+		}
+
 		db.Preload("Group").First(&user, user.ID)
 		c.JSON(http.StatusOK, user)
 	}
@@ -199,13 +211,13 @@ func DeleteUser(db *gorm.DB) gin.HandlerFunc {
 
 		// 不能删除自己
 		if claims.UserID == targetID {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "不能删除当前登录的用户账号"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "不能删除当前登录的用户账号", "code": "sys.cannot_delete_self"})
 			return
 		}
 
 		var user models.SysUser
 		if err := db.Preload("Group").First(&user, targetID).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在", "code": "not_found"})
 			return
 		}
 
@@ -213,17 +225,25 @@ func DeleteUser(db *gorm.DB) gin.HandlerFunc {
 		if user.Group.IsAdmin() {
 			remaining, err := countRemainingAdminUsers(db, targetID)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "权限校验失败"})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "权限校验失败", "code": "server_error"})
 				return
 			}
 			if remaining == 0 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "无法删除系统中最后一个管理员账号"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "无法删除系统中最后一个管理员账号", "code": "sys.last_admin_user"})
 				return
 			}
 		}
 
-		if err := db.Delete(&user).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
+		// 删除用户时连同其全部 Refresh Token 一并清理：既有会话立即无法续期，
+		// 也避免 sys_refresh_tokens 留下无主记录等到自然过期
+		txErr := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Where("user_id = ?", targetID).Delete(&models.SysRefreshToken{}).Error; err != nil {
+				return err
+			}
+			return tx.Delete(&user).Error
+		})
+		if txErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败", "code": "server_error"})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "success"})
@@ -249,7 +269,7 @@ func CreateGroup(db *gorm.DB) gin.HandlerFunc {
 			Permissions string `json:"permissions"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error(), "code": "bad_request"})
 			return
 		}
 		if req.Permissions == "" {
@@ -258,7 +278,11 @@ func CreateGroup(db *gorm.DB) gin.HandlerFunc {
 
 		group := models.SysGroup{Name: req.Name, Permissions: req.Permissions}
 		if err := db.Create(&group).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "用户组创建失败: " + err.Error()})
+			if isDuplicateErr(err) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "用户组名称已存在，请使用其他名称", "code": "common.name_taken"})
+				return
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": "用户组创建失败: " + err.Error(), "code": "server_error"})
 			return
 		}
 		c.JSON(http.StatusOK, group)
@@ -278,13 +302,13 @@ func UpdateGroup(db *gorm.DB) gin.HandlerFunc {
 			Permissions string `json:"permissions"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "bad_request"})
 			return
 		}
 
 		var group models.SysGroup
 		if err := db.First(&group, gid).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "用户组不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "用户组不存在", "code": "not_found"})
 			return
 		}
 
@@ -296,7 +320,7 @@ func UpdateGroup(db *gorm.DB) gin.HandlerFunc {
 			updates["permissions"] = req.Permissions
 		}
 		if len(updates) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "未提供任何可更新的字段"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "未提供任何可更新的字段", "code": "bad_request"})
 			return
 		}
 
@@ -304,13 +328,13 @@ func UpdateGroup(db *gorm.DB) gin.HandlerFunc {
 		if req.Permissions == "[]" && group.IsAdmin() {
 			otherAdminGroups := countOtherAdminGroups(db, gid)
 			if otherAdminGroups == 0 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "无法撤销唯一管理员组的权限，系统至少需要保留一个管理员组"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "无法撤销唯一管理员组的权限，系统至少需要保留一个管理员组", "code": "sys.last_admin_group"})
 				return
 			}
 		}
 
 		if err := db.Model(&group).Updates(updates).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败", "code": "server_error"})
 			return
 		}
 		db.First(&group, gid)
@@ -328,7 +352,7 @@ func DeleteGroup(db *gorm.DB) gin.HandlerFunc {
 
 		var group models.SysGroup
 		if err := db.First(&group, gid).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "用户组不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "用户组不存在", "code": "not_found"})
 			return
 		}
 
@@ -336,7 +360,10 @@ func DeleteGroup(db *gorm.DB) gin.HandlerFunc {
 		var userCount int64
 		db.Model(&models.SysUser{}).Where("group_id = ?", gid).Count(&userCount)
 		if userCount > 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("该用户组下仍有 %d 个用户，请先将其迁移至其他组后再删除", userCount)})
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": fmt.Sprintf("该用户组下仍有 %d 个用户，请先将其迁移至其他组后再删除", userCount),
+				"code":  "sys.group_has_users", "count": userCount,
+			})
 			return
 		}
 
@@ -344,13 +371,13 @@ func DeleteGroup(db *gorm.DB) gin.HandlerFunc {
 		if group.IsAdmin() {
 			otherAdminGroups := countOtherAdminGroups(db, gid)
 			if otherAdminGroups == 0 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "无法删除系统中最后一个管理员组"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "无法删除系统中最后一个管理员组", "code": "sys.last_admin_group"})
 				return
 			}
 		}
 
 		if err := db.Delete(&group).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败", "code": "server_error"})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "success"})

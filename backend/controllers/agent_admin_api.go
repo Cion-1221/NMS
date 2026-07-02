@@ -121,12 +121,12 @@ func UpdateAgent(db *gorm.DB) gin.HandlerFunc {
 			GroupID          *uint  `json:"group_id"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error(), "code": "bad_request"})
 			return
 		}
 		var agent models.Agent
 		if err := db.Where("agent_id = ?", agentID).First(&agent).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Agent 不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "Agent 不存在", "code": "not_found"})
 			return
 		}
 
@@ -134,14 +134,14 @@ func UpdateAgent(db *gorm.DB) gin.HandlerFunc {
 		if req.SourceIPOverride != "" {
 			normalized, err := parseSourceIPOverride(req.SourceIPOverride)
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "agent.invalid_source_ip"})
 				return
 			}
 			sourceIP = normalized
 		}
 		if req.GroupID != nil {
 			if err := db.First(&models.AgentGroup{}, *req.GroupID).Error; err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "指定的 Group 不存在"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "指定的 Group 不存在", "code": "not_found"})
 				return
 			}
 		}
@@ -166,17 +166,23 @@ func DeleteAgent(db *gorm.DB) gin.HandlerFunc {
 		agentID := c.Param("agent_id")
 		var agent models.Agent
 		if err := db.Where("agent_id = ?", agentID).First(&agent).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Agent 不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "Agent 不存在", "code": "not_found"})
 			return
 		}
-		if c.Query("purge") == "true" {
-			if err := db.Where("agent_id = ?", agentID).Delete(&models.ProbeResult{}).Error; err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "清除探测记录失败: " + err.Error()})
-				return
+		txErr := db.Transaction(func(tx *gorm.DB) error {
+			if c.Query("purge") == "true" {
+				if err := tx.Where("agent_id = ?", agentID).Delete(&models.ProbeResult{}).Error; err != nil {
+					return fmt.Errorf("清除探测记录失败: %w", err)
+				}
 			}
-		}
-		if err := db.Delete(&agent).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败: " + err.Error()})
+			// scope=agent 的专属任务随 Agent 一并删除，避免 Probe Config 留下悬空引用的孤儿任务
+			if err := tx.Where("scope = ? AND agent_id = ?", "agent", agentID).Delete(&models.AgentTask{}).Error; err != nil {
+				return fmt.Errorf("清除专属任务失败: %w", err)
+			}
+			return tx.Delete(&agent).Error
+		})
+		if txErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败: " + txErr.Error()})
 			return
 		}
 		writeAgentAudit(db, getUsername(c), "delete_agent", "agent", agentID,
@@ -192,7 +198,7 @@ func RevokeAgent(db *gorm.DB) gin.HandlerFunc {
 		agentID := c.Param("agent_id")
 		var agent models.Agent
 		if err := db.Where("agent_id = ?", agentID).First(&agent).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Agent 不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "Agent 不存在", "code": "not_found"})
 			return
 		}
 		if err := db.Model(&agent).Updates(map[string]interface{}{"revoked": true, "status": "offline"}).Error; err != nil {
@@ -222,13 +228,13 @@ func CreateAgentGroup(db *gorm.DB) gin.HandlerFunc {
 			Description string `json:"description"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "bad_request"})
 			return
 		}
 		group := models.AgentGroup{Name: req.Name, Description: req.Description}
 		if err := db.Create(&group).Error; err != nil {
 			if msg := friendlyNameUniqueErr(err, "分组"); msg != "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
@@ -252,19 +258,19 @@ func UpdateAgentGroup(db *gorm.DB) gin.HandlerFunc {
 			Description string `json:"description"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "bad_request"})
 			return
 		}
 		var group models.AgentGroup
 		if err := db.First(&group, id).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "分组不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "分组不存在", "code": "not_found"})
 			return
 		}
 		if err := db.Model(&group).Updates(map[string]interface{}{
 			"name": req.Name, "description": req.Description,
 		}).Error; err != nil {
 			if msg := friendlyNameUniqueErr(err, "分组"); msg != "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
@@ -358,13 +364,13 @@ func CreateAgentTasks(db *gorm.DB) gin.HandlerFunc {
 			AgentID         *string  `json:"agent_id"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error(), "code": "bad_request"})
 			return
 		}
 		needsTargetValidation := false
 		for _, ty := range req.Types {
 			if !validTaskTypes[ty] {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的任务类型: " + ty})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的任务类型: " + ty, "code": "agent.invalid_task_type"})
 				return
 			}
 			if !meshAutoTypes[ty] {
@@ -372,14 +378,14 @@ func CreateAgentTasks(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 		if msg := validateTaskScope(req.Scope, req.GroupID, req.AgentID); msg != "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+			c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "agent.invalid_scope"})
 			return
 		}
 		// meshping/meshmtr 的 Target 由 Server 动态解析，忽略用户填写的内容；其余类型必须是
 		// 合法的 IPv4/IPv6 地址。多选类型时只要有一个需要手动指定 Target 的类型就触发校验。
 		if needsTargetValidation {
 			if msg := validateTargets(req.TargetsRaw); msg != "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "agent.invalid_target"})
 				return
 			}
 		}
@@ -421,27 +427,27 @@ func UpdateAgentTask(db *gorm.DB) gin.HandlerFunc {
 			Enabled         bool    `json:"enabled"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error(), "code": "bad_request"})
 			return
 		}
 		if !validTaskTypes[req.Type] {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的任务类型: " + req.Type})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的任务类型: " + req.Type, "code": "agent.invalid_task_type"})
 			return
 		}
 		if msg := validateTaskScope(req.Scope, req.GroupID, req.AgentID); msg != "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+			c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "agent.invalid_scope"})
 			return
 		}
 		if !meshAutoTypes[req.Type] {
 			if msg := validateTargets(req.TargetsRaw); msg != "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "agent.invalid_target"})
 				return
 			}
 		}
 
 		var task models.AgentTask
 		if err := db.First(&task, id).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在", "code": "not_found"})
 			return
 		}
 		if err := db.Model(&task).Updates(map[string]interface{}{
@@ -508,18 +514,18 @@ func CreateAgentToken(db *gorm.DB) gin.HandlerFunc {
 			PresetGroupID    *uint `json:"preset_group_id"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error(), "code": "bad_request"})
 			return
 		}
 		if req.PresetGroupID != nil {
 			if err := db.First(&models.AgentGroup{}, *req.PresetGroupID).Error; err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "指定的 Group 不存在"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "指定的 Group 不存在", "code": "not_found"})
 				return
 			}
 		}
 		raw, hashed, err := generateRefreshToken()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "生成失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "生成失败", "code": "server_error"})
 			return
 		}
 		token := models.AgentToken{
@@ -548,11 +554,11 @@ func RevokeAgentToken(db *gorm.DB) gin.HandlerFunc {
 		}
 		var token models.AgentToken
 		if err := db.First(&token, id).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Token 不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "Token 不存在", "code": "not_found"})
 			return
 		}
 		if token.Status != "unused" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "仅可作废未使用的 Token"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "仅可作废未使用的 Token", "code": "agent.token_not_unused"})
 			return
 		}
 		db.Model(&token).Update("status", "revoked")
@@ -576,7 +582,7 @@ func GetCAStatus(pki *core.PKI) gin.HandlerFunc {
 func RotateCA(db *gorm.DB, pki *core.PKI, caDays int) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := pki.Rotate(caDays); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "轮换失败: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "轮换失败: " + err.Error(), "code": "server_error"})
 			return
 		}
 		writeAgentAudit(db, getUsername(c), "rotate_ca", "ca", "",
@@ -592,7 +598,8 @@ func RotateCA(db *gorm.DB, pki *core.PKI, caDays int) gin.HandlerFunc {
 func FinalizeCA(db *gorm.DB, pki *core.PKI) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := pki.Finalize(); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			// "无待终结的轮换" 由 core 层以 CodedError 携带 agent.ca_no_pending 返回
+			c.JSON(http.StatusBadRequest, codedErrJSON(err))
 			return
 		}
 		writeAgentAudit(db, getUsername(c), "finalize_ca", "ca", "",
@@ -652,18 +659,18 @@ func CreateAgentRelease(db *gorm.DB, releaseDir string) gin.HandlerFunc {
 		arch := strings.TrimSpace(c.PostForm("arch"))
 		notes := strings.TrimSpace(c.PostForm("notes"))
 		if version == "" || osName == "" || arch == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "version / os / arch 不能为空"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "version / os / arch 不能为空", "code": "bad_request"})
 			return
 		}
 
 		fh, err := c.FormFile("file")
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少二进制文件（字段名 file）"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少二进制文件（字段名 file）", "code": "agent.release_file_missing"})
 			return
 		}
 		src, err := fh.Open()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "无法读取上传文件"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "无法读取上传文件", "code": "server_error"})
 			return
 		}
 		defer src.Close()
@@ -671,7 +678,7 @@ func CreateAgentRelease(db *gorm.DB, releaseDir string) gin.HandlerFunc {
 		// 临时文件与最终文件在同一目录，保证 rename 是同分区原子操作
 		tmp, err := os.CreateTemp(releaseDir, "upload-*")
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建临时文件失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建临时文件失败", "code": "server_error"})
 			return
 		}
 		tmpPath := tmp.Name()
@@ -688,7 +695,7 @@ func CreateAgentRelease(db *gorm.DB, releaseDir string) gin.HandlerFunc {
 		written, err := io.Copy(io.MultiWriter(tmp, h), src)
 		tmp.Close()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "写入文件失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "写入文件失败", "code": "server_error"})
 			return
 		}
 		checksum := hex.EncodeToString(h.Sum(nil))
@@ -707,7 +714,7 @@ func CreateAgentRelease(db *gorm.DB, releaseDir string) gin.HandlerFunc {
 		finalPath := filepath.Join(releaseDir, strconv.FormatUint(uint64(rel.ID), 10))
 		if err := os.Rename(tmpPath, finalPath); err != nil {
 			db.Delete(&rel)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存文件失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存文件失败", "code": "server_error"})
 			return
 		}
 		cleanTmp = false            // rename 成功，不再清理（已不是 tmpPath）
@@ -731,7 +738,7 @@ func DeleteAgentRelease(db *gorm.DB) gin.HandlerFunc {
 		}
 		var rel models.AgentRelease
 		if err := db.First(&rel, id).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Release 不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "Release 不存在", "code": "not_found"})
 			return
 		}
 		if err := db.Delete(&rel).Error; err != nil {
@@ -760,12 +767,12 @@ func SetAgentReleaseActive(db *gorm.DB) gin.HandlerFunc {
 			Active bool `json:"active"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error(), "code": "bad_request"})
 			return
 		}
 		var rel models.AgentRelease
 		if err := db.First(&rel, id).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Release 不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "Release 不存在", "code": "not_found"})
 			return
 		}
 		if req.Active {
@@ -805,7 +812,7 @@ func GetAgentReleaseProgress(db *gorm.DB) gin.HandlerFunc {
 		}
 		var rel models.AgentRelease
 		if err := db.First(&rel, id).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Release 不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "Release 不存在", "code": "not_found"})
 			return
 		}
 

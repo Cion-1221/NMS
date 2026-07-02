@@ -9,7 +9,7 @@ import {
 import { changePassword, updateProfile, updateTokenSettings } from '../api/auth';
 import { useAuth } from '../contexts/AuthContext';
 import { useAppContext, ThemeMode, Language } from '../contexts/AppContext';
-import { useT } from '../i18n';
+import { apiErrMsg, useT } from '../i18n';
 
 const { Text } = Typography;
 
@@ -75,7 +75,7 @@ const PreferencesTab: React.FC = () => {
       }
       message.success(t('common.success'));
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? 'Save failed');
+      message.error(apiErrMsg(err));
     } finally {
       setSaving(false);
     }
@@ -164,7 +164,7 @@ const SecurityTab: React.FC = () => {
       form.resetFields();
       refreshSession(res.data);
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? 'Failed');
+      message.error(apiErrMsg(err));
     } finally {
       setSaving(false);
     }

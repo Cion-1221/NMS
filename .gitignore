@@ -17,9 +17,6 @@ dist.tar.gz
 # 依赖
 frontend/node_modules/
 
-# Agent 骨架本地运行时落地的证书/状态
-agent-skeleton/agent-data/
-
 # IDE / OS
 .vscode/
 .idea/

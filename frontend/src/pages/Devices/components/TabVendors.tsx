@@ -4,7 +4,7 @@ import { ExclamationCircleFilled, PlusOutlined, ReloadOutlined, SearchOutlined }
 import type { ColumnsType } from 'antd/es/table';
 import { getDeviceVendors, createDeviceVendor, updateDeviceVendor, deleteDeviceVendor } from '../../../api/device';
 import type { DeviceVendor } from '../../../types/device';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 
 const { confirm } = Modal;
 
@@ -21,7 +21,7 @@ const TabVendors: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try { const r = await getDeviceVendors(); setData(r.data); }
-    catch (err: unknown) { message.error(err instanceof Error ? err.message : 'Failed to load vendors'); }
+    catch (err: unknown) { message.error(apiErrMsg(err)); }
     finally { setLoading(false); }
   };
 
@@ -52,7 +52,7 @@ const TabVendors: React.FC = () => {
       cancelText: t('common.cancel'),
       onOk: async () => {
         try { await deleteDeviceVendor(r.id); message.success(t('device.vendor.delDone')); loadData(); }
-        catch (err: unknown) { message.error(err instanceof Error ? err.message : 'Delete failed'); }
+        catch (err: unknown) { message.error(apiErrMsg(err)); }
       },
     });
   };
@@ -68,7 +68,7 @@ const TabVendors: React.FC = () => {
         message.success(t('device.vendor.saveOk'));
       }
       setOpen(false); loadData();
-    } catch (err: unknown) { message.error(err instanceof Error ? err.message : 'Request failed'); }
+    } catch (err: unknown) { message.error(apiErrMsg(err)); }
   };
 
   const columns: ColumnsType<DeviceVendor> = [

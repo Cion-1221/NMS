@@ -4,7 +4,7 @@ import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { getMeshPingMatrix, getAgentGroups, getLatestProbeResults, lookupASN } from '../../../api/agent';
 import type { MeshPingMatrixResp, MeshPingCell, MeshPingProto, AgentGroup, MtrHop } from '../../../types/agent';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 import { useDebounced } from '../../../utils/useDebounced';
 import { FONT_MONO } from '../../../theme/theme';
 
@@ -70,7 +70,7 @@ const TabMeshPingMatrix: React.FC = () => {
       setMatrixData(r.data);
       setActiveCell(null);
     } catch (err: any) {
-      if (seq === reqSeq.current) message.error(err?.response?.data?.error ?? 'Failed to load matrix');
+      if (seq === reqSeq.current) message.error(apiErrMsg(err));
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
@@ -242,8 +242,8 @@ const TabMeshPingMatrix: React.FC = () => {
 
   // MTR hop 列定义（与 TabGenericResults modal 保持一致）
   const mtrColumns = [
-    { title: 'Hop', dataIndex: 'ttl', key: 'ttl', width: 55 },
-    { title: 'Host', dataIndex: 'host', key: 'host' },
+    { title: t('mtr.hop'), dataIndex: 'ttl', key: 'ttl', width: 55 },
+    { title: t('mtr.host'), dataIndex: 'host', key: 'host' },
     {
       title: t('mtr.asn'),
       key: 'asn',
@@ -262,23 +262,23 @@ const TabMeshPingMatrix: React.FC = () => {
       },
     },
     {
-      title: 'Loss%', dataIndex: 'loss_rate', key: 'loss_rate', width: 70, align: 'right' as const,
+      title: t('mtr.loss'), dataIndex: 'loss_rate', key: 'loss_rate', width: 70, align: 'right' as const,
       render: (v: number) => <span style={{ color: v > 0 ? '#ff4d4f' : undefined }}>{v}%</span>,
     },
     {
-      title: 'Avg', dataIndex: 'avg_rtt_ms', key: 'avg_rtt_ms', width: 80, align: 'right' as const,
+      title: t('mtr.avg'), dataIndex: 'avg_rtt_ms', key: 'avg_rtt_ms', width: 80, align: 'right' as const,
       render: (v: number, r: MtrHop) => r.loss_rate >= 100 ? '—' : `${v.toFixed(1)} ms`,
     },
     {
-      title: 'Best', dataIndex: 'best_rtt_ms', key: 'best_rtt_ms', width: 80, align: 'right' as const,
+      title: t('mtr.best'), dataIndex: 'best_rtt_ms', key: 'best_rtt_ms', width: 80, align: 'right' as const,
       render: (v: number, r: MtrHop) => r.loss_rate >= 100 ? '—' : `${v.toFixed(1)} ms`,
     },
     {
-      title: 'Worst', dataIndex: 'worst_rtt_ms', key: 'worst_rtt_ms', width: 80, align: 'right' as const,
+      title: t('mtr.worst'), dataIndex: 'worst_rtt_ms', key: 'worst_rtt_ms', width: 80, align: 'right' as const,
       render: (v: number, r: MtrHop) => r.loss_rate >= 100 ? '—' : `${v.toFixed(1)} ms`,
     },
     {
-      title: 'Std Dev', dataIndex: 'stddev_rtt_ms', key: 'stddev_rtt_ms', width: 80, align: 'right' as const,
+      title: t('mtr.stddev'), dataIndex: 'stddev_rtt_ms', key: 'stddev_rtt_ms', width: 80, align: 'right' as const,
       render: (v: number | undefined, r: MtrHop) =>
         r.loss_rate >= 100 || v == null ? '—' : `${v.toFixed(1)} ms`,
     },

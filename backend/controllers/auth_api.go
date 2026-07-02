@@ -114,14 +114,14 @@ func Login(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			Password string `json:"password" binding:"required"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "bad_request"})
 			return
 		}
 
 		// 防爆破：处于锁定期的 用户名+IP 直接拒绝，不触碰数据库密码校验
 		clientIP := c.ClientIP()
-		if msg := loginGuardCheck(db, req.Username, clientIP); msg != "" {
-			c.JSON(http.StatusTooManyRequests, gin.H{"error": msg})
+		if msg, mins := loginGuardCheck(db, req.Username, clientIP); msg != "" {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": msg, "code": "auth.locked", "minutes": mins})
 			return
 		}
 
@@ -130,16 +130,16 @@ func Login(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				// 用户不存在与密码错误同样计入失败，避免通过响应差异枚举用户名
 				loginGuardFail(db, req.Username, clientIP)
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误", "code": "auth.invalid_credentials"})
 				return
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误", "code": "server_error"})
 			return
 		}
 
 		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
 			loginGuardFail(db, req.Username, clientIP)
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误", "code": "auth.invalid_credentials"})
 			return
 		}
 
@@ -152,13 +152,13 @@ func Login(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 		isAdmin := user.Group.IsAdmin()
 		accessToken, expiresAt, err := buildToken(&user, isAdmin, cfg.JWTSecret)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Token 生成失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Token 生成失败", "code": "server_error"})
 			return
 		}
 
 		refreshToken, err := issueRefreshToken(db, user.ID, cfg.RefreshTokenDays)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Refresh Token 生成失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Refresh Token 生成失败", "code": "server_error"})
 			return
 		}
 
@@ -178,7 +178,7 @@ func Refresh(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			RefreshToken string `json:"refresh_token" binding:"required"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "bad_request"})
 			return
 		}
 
@@ -187,14 +187,14 @@ func Refresh(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 		var rt models.SysRefreshToken
 		if err := db.Where("token_hash = ? AND expires_at > ?", hashed, time.Now()).
 			First(&rt).Error; err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Refresh Token 无效或已过期，请重新登录"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Refresh Token 无效或已过期，请重新登录", "code": "auth.refresh_invalid"})
 			return
 		}
 
 		// 加载用户信息
 		var user models.SysUser
 		if err := db.Preload("Group").First(&user, rt.UserID).Error; err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "关联用户不存在"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "关联用户不存在", "code": "auth.refresh_invalid"})
 			return
 		}
 
@@ -205,13 +205,13 @@ func Refresh(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 		isAdmin := user.Group.IsAdmin()
 		accessToken, expiresAt, err := buildToken(&user, isAdmin, cfg.JWTSecret)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Access Token 生成失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Access Token 生成失败", "code": "server_error"})
 			return
 		}
 
 		newRefreshToken, err := issueRefreshToken(db, user.ID, cfg.RefreshTokenDays)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Refresh Token 签发失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Refresh Token 签发失败", "code": "server_error"})
 			return
 		}
 
@@ -230,7 +230,7 @@ func GetMe(db *gorm.DB) gin.HandlerFunc {
 		claims := c.MustGet(middleware.CtxUserKey).(*middleware.Claims)
 		var user models.SysUser
 		if err := db.Preload("Group").First(&user, claims.UserID).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在", "code": "auth.user_not_found"})
 			return
 		}
 		c.JSON(http.StatusOK, buildUserInfo(&user, user.Group.IsAdmin()))
@@ -247,28 +247,28 @@ func ChangePassword(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			NewPassword string `json:"new_password" binding:"required,min=8"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误：新密码至少需要 8 位"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误：新密码至少需要 8 位", "code": "auth.pwd_too_short"})
 			return
 		}
 		if req.OldPassword == req.NewPassword {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "新密码不能与当前密码相同"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "新密码不能与当前密码相同", "code": "auth.pwd_same"})
 			return
 		}
 
 		var user models.SysUser
 		if err := db.Preload("Group").First(&user, claims.UserID).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在", "code": "auth.user_not_found"})
 			return
 		}
 
 		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.OldPassword)); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "当前密码不正确"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "当前密码不正确", "code": "auth.pwd_old_wrong"})
 			return
 		}
 
 		newHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), 12)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "密码加密失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "密码加密失败", "code": "server_error"})
 			return
 		}
 
@@ -276,7 +276,7 @@ func ChangePassword(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			"password_hash":        string(newHash),
 			"must_change_password": false,
 		}).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "密码更新失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "密码更新失败", "code": "server_error"})
 			return
 		}
 
@@ -285,13 +285,13 @@ func ChangePassword(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 		isAdmin := user.Group.IsAdmin()
 		accessToken, expiresAt, err := buildToken(&user, isAdmin, cfg.JWTSecret)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Token 签发失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Token 签发失败", "code": "server_error"})
 			return
 		}
 
 		newRefreshToken, err := issueRefreshToken(db, user.ID, cfg.RefreshTokenDays)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Refresh Token 签发失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Refresh Token 签发失败", "code": "server_error"})
 			return
 		}
 
@@ -314,14 +314,14 @@ func UpdateTokenSettings(db *gorm.DB) gin.HandlerFunc {
 			TokenLifetimeHours int `json:"token_lifetime_hours" binding:"required,min=1,max=720"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误：token_lifetime_hours 须在 1～720 小时之间"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误：token_lifetime_hours 须在 1～720 小时之间", "code": "auth.lifetime_range"})
 			return
 		}
 
 		if err := db.Model(&models.SysUser{}).
 			Where("id = ?", claims.UserID).
 			Update("token_lifetime_hours", req.TokenLifetimeHours).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "设置更新失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "设置更新失败", "code": "server_error"})
 			return
 		}
 
@@ -342,7 +342,7 @@ func UpdateProfile(db *gorm.DB) gin.HandlerFunc {
 			Language *string `json:"language"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body", "code": "bad_request"})
 			return
 		}
 
@@ -350,7 +350,7 @@ func UpdateProfile(db *gorm.DB) gin.HandlerFunc {
 		if req.Theme != nil {
 			valid := map[string]bool{"light": true, "dark": true, "system": true}
 			if !valid[*req.Theme] {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid theme value, must be light|dark|system"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid theme value, must be light|dark|system", "code": "bad_request"})
 				return
 			}
 			updates["theme"] = *req.Theme
@@ -358,23 +358,23 @@ func UpdateProfile(db *gorm.DB) gin.HandlerFunc {
 		if req.Language != nil {
 			valid := map[string]bool{"en": true, "zh": true}
 			if !valid[*req.Language] {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid language value, must be en|zh"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid language value, must be en|zh", "code": "bad_request"})
 				return
 			}
 			updates["language"] = *req.Language
 		}
 		if len(updates) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "No fields to update"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "No fields to update", "code": "bad_request"})
 			return
 		}
 
 		var user models.SysUser
 		if err := db.Preload("Group").First(&user, claims.UserID).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "User not found", "code": "auth.user_not_found"})
 			return
 		}
 		if err := db.Model(&user).Updates(updates).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Update failed"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Update failed", "code": "server_error"})
 			return
 		}
 		db.Preload("Group").First(&user, claims.UserID)

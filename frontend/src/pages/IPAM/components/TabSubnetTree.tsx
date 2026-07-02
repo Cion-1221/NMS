@@ -10,7 +10,7 @@ import {
   getGroups, getIPAMTypes, getVRFs,
 } from '../../../api/ipam';
 import type { RootPrefix, SubnetNode, IPAMGroup, IPAMType, IPAMVRF } from '../../../types/ipam';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 import { cidrMatchesSearch } from '../../../utils/cidr';
 import { FONT_MONO } from '../../../theme/theme';
 
@@ -144,8 +144,8 @@ const TabSubnetTree: React.FC = () => {
           children: [],
         }));
         setTreeData(initial);
-      } catch {
-        message.error('Failed to load root prefixes');
+      } catch (err) {
+        message.error(apiErrMsg(err));
       } finally {
         setLoading(false);
       }
@@ -189,8 +189,8 @@ const TabSubnetTree: React.FC = () => {
           prev.map((n) => n.key === record.key ? { ...n, _loading: true } : n),
         );
         try { await reloadRootSubtree(record.id); }
-        catch {
-          message.error('Failed to load subnets');
+        catch (err) {
+          message.error(apiErrMsg(err));
           setTreeData((prev) =>
             prev.map((n) => n.key === record.key ? { ...n, _loading: false } : n),
           );
@@ -226,8 +226,8 @@ const TabSubnetTree: React.FC = () => {
       if (root) await reloadRootSubtree(root, splitNode.key);
     } catch (err: unknown) {
       if (err instanceof AxiosError && err.response?.data?.error)
-        Modal.error({ title: 'Split rejected', content: err.response.data.error });
-      else message.error('Split failed');
+        Modal.error({ title: t('ipam.subnet.splitRejected'), content: apiErrMsg(err) });
+      else message.error(apiErrMsg(err));
     }
   };
 
@@ -235,7 +235,7 @@ const TabSubnetTree: React.FC = () => {
   const openMerge = (node: UINode) => { setMergeParent(node); setMergeSelected([]); setMergeOpen(true); };
 
   const handleMergeSubmit = async () => {
-    if (mergeSelected.length < 2) { message.warning('Select at least 2 subnets'); return; }
+    if (mergeSelected.length < 2) { message.warning(t('ipam.subnet.mergeMinTwo')); return; }
     try {
       const ids = (mergeSelected as string[]).map((k) => parseInt(k.split('-').pop()!, 10));
       await mergeSubnets({ subnet_ids: ids });
@@ -245,8 +245,8 @@ const TabSubnetTree: React.FC = () => {
       if (root) await reloadRootSubtree(root, mergeParent?.key);
     } catch (err: unknown) {
       if (err instanceof AxiosError && err.response?.data?.error)
-        Modal.error({ title: 'Merge rejected', content: err.response.data.error });
-      else message.error('Merge failed');
+        Modal.error({ title: t('ipam.subnet.mergeRejected'), content: apiErrMsg(err) });
+      else message.error(apiErrMsg(err));
     }
   };
 
@@ -264,7 +264,9 @@ const TabSubnetTree: React.FC = () => {
 
   const handleEditSubmit = async () => {
     if (!editNode) return;
-    const v = await editForm.validateFields();
+    // 校验失败静默返回（与其他 handler 一致），避免未捕获的 promise rejection
+    let v: { group_id?: number; type_id?: number; vrf_id?: number; remark?: string };
+    try { v = await editForm.validateFields(); } catch { return; }
     try {
       await updateSubnet(editNode.id, {
         group_id: v.group_id ?? null, type_id: v.type_id ?? null,
@@ -274,8 +276,8 @@ const TabSubnetTree: React.FC = () => {
       setEditOpen(false);
       const root = findRootId(treeData, editNode.key);
       if (root) await reloadRootSubtree(root);
-    } catch {
-      message.error('Update failed');
+    } catch (err) {
+      message.error(apiErrMsg(err));
     }
   };
 
@@ -358,7 +360,7 @@ const TabSubnetTree: React.FC = () => {
       <Space wrap style={{ marginBottom: 16 }}>
         <Input
           prefix={<SearchOutlined />}
-          placeholder="CIDR (e.g. 10.0.0.0/8)"
+          placeholder={t('ipam.searchCidrPh')}
           value={filterCIDR}
           onChange={(e) => setFilterCIDR(e.target.value)}
           allowClear style={{ width: 210 }}
@@ -417,7 +419,7 @@ const TabSubnetTree: React.FC = () => {
         okText={t('ipam.subnet.split')} cancelText={t('common.cancel')} destroyOnClose
       >
         <Form form={splitForm} layout="vertical">
-          <p>Target: <strong>{splitNode?.cidr}</strong>&nbsp;
+          <p>{t('ipam.subnet.target')}: <strong>{splitNode?.cidr}</strong>&nbsp;
             <Tag color={splitNode?.level === 'Root' ? 'purple' : splitNode?.level === 'L1' ? 'blue' : 'cyan'}>
               {splitNode?.level}
             </Tag>
@@ -426,8 +428,8 @@ const TabSubnetTree: React.FC = () => {
             <Alert type="error" showIcon message={t('ipam.subnet.reSplitWarn')} style={{ marginBottom: 16 }} />
           ) : null}
           <Form.Item name="target_bits" label={t('ipam.subnet.targetMask')}
-            rules={[{ required: true, message: 'Please select a prefix length' }]}>
-            <Select placeholder="Select subnet size" options={maskOptions} />
+            rules={[{ required: true, message: t('ipam.subnet.sizeRequired') }]}>
+            <Select placeholder={t('ipam.subnet.sizePh')} options={maskOptions} />
           </Form.Item>
         </Form>
       </Modal>
@@ -443,7 +445,7 @@ const TabSubnetTree: React.FC = () => {
           rowSelection={{ selectedRowKeys: mergeSelected, onChange: setMergeSelected }}
           columns={[
             { title: 'CIDR', dataIndex: 'cidr', key: 'cidr', render: (v: string) => <strong>{v}</strong> },
-            { title: 'Level', dataIndex: 'level', key: 'level', width: 80 },
+            { title: t('ipam.subnet.level'), dataIndex: 'level', key: 'level', width: 80 },
           ]}
           dataSource={mergeParent?.children ?? []}
           rowKey="key" pagination={false} size="small"

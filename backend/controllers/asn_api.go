@@ -17,7 +17,7 @@ func LookupASN(db *asndb.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		raw := c.Query("ips")
 		if raw == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 ips 参数"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 ips 参数", "code": "bad_request"})
 			return
 		}
 		result := make(map[string]interface{})
@@ -39,7 +39,7 @@ func ReloadASNDB(db *asndb.DB, v4, v6, names string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := db.Load(v4, v6, names); err != nil {
 			slog.Error("asndb: 手动重载失败", "err", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "code": "server_error"})
 			return
 		}
 		slog.Info("asndb: 手动重载成功")

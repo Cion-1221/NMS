@@ -81,6 +81,8 @@ export const getAgentReleases = () =>
 export const createAgentRelease = (data: FormData) =>
   client.post<AgentRelease>('/agent-releases', data, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    // Agent 二进制动辄几十 MB，不能吃全局 10s 超时；0 = 不限时，交给网络层约束
+    timeout: 0,
   });
 
 export const deleteAgentRelease = (id: number) =>

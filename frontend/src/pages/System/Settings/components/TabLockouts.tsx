@@ -4,7 +4,7 @@ import { ReloadOutlined, SearchOutlined, UnlockOutlined } from '@ant-design/icon
 import type { ColumnsType } from 'antd/es/table';
 import { listLockouts, unlockLockouts } from '../../../../api/system';
 import type { LockoutEntry } from '../../../../types/system';
-import { useT } from '../../../../i18n';
+import { apiErrMsg, useT } from '../../../../i18n';
 import { useDebounced } from '../../../../utils/useDebounced';
 import StatusTag from '../../../../components/StatusTag';
 import { FONT_MONO } from '../../../../theme/theme';
@@ -53,7 +53,7 @@ const TabLockouts: React.FC = () => {
       setSelectedKeys([]); // 刷新后清空选择，避免选中已消失的条目
     } catch (err: any) {
       if (seq === reqSeq.current) {
-        message.error(err?.response?.data?.error ?? 'Failed to load lockouts');
+        message.error(apiErrMsg(err));
       }
     } finally {
       if (seq === reqSeq.current) setLoading(false);
@@ -72,7 +72,7 @@ const TabLockouts: React.FC = () => {
       message.success(t('sysset.lockouts.unlockOk').replace('{n}', String(r.data.unlocked)));
       void loadData();
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? 'Unlock failed');
+      message.error(apiErrMsg(err));
     }
   };
 

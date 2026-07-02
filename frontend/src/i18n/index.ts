@@ -1,5 +1,8 @@
 import { useAppContext } from '../contexts/AppContext';
+import { apiErrorMessage } from './apiErrors';
 import dict, { Lang, TranslationKey } from './translations';
+
+export { apiErrMsg } from './apiErrors';
 
 /** Replace {key} placeholders in a string */
 function interpolate(str: string, params?: Record<string, string | number>): string {
@@ -25,4 +28,15 @@ export function translate(key: TranslationKey, lang: Lang, params?: Record<strin
   const entry = dict[key];
   const raw = entry[lang] ?? entry['en'] ?? String(key);
   return interpolate(raw, params);
+}
+
+/**
+ * Hook: returns a formatter that localizes backend API errors by their `code`
+ * field (see ./apiErrors.ts), falling back to the raw backend `error` message.
+ * Usage: const apiErr = useApiError(); message.error(apiErr(err));
+ */
+export function useApiError() {
+  const { language } = useAppContext();
+  return (err: unknown, fallback?: string): string =>
+    apiErrorMessage(err, language as Lang, fallback);
 }

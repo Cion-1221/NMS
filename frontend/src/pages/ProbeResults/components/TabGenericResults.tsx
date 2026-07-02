@@ -4,7 +4,7 @@ import { DeleteOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icon
 import type { ColumnsType } from 'antd/es/table';
 import { getLatestProbeResults, getAgents, deleteProbeResultPair, lookupASN } from '../../../api/agent';
 import type { Agent, MtrHop, ProbeResult, TaskType } from '../../../types/agent';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 import { useDebounced } from '../../../utils/useDebounced';
 import StatusTag from '../../../components/StatusTag';
 import RelativeTime from '../../../components/RelativeTime';
@@ -57,7 +57,7 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
       setData(r.data.items);
       setTotal(r.data.total);
     } catch (err: any) {
-      if (seq === reqSeq.current) message.error(err?.response?.data?.error ?? 'Failed to load results');
+      if (seq === reqSeq.current) message.error(apiErrMsg(err));
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
@@ -73,7 +73,7 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
       message.success(t('common.success'));
       void loadData();
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? 'Delete failed');
+      message.error(apiErrMsg(err));
     }
   };
 
@@ -188,7 +188,7 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
         scroll={{ x: 'max-content' }}
       />
       <Modal
-        title="MTR Hop Details"
+        title={t('mtr.hopDetails')}
         open={mtrHops !== null}
         onCancel={() => { setMtrHops(null); setAsnMap({}); }}
         footer={null}
@@ -201,8 +201,8 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
           rowKey="ttl"
           pagination={false}
           columns={[
-            { title: 'Hop', dataIndex: 'ttl', key: 'ttl', width: 55 },
-            { title: 'Host', dataIndex: 'host', key: 'host' },
+            { title: t('mtr.hop'), dataIndex: 'ttl', key: 'ttl', width: 55 },
+            { title: t('mtr.host'), dataIndex: 'host', key: 'host' },
             {
               title: t('mtr.asn'),
               key: 'asn',
@@ -221,23 +221,23 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
               },
             },
             {
-              title: 'Loss%', dataIndex: 'loss_rate', key: 'loss_rate', width: 70, align: 'right' as const,
+              title: t('mtr.loss'), dataIndex: 'loss_rate', key: 'loss_rate', width: 70, align: 'right' as const,
               render: (v: number) => <span style={{ color: v > 0 ? '#ff4d4f' : undefined }}>{v}%</span>,
             },
             {
-              title: 'Avg', dataIndex: 'avg_rtt_ms', key: 'avg_rtt_ms', width: 80, align: 'right' as const,
+              title: t('mtr.avg'), dataIndex: 'avg_rtt_ms', key: 'avg_rtt_ms', width: 80, align: 'right' as const,
               render: (v: number, r: MtrHop) => r.loss_rate >= 100 ? '—' : `${v.toFixed(1)} ms`,
             },
             {
-              title: 'Best', dataIndex: 'best_rtt_ms', key: 'best_rtt_ms', width: 80, align: 'right' as const,
+              title: t('mtr.best'), dataIndex: 'best_rtt_ms', key: 'best_rtt_ms', width: 80, align: 'right' as const,
               render: (v: number, r: MtrHop) => r.loss_rate >= 100 ? '—' : `${v.toFixed(1)} ms`,
             },
             {
-              title: 'Worst', dataIndex: 'worst_rtt_ms', key: 'worst_rtt_ms', width: 80, align: 'right' as const,
+              title: t('mtr.worst'), dataIndex: 'worst_rtt_ms', key: 'worst_rtt_ms', width: 80, align: 'right' as const,
               render: (v: number, r: MtrHop) => r.loss_rate >= 100 ? '—' : `${v.toFixed(1)} ms`,
             },
             {
-              title: 'Std Dev', dataIndex: 'stddev_rtt_ms', key: 'stddev_rtt_ms', width: 80, align: 'right' as const,
+              title: t('mtr.stddev'), dataIndex: 'stddev_rtt_ms', key: 'stddev_rtt_ms', width: 80, align: 'right' as const,
               render: (v: number | undefined, r: MtrHop) =>
                 r.loss_rate >= 100 || v == null ? '—' : `${v.toFixed(1)} ms`,
             },

@@ -214,17 +214,18 @@ func (t *loginTracker) sweep() {
 
 // ── 供 Login handler 调用的封装 ─────────────────────────────────────────────────
 
-// loginGuardCheck 在密码校验前调用。返回非空字符串时应直接以 429 拒绝。
-func loginGuardCheck(db *gorm.DB, username, ip string) string {
+// loginGuardCheck 在密码校验前调用。返回非空 msg 时应直接以 429 拒绝；
+// minutes 为剩余锁定分钟数，供前端按错误码做 i18n 插值展示。
+func loginGuardCheck(db *gorm.DB, username, ip string) (msg string, minutes int) {
 	s := getLoginProtectionSettings(db)
 	if !s.Enabled {
-		return ""
+		return "", 0
 	}
 	if locked, until := loginGuard.check(loginGuardKey(username, ip)); locked {
 		mins := int(time.Until(until).Minutes()) + 1
-		return fmt.Sprintf("登录失败次数过多，账号已临时锁定，请 %d 分钟后重试", mins)
+		return fmt.Sprintf("登录失败次数过多，账号已临时锁定，请 %d 分钟后重试", mins), mins
 	}
-	return ""
+	return "", 0
 }
 
 // loginGuardFail 在用户不存在或密码错误时调用（两种情况同样计数，防止用户名枚举差异）
@@ -255,23 +256,23 @@ func UpdateSecuritySettings(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req LoginProtectionSettings
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error(), "code": "bad_request"})
 			return
 		}
 		if req.MaxAttempts < 1 || req.MaxAttempts > 100 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "最大失败次数取值范围 1-100"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "最大失败次数取值范围 1-100", "code": "sys.sec_max_attempts_range"})
 			return
 		}
 		if req.WindowMinutes < 1 || req.WindowMinutes > 1440 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "统计窗口取值范围 1-1440 分钟"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "统计窗口取值范围 1-1440 分钟", "code": "sys.sec_window_range"})
 			return
 		}
 		if req.LockoutMinutes < 1 || req.LockoutMinutes > 1440 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "锁定时长取值范围 1-1440 分钟"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "锁定时长取值范围 1-1440 分钟", "code": "sys.sec_lockout_range"})
 			return
 		}
 		if err := saveLoginProtectionSettings(db, req); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error(), "code": "server_error"})
 			return
 		}
 		c.JSON(http.StatusOK, req)
@@ -328,7 +329,7 @@ func UnlockLockouts() gin.HandlerFunc {
 			Keys []string `json:"keys" binding:"required,min=1"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: 请至少选择一条要解除的锁定"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: 请至少选择一条要解除的锁定", "code": "sys.lockout_select_one"})
 			return
 		}
 		n := loginGuard.unlock(req.Keys)

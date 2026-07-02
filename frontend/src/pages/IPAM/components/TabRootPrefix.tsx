@@ -10,7 +10,7 @@ import {
   getGroups, getIPAMTypes, getVRFs,
 } from '../../../api/ipam';
 import type { RootPrefix, IPAMGroup, IPAMType, IPAMVRF } from '../../../types/ipam';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 import { cidrMatchesSearch } from '../../../utils/cidr';
 import StatusTag from '../../../components/StatusTag';
 import { FONT_MONO } from '../../../theme/theme';
@@ -41,7 +41,7 @@ const TabRootPrefix: React.FC = () => {
   const fetchList = async () => {
     setLoading(true);
     try { const res = await getRootPrefixes(); setData(res.data); }
-    catch { message.error('Failed to load root prefixes'); }
+    catch (err) { message.error(apiErrMsg(err)); }
     finally { setLoading(false); }
   };
 
@@ -91,7 +91,7 @@ const TabRootPrefix: React.FC = () => {
       cancelText: t('common.cancel'),
       onOk: async () => {
         try { await deleteRootPrefix(id); message.success(t('ipam.root.delDone')); fetchList(); }
-        catch { message.error('Delete failed'); }
+        catch (err) { message.error(apiErrMsg(err)); }
       },
     });
   };
@@ -117,8 +117,8 @@ const TabRootPrefix: React.FC = () => {
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'errorFields' in err) return;
       if (err instanceof AxiosError && err.response?.status === 400)
-        Modal.error({ title: 'Error', content: err.response.data.error });
-      else message.error('Request failed');
+        Modal.error({ title: t('common.error'), content: apiErrMsg(err) });
+      else message.error(apiErrMsg(err));
     }
   };
 
@@ -168,7 +168,7 @@ const TabRootPrefix: React.FC = () => {
       <Space wrap style={{ marginBottom: 16 }}>
         <Input
           prefix={<SearchOutlined />}
-          placeholder="CIDR (e.g. 10.0.0.0/8)"
+          placeholder={t('ipam.searchCidrPh')}
           value={filterCIDR}
           onChange={(e) => setFilterCIDR(e.target.value)}
           allowClear
@@ -239,10 +239,10 @@ const TabRootPrefix: React.FC = () => {
           </Form.Item>
           <Form.Item
             label={t('ipam.root.cidr')} name="cidr"
-            rules={[{ required: true, message: 'CIDR is required' }]}
+            rules={[{ required: true, message: t('ipam.root.cidrRequired') }]}
             extra={modalMode === 'create' ? t('ipam.root.cidrHint') : ''}
           >
-            <Input disabled={modalMode === 'edit'} placeholder="e.g. 10.0.0.0/8 or 2001:db8::/32" />
+            <Input disabled={modalMode === 'edit'} placeholder={t('ipam.root.cidrPh')} />
           </Form.Item>
           <Form.Item label={t('ipam.root.group')} name="group_id">
             <Select allowClear placeholder="—" options={groupOpts} />
@@ -254,7 +254,7 @@ const TabRootPrefix: React.FC = () => {
             <Select allowClear placeholder="—" options={vrfOpts} />
           </Form.Item>
           <Form.Item label={t('ipam.root.remark')} name="remark">
-            <Input.TextArea rows={2} placeholder="Optional remark…" />
+            <Input.TextArea rows={2} placeholder={t('common.remarkPh')} />
           </Form.Item>
         </Form>
       </Modal>

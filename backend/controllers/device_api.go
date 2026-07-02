@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"nms-backend/core"
 	"nms-backend/models"
 
 	"github.com/gin-gonic/gin"
@@ -56,7 +57,7 @@ func CreateDeviceSite(db *gorm.DB) gin.HandlerFunc {
 			Description string `json:"description"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error(), "code": "bad_request"})
 			return
 		}
 		site := models.DeviceSite{
@@ -65,7 +66,7 @@ func CreateDeviceSite(db *gorm.DB) gin.HandlerFunc {
 		}
 		if err := db.Create(&site).Error; err != nil {
 			if msg := friendlyNameUniqueErr(err, "站点"); msg != "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
@@ -91,12 +92,12 @@ func UpdateDeviceSite(db *gorm.DB) gin.HandlerFunc {
 			Description string `json:"description"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "bad_request"})
 			return
 		}
 		var site models.DeviceSite
 		if err := db.First(&site, id).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "站点不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "站点不存在", "code": "not_found"})
 			return
 		}
 		if err := db.Model(&site).Updates(map[string]interface{}{
@@ -104,7 +105,7 @@ func UpdateDeviceSite(db *gorm.DB) gin.HandlerFunc {
 			"address": req.Address, "description": req.Description,
 		}).Error; err != nil {
 			if msg := friendlyNameUniqueErr(err, "站点"); msg != "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
@@ -131,8 +132,10 @@ func DeleteDeviceSite(db *gorm.DB) gin.HandlerFunc {
 		var popCount int64
 		db.Model(&models.DevicePoP{}).Where("site_id = ?", id).Count(&popCount)
 		if popCount > 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf(
-				"该站点下还有 %d 个 PoP 节点，请先移除所有关联 PoP 后再删除站点", popCount)})
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": fmt.Sprintf("该站点下还有 %d 个 PoP 节点，请先移除所有关联 PoP 后再删除站点", popCount),
+				"code":  "device.site_has_pops", "count": popCount,
+			})
 			return
 		}
 		txErr := db.Transaction(func(tx *gorm.DB) error {
@@ -175,19 +178,20 @@ func CreateDevicePoP(db *gorm.DB) gin.HandlerFunc {
 			Description string `json:"description"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error(), "code": "bad_request"})
 			return
 		}
 		// Verify site exists
 		var site models.DeviceSite
 		if err := db.First(&site, req.SiteID).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "指定的站点不存在"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "指定的站点不存在", "code": "not_found"})
 			return
 		}
 		pop := models.DevicePoP{Name: req.Name, SiteID: req.SiteID, Description: req.Description}
 		if err := db.Create(&pop).Error; err != nil {
-			if strings.Contains(err.Error(), "idx_pop_site_name") || strings.Contains(err.Error(), "Duplicate entry") {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "该站点下已存在同名的 PoP 节点，请使用其他名称"})
+			// device_pops 表唯一约束只有 (site_id, name) 复合索引，命中重复即同名 PoP
+			if isDuplicateErr(err) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "该站点下已存在同名的 PoP 节点，请使用其他名称", "code": "device.pop_name_taken"})
 				return
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
@@ -213,17 +217,17 @@ func UpdateDevicePoP(db *gorm.DB) gin.HandlerFunc {
 			Description string `json:"description"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "bad_request"})
 			return
 		}
 		// Verify site exists
 		if err := db.First(&models.DeviceSite{}, req.SiteID).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "指定的站点不存在"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "指定的站点不存在", "code": "not_found"})
 			return
 		}
 		var pop models.DevicePoP
 		if err := db.First(&pop, id).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "PoP 不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "PoP 不存在", "code": "not_found"})
 			return
 		}
 		oldSiteID := pop.SiteID
@@ -247,8 +251,9 @@ func UpdateDevicePoP(db *gorm.DB) gin.HandlerFunc {
 			return nil
 		})
 		if txErr != nil {
-			if strings.Contains(txErr.Error(), "idx_pop_site_name") || strings.Contains(txErr.Error(), "Duplicate entry") {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "该站点下已存在同名的 PoP 节点，请使用其他名称"})
+			// 事务内只有 PoP 更新可能触发唯一冲突（级联更新 devices.site_id 不涉及唯一列）
+			if isDuplicateErr(txErr) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "该站点下已存在同名的 PoP 节点，请使用其他名称", "code": "device.pop_name_taken"})
 				return
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + txErr.Error()})
@@ -300,13 +305,13 @@ func CreateDeviceRole(db *gorm.DB) gin.HandlerFunc {
 			Description string `json:"description"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "bad_request"})
 			return
 		}
 		role := models.DeviceRole{Name: req.Name, Description: req.Description}
 		if err := db.Create(&role).Error; err != nil {
 			if msg := friendlyNameUniqueErr(err, "角色"); msg != "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
@@ -330,19 +335,19 @@ func UpdateDeviceRole(db *gorm.DB) gin.HandlerFunc {
 			Description string `json:"description"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "bad_request"})
 			return
 		}
 		var role models.DeviceRole
 		if err := db.First(&role, id).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "角色不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "角色不存在", "code": "not_found"})
 			return
 		}
 		if err := db.Model(&role).Updates(map[string]interface{}{
 			"name": req.Name, "description": req.Description,
 		}).Error; err != nil {
 			if msg := friendlyNameUniqueErr(err, "角色"); msg != "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
@@ -393,13 +398,13 @@ func CreateDeviceVendor(db *gorm.DB) gin.HandlerFunc {
 			Description string `json:"description"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "bad_request"})
 			return
 		}
 		vendor := models.DeviceVendor{Name: req.Name, Description: req.Description}
 		if err := db.Create(&vendor).Error; err != nil {
 			if msg := friendlyNameUniqueErr(err, "厂商"); msg != "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
@@ -423,19 +428,19 @@ func UpdateDeviceVendor(db *gorm.DB) gin.HandlerFunc {
 			Description string `json:"description"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "bad_request"})
 			return
 		}
 		var vendor models.DeviceVendor
 		if err := db.First(&vendor, id).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "厂商不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "厂商不存在", "code": "not_found"})
 			return
 		}
 		if err := db.Model(&vendor).Updates(map[string]interface{}{
 			"name": req.Name, "description": req.Description,
 		}).Error; err != nil {
 			if msg := friendlyNameUniqueErr(err, "厂商"); msg != "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
@@ -557,38 +562,27 @@ func validateAndNormalizeIPs(rawIPv4, rawIPv6 string) (ipv4 *string, ipv6 *strin
 }
 
 // friendlyDeviceUniqueErr translates MySQL unique-key violations on the devices
-// table into clear, field-specific Chinese messages.
-// Returns "" when the error is NOT a uniqueness conflict (caller falls through to
-// the generic error path).
+// table into field-specific CodedErrors (Chinese message + machine-readable code
+// for frontend i18n mapping).
+// Returns nil when the error is NOT a uniqueness conflict (caller falls through
+// to the generic error path).
 // Detection order: IPv6 before IPv4 because "management_ipv6" contains "management_ip"
 // as a substring — checking the longer name first avoids false-positive matching.
-func friendlyDeviceUniqueErr(err error) string {
-	e := err.Error()
-	if !strings.Contains(e, "Duplicate entry") {
-		return ""
+func friendlyDeviceUniqueErr(err error) *core.CodedError {
+	if !isDuplicateErr(err) {
+		return nil
 	}
+	e := err.Error()
 	switch {
 	case strings.Contains(e, "management_ipv6"):
-		return "该 IPv6 地址已被其他设备使用，请检查后重试"
+		return &core.CodedError{Code: "device.ipv6_taken", Msg: "该 IPv6 地址已被其他设备使用，请检查后重试"}
 	case strings.Contains(e, "management_ip"):
-		return "该 IPv4 地址已被其他设备使用，请检查后重试"
+		return &core.CodedError{Code: "device.ipv4_taken", Msg: "该 IPv4 地址已被其他设备使用，请检查后重试"}
 	case strings.Contains(e, "hostname"):
-		return "主机名已存在，请使用其他名称"
+		return &core.CodedError{Code: "device.hostname_taken", Msg: "主机名已存在，请使用其他名称"}
 	default:
-		return ""
+		return nil
 	}
-}
-
-// friendlyNameUniqueErr returns a friendly Chinese error when err is a MySQL unique-key
-// violation on a single-column name index (DeviceSite, DeviceRole, DeviceVendor all use
-// a plain uniqueIndex on their Name field).  entityName is the display label used in the
-// message, e.g. "站点", "角色", "厂商".
-// Returns "" when the error is not a uniqueness conflict.
-func friendlyNameUniqueErr(err error, entityName string) string {
-	if strings.Contains(err.Error(), "Duplicate entry") {
-		return entityName + "名称已存在，请使用其他名称"
-	}
-	return ""
 }
 
 // formatDeviceIPs builds a concise IP summary for audit-log detail strings, including
@@ -628,17 +622,17 @@ func CreateDevice(db *gorm.DB) gin.HandlerFunc {
 			Remark         string `json:"remark"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error(), "code": "bad_request"})
 			return
 		}
 		// Validate & normalize IP addresses
 		ipv4, ipv6, ipErr := validateAndNormalizeIPs(req.ManagementIP, req.ManagementIPv6)
 		if ipErr != "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": ipErr})
+			c.JSON(http.StatusBadRequest, gin.H{"error": ipErr, "code": "device.invalid_ip"})
 			return
 		}
 		if ipv4 == nil && ipv6 == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "管理 IP (IPv4) 和管理 IPv6 至少填写一个"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "管理 IP (IPv4) 和管理 IPv6 至少填写一个", "code": "device.ip_required"})
 			return
 		}
 		// Default and validate status
@@ -646,7 +640,7 @@ func CreateDevice(db *gorm.DB) gin.HandlerFunc {
 			req.Status = "active"
 		}
 		if !validDeviceStatus[req.Status] {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的状态值，可选: active / offline / maintenance / planned"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的状态值，可选: active / offline / maintenance / planned", "code": "device.invalid_status"})
 			return
 		}
 		// Validate PoP belongs to the selected Site
@@ -657,7 +651,7 @@ func CreateDevice(db *gorm.DB) gin.HandlerFunc {
 				return
 			}
 			if pop.SiteID != *req.SiteID {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "所选 PoP 不属于所选站点"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "所选 PoP 不属于所选站点", "code": "device.pop_site_mismatch"})
 				return
 			}
 		}
@@ -673,8 +667,8 @@ func CreateDevice(db *gorm.DB) gin.HandlerFunc {
 			Remark:         req.Remark,
 		}
 		if err := db.Create(&device).Error; err != nil {
-			if msg := friendlyDeviceUniqueErr(err); msg != "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+			if ce := friendlyDeviceUniqueErr(err); ce != nil {
+				c.JSON(http.StatusBadRequest, codedErrJSON(ce))
 				return
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
@@ -706,17 +700,17 @@ func UpdateDevice(db *gorm.DB) gin.HandlerFunc {
 			Remark         string `json:"remark"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "bad_request"})
 			return
 		}
 		// Validate & normalize IP addresses
 		ipv4, ipv6, ipErr := validateAndNormalizeIPs(req.ManagementIP, req.ManagementIPv6)
 		if ipErr != "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": ipErr})
+			c.JSON(http.StatusBadRequest, gin.H{"error": ipErr, "code": "device.invalid_ip"})
 			return
 		}
 		if ipv4 == nil && ipv6 == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "管理 IP (IPv4) 和管理 IPv6 至少填写一个"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "管理 IP (IPv4) 和管理 IPv6 至少填写一个", "code": "device.ip_required"})
 			return
 		}
 		// Default and validate status
@@ -724,7 +718,7 @@ func UpdateDevice(db *gorm.DB) gin.HandlerFunc {
 			req.Status = "active"
 		}
 		if !validDeviceStatus[req.Status] {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的状态值，可选: active / offline / maintenance / planned"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的状态值，可选: active / offline / maintenance / planned", "code": "device.invalid_status"})
 			return
 		}
 		// Validate PoP belongs to the selected Site
@@ -735,13 +729,13 @@ func UpdateDevice(db *gorm.DB) gin.HandlerFunc {
 				return
 			}
 			if pop.SiteID != *req.SiteID {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "所选 PoP 不属于所选站点"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "所选 PoP 不属于所选站点", "code": "device.pop_site_mismatch"})
 				return
 			}
 		}
 		var device models.Device
 		if err := db.First(&device, id).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "设备不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "设备不存在", "code": "not_found"})
 			return
 		}
 		// Build the update map explicitly so that nil pointers become SQL NULL
@@ -767,8 +761,8 @@ func UpdateDevice(db *gorm.DB) gin.HandlerFunc {
 			updates["management_ipv6"] = nil
 		}
 		if err := db.Model(&device).Updates(updates).Error; err != nil {
-			if msg := friendlyDeviceUniqueErr(err); msg != "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+			if ce := friendlyDeviceUniqueErr(err); ce != nil {
+				c.JSON(http.StatusBadRequest, codedErrJSON(ce))
 				return
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
@@ -790,7 +784,7 @@ func DeleteDevice(db *gorm.DB) gin.HandlerFunc {
 		}
 		var device models.Device
 		if err := db.First(&device, id).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "设备不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "设备不存在", "code": "not_found"})
 			return
 		}
 		if err := db.Delete(&device).Error; err != nil {
@@ -838,7 +832,7 @@ func PurgeDeviceAuditLogs(db *gorm.DB) gin.HandlerFunc {
 		daysStr := c.Query("days")
 		days, err := strconv.Atoi(daysStr)
 		if err != nil || days < 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的天数参数（最小 1 天）"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的天数参数（最小 1 天）", "code": "bad_request"})
 			return
 		}
 		cutoff := time.Now().AddDate(0, 0, -days)

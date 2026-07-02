@@ -8,7 +8,7 @@ import React, {
 } from 'react';
 import { AuthUser, TokenBundle } from '../types/auth';
 import { refreshToken as refreshTokenApi } from '../api/auth';
-import { storageKeys } from '../api/client';
+import { SESSION_REFRESHED_EVENT, storageKeys } from '../api/client';
 
 // ─── 类型 ─────────────────────────────────────────────────────────────────────
 
@@ -141,6 +141,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ─── 与 axios 拦截器的静默刷新保持同步 ──────────────────────────────────────
+  // client.ts 的 401 拦截器换新 Token 后只写 localStorage 并广播该事件；
+  // 这里把 React 状态和刷新定时器重新对齐到新的 Token/到期时间。
+  useEffect(() => {
+    const onSessionRefreshed = () => {
+      const storedToken   = localStorage.getItem(storageKeys.accessToken);
+      const storedExpires = localStorage.getItem(storageKeys.expiresAt);
+      const storedUser    = localStorage.getItem(storageKeys.user);
+      if (!storedToken || !storedExpires || !storedUser) return;
+      try {
+        setToken(storedToken);
+        setUser(JSON.parse(storedUser) as AuthUser);
+        scheduleRefresh(storedExpires);
+      } catch {
+        /* 损坏的 user JSON：保持现状，等下一次正常登录/刷新覆盖 */
+      }
+    };
+    window.addEventListener(SESSION_REFRESHED_EVENT, onSessionRefreshed);
+    return () => window.removeEventListener(SESSION_REFRESHED_EVENT, onSessionRefreshed);
+  }, [scheduleRefresh]);
 
   // ─── 公开方法 ───────────────────────────────────────────────────────────────
 

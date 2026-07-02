@@ -8,7 +8,7 @@ import {
   setAgentReleaseActive, getAgentReleaseProgress,
 } from '../../../api/agent';
 import type { AgentRelease, AgentReleaseProgress, AgentReleaseProgressItem } from '../../../types/agent';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 import StatusTag from '../../../components/StatusTag';
 import RelativeTime from '../../../components/RelativeTime';
 import { FONT_MONO } from '../../../theme/theme';
@@ -68,7 +68,7 @@ const TabReleases: React.FC = () => {
       setReleases(r.data);
       void loadSummaries(r.data);
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? 'Failed to load releases');
+      message.error(apiErrMsg(err));
     } finally {
       setLoading(false);
     }
@@ -88,7 +88,7 @@ const TabReleases: React.FC = () => {
         [rel.id]: { total: r.data.total, updated_count: r.data.updated_count },
       }));
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? 'Failed to load progress');
+      message.error(apiErrMsg(err));
     } finally {
       setProgressLoading(false);
     }
@@ -125,7 +125,7 @@ const TabReleases: React.FC = () => {
       handleCloseAdd();
       void loadData();
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? 'Upload failed');
+      message.error(apiErrMsg(err));
     } finally {
       setUploading(false);
     }
@@ -139,7 +139,7 @@ const TabReleases: React.FC = () => {
       okText: t('common.delete'), okType: 'danger', cancelText: t('common.cancel'),
       onOk: async () => {
         try { await deleteAgentRelease(r.id); message.success(t('common.success')); void loadData(); }
-        catch (err: any) { message.error(err?.response?.data?.error ?? 'Delete failed'); }
+        catch (err: any) { message.error(apiErrMsg(err)); }
       },
     });
   };
@@ -150,7 +150,7 @@ const TabReleases: React.FC = () => {
       message.success(t('common.success'));
       void loadData();
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? 'Update failed');
+      message.error(apiErrMsg(err));
     }
   };
 
@@ -288,8 +288,8 @@ const TabReleases: React.FC = () => {
               fileList={selectedFile ? [{ uid: '1', name: selectedFile.name, size: selectedFile.size, status: 'done' }] : []}
             >
               <p className="ant-upload-drag-icon"><InboxOutlined /></p>
-              <p className="ant-upload-text">Click or drag the agent binary here</p>
-              <p className="ant-upload-hint" style={{ fontSize: 12 }}>SHA256 is computed automatically on the server</p>
+              <p className="ant-upload-text">{t('agent.release.uploadHint')}</p>
+              <p className="ant-upload-hint" style={{ fontSize: 12 }}>{t('agent.release.uploadNote')}</p>
             </Dragger>
           </Form.Item>
         </Form>

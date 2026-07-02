@@ -3,37 +3,44 @@ import { Form, message, Modal, Select, Typography } from 'antd';
 import { ClockCircleOutlined } from '@ant-design/icons';
 import { updateTokenSettings } from '../api/auth';
 import { useAuth } from '../contexts/AuthContext';
+import { useApiError, useT } from '../i18n';
+import type { TranslationKey } from '../i18n/translations';
 
 interface Props {
   open: boolean;
   onClose: () => void;
 }
 
-const LIFETIME_OPTIONS = [
-  { value: 1,   label: '1 小时' },
-  { value: 8,   label: '8 小时' },
-  { value: 24,  label: '24 小时（推荐）' },
-  { value: 72,  label: '3 天' },
-  { value: 168, label: '7 天' },
-  { value: 720, label: '30 天' },
+// 选项文案走 i18n（key 在渲染时经 t() 解析），value 单位为小时
+const LIFETIME_OPTIONS: { value: number; key: TranslationKey }[] = [
+  { value: 1,   key: 'session.opt.h1' },
+  { value: 8,   key: 'session.opt.h8' },
+  { value: 24,  key: 'session.opt.h24' },
+  { value: 72,  key: 'session.opt.d3' },
+  { value: 168, key: 'session.opt.d7' },
+  { value: 720, key: 'session.opt.d30' },
 ];
 
 const { Text } = Typography;
 
 const SessionSettingsModal: React.FC<Props> = ({ open, onClose }) => {
   const { user } = useAuth();
+  const t = useT();
+  const apiErr = useApiError();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
 
   // 打开时回填当前设置
   useEffect(() => {
     if (open && user) {
-      const hours = user.token_lifetime_hours || 24;
-      // 找最近的预设值，或者允许自定义
-      const matched = LIFETIME_OPTIONS.find((o) => o.value === hours);
-      form.setFieldValue('hours', matched ? hours : hours);
+      form.setFieldValue('hours', user.token_lifetime_hours || 24);
     }
   }, [open, user, form]);
+
+  const labelFor = (hours: number) => {
+    const matched = LIFETIME_OPTIONS.find((o) => o.value === hours);
+    return matched ? t(matched.key) : t('session.hours', { n: hours });
+  };
 
   const handleOk = async () => {
     let values: { hours: number };
@@ -46,10 +53,10 @@ const SessionSettingsModal: React.FC<Props> = ({ open, onClose }) => {
     setLoading(true);
     try {
       await updateTokenSettings(values.hours);
-      message.success(`会话时长已更新为 ${LIFETIME_OPTIONS.find(o => o.value === values.hours)?.label ?? values.hours + ' 小时'}，下次 Token 刷新时生效`);
+      message.success(t('session.updated', { label: labelFor(values.hours) }));
       onClose();
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? '更新失败');
+      message.error(apiErr(err));
     } finally {
       setLoading(false);
     }
@@ -60,41 +67,40 @@ const SessionSettingsModal: React.FC<Props> = ({ open, onClose }) => {
       title={
         <span>
           <ClockCircleOutlined style={{ marginRight: 8, color: '#1677ff' }} />
-          会话时长设置
+          {t('session.title')}
         </span>
       }
       open={open}
       onOk={handleOk}
       onCancel={onClose}
-      okText="保存"
-      cancelText="取消"
+      okText={t('common.save')}
+      cancelText={t('common.cancel')}
       confirmLoading={loading}
       width={400}
     >
       <div style={{ marginBottom: 16, marginTop: 8 }}>
         <Text type="secondary" style={{ fontSize: 13 }}>
-          设置登录会话令牌的有效期。到期前 5 分钟系统将自动静默刷新，无需重新登录。
-          修改后将在下次 Token 刷新（或重新登录）时生效。
+          {t('session.desc')}
         </Text>
       </div>
 
       <Form form={form} layout="vertical">
         <Form.Item
-          label="会话有效期"
+          label={t('session.lifetime')}
           name="hours"
-          rules={[{ required: true, message: '请选择会话时长' }]}
+          rules={[{ required: true, message: t('session.required') }]}
         >
           <Select
             size="large"
-            options={LIFETIME_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-            placeholder="选择会话有效期"
+            options={LIFETIME_OPTIONS.map((o) => ({ value: o.value, label: t(o.key) }))}
+            placeholder={t('session.placeholder')}
           />
         </Form.Item>
       </Form>
 
       <Text type="secondary" style={{ fontSize: 12 }}>
-        当前设置：<strong>{user?.token_lifetime_hours || 24} 小时</strong>
-        &nbsp;·&nbsp;Refresh Token 有效期由管理员在服务器配置中统一设定（默认 7 天）。
+        {t('session.current')}: <strong>{labelFor(user?.token_lifetime_hours || 24)}</strong>
+        &nbsp;·&nbsp;{t('session.refreshNote')}
       </Text>
     </Modal>
   );

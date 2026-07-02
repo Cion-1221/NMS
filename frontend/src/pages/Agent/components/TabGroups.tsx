@@ -4,7 +4,7 @@ import { ExclamationCircleFilled, PlusOutlined, ReloadOutlined, SearchOutlined }
 import type { ColumnsType } from 'antd/es/table';
 import { getAgentGroups, createAgentGroup, updateAgentGroup, deleteAgentGroup } from '../../../api/agent';
 import type { AgentGroup } from '../../../types/agent';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 
 const { confirm } = Modal;
 
@@ -26,7 +26,7 @@ const TabGroups: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try { const r = await getAgentGroups(); setData(r.data); }
-    catch (err: unknown) { message.error(err instanceof Error ? err.message : 'Failed to load groups'); }
+    catch (err: unknown) { message.error(apiErrMsg(err)); }
     finally { setLoading(false); }
   };
 
@@ -55,7 +55,7 @@ const TabGroups: React.FC = () => {
       cancelText: t('common.cancel'),
       onOk: async () => {
         try { await deleteAgentGroup(r.id); message.success(t('common.success')); loadData(); }
-        catch (err: unknown) { message.error(err instanceof Error ? err.message : 'Delete failed'); }
+        catch (err: unknown) { message.error(apiErrMsg(err)); }
       },
     });
   };
@@ -70,7 +70,7 @@ const TabGroups: React.FC = () => {
       }
       message.success(t('common.success'));
       setOpen(false); loadData();
-    } catch (err: unknown) { message.error(err instanceof Error ? err.message : 'Request failed'); }
+    } catch (err: unknown) { message.error(apiErrMsg(err)); }
   };
 
   const columns: ColumnsType<AgentGroup> = [

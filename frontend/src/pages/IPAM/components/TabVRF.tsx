@@ -4,7 +4,7 @@ import { ExclamationCircleFilled, PlusOutlined, SearchOutlined } from '@ant-desi
 import type { ColumnsType } from 'antd/es/table';
 import { getVRFs, createVRF, updateVRF, deleteVRF } from '../../../api/ipam';
 import type { IPAMVRF } from '../../../types/ipam';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 import { FONT_MONO } from '../../../theme/theme';
 
 const mono = (v: React.ReactNode) => (
@@ -26,7 +26,7 @@ const TabVRF: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try { const r = await getVRFs(); setData(r.data); }
-    catch { message.error('Failed to load VRFs'); }
+    catch (err) { message.error(apiErrMsg(err)); }
     finally { setLoading(false); }
   };
 
@@ -56,7 +56,7 @@ const TabVRF: React.FC = () => {
       cancelText: t('common.cancel'),
       onOk: async () => {
         try { await deleteVRF(r.id); message.success(t('ipam.vrf.delDone')); loadData(); }
-        catch { message.error('Delete failed'); }
+        catch (err) { message.error(apiErrMsg(err)); }
       },
     });
   };
@@ -67,7 +67,7 @@ const TabVRF: React.FC = () => {
       if (mode === 'create') { await createVRF(values); message.success(t('ipam.vrf.createOk')); }
       else { await updateVRF(editing!.id, values); message.success(t('ipam.vrf.saveOk')); }
       setOpen(false); loadData();
-    } catch { message.error('Request failed'); }
+    } catch (err) { message.error(apiErrMsg(err)); }
   };
 
   const columns: ColumnsType<IPAMVRF> = [

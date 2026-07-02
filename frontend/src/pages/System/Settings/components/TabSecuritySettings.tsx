@@ -4,7 +4,7 @@ import {
 } from 'antd';
 import { getSecuritySettings, updateSecuritySettings } from '../../../../api/system';
 import type { SecuritySettings } from '../../../../types/system';
-import { useT } from '../../../../i18n';
+import { apiErrMsg, useT } from '../../../../i18n';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 防护配置 Tab：登录防爆破阈值（滑动窗口失败计数 + 临时锁定）。
@@ -25,7 +25,7 @@ const TabSecuritySettings: React.FC = () => {
       const r = await getSecuritySettings();
       form.setFieldsValue(r.data);
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? 'Failed to load settings');
+      message.error(apiErrMsg(err));
     } finally {
       setLoading(false);
     }
@@ -40,7 +40,7 @@ const TabSecuritySettings: React.FC = () => {
       await updateSecuritySettings(values);
       message.success(t('sysset.saveOk'));
     } catch (err: any) {
-      message.error(err?.response?.data?.error ?? 'Save failed');
+      message.error(apiErrMsg(err));
     } finally {
       setSaving(false);
     }

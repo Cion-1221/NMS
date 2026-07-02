@@ -28,6 +28,10 @@ import (
 type Config struct {
 	Server struct {
 		Port int `mapstructure:"port"`
+		// TrustedProxies：主 API 引擎信任的反向代理地址（单 IP 或 CIDR）。只有来自
+		// 这些地址的连接，其 X-Forwarded-For 才会被采信为客户端真实 IP——否则任何
+		// 人都能伪造 XFF 绕过登录防爆破的按 IP 锁定。默认只信任本机回环。
+		TrustedProxies []string `mapstructure:"trusted_proxies"`
 	} `mapstructure:"server"`
 	Database struct {
 		Host     string `mapstructure:"host"`
@@ -80,6 +84,9 @@ func loadConfig() (*Config, error) {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(".")
+
+	// 受信反代缺省值：只信任本机回环（Nginx 同机部署的标准拓扑）
+	viper.SetDefault("server.trusted_proxies", []string{"127.0.0.1", "::1"})
 
 	// 数据库连接池缺省值：旧版 config.yaml 未配置时保持开箱即用
 	viper.SetDefault("database.max_open_conns", 25)
@@ -190,8 +197,19 @@ func main() {
 
 	// 一次性 schema 修正：agent_releases.download_url 在 URL 方案时期为 NOT NULL，
 	// 迁移到文件上传方案后 model 中已无此字段，但 AutoMigrate 不会自动删列。
-	// IF EXISTS 保证幂等，MySQL 8.0+ 支持。
-	db.Exec("ALTER TABLE agent_releases DROP COLUMN IF EXISTS download_url")
+	// 不能用 DROP COLUMN IF EXISTS——那是 MariaDB 扩展语法，MySQL（含 8.x）不支持；
+	// 改为先查 information_schema 判断列是否存在，两种数据库通用且天然幂等。
+	var legacyCol int64
+	db.Raw(`SELECT COUNT(*) FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'agent_releases' AND COLUMN_NAME = 'download_url'`).
+		Scan(&legacyCol)
+	if legacyCol > 0 {
+		if err := db.Exec("ALTER TABLE agent_releases DROP COLUMN download_url").Error; err != nil {
+			slog.Error("删除遗留列 agent_releases.download_url 失败，请手动处理", "err", err)
+		} else {
+			slog.Info("已删除遗留列 agent_releases.download_url")
+		}
+	}
 
 	// 自动迁移：IPAM 模块 + Device 模块 + System 模块
 	// 迁移顺序：lookup 表必须先于引用它们的主表
@@ -254,6 +272,13 @@ func main() {
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	// 受信反代（server.trusted_proxies，默认本机回环）：Gin 默认信任任意来源的
+	// X-Forwarded-For，攻击者可通过伪造 XFF 让 c.ClientIP() 返回任意地址，从而绕过
+	// 登录防爆破的按 IP 锁定。Nginx/LB 异机部署时在 config.yaml 中加入其内网地址。
+	if err := r.SetTrustedProxies(cfg.Server.TrustedProxies); err != nil {
+		slog.Error("设置受信代理失败（请检查 server.trusted_proxies 配置）", "err", err)
+		os.Exit(1)
+	}
 	r.MaxMultipartMemory = 128 << 20 // 128 MiB，支持上传较大的 Agent 二进制
 	// 自定义 Recovery：panic 堆栈写入 slog（落盘），而非 gin 默认的 stderr
 	r.Use(middleware.Recovery())
@@ -355,6 +380,9 @@ func main() {
 		}
 
 		enrollEngine := gin.New()
+		// Agent 直连（不经反代）：不信任任何代理头，c.ClientIP() 一律取 TCP 来源地址，
+		// 防止伪造 X-Forwarded-For 绕过 enroll 注册码防爆破
+		_ = enrollEngine.SetTrustedProxies(nil)
 		enrollEngine.Use(middleware.Recovery())
 		controllers.RegisterAgentEnrollRoutes(enrollEngine, db, pki, controllers.AgentPKIConfig{
 			ClientCertDays: cfg.AgentPKI.ClientCertDays,
@@ -372,6 +400,9 @@ func main() {
 		}
 
 		syncEngine := gin.New()
+		// 同 enroll：Agent 直连端口不信任任何代理头（X-Agent-IPv4/IPv6 是独立的业务
+		// header，由 mTLS 中间件单独校验地址族，不受此影响）
+		_ = syncEngine.SetTrustedProxies(nil)
 		syncEngine.Use(middleware.Recovery())
 		controllers.RegisterAgentSyncRoutes(syncEngine, db, pki, cfg.AgentPKI.ClientCertDays)
 		syncSrv = &http.Server{

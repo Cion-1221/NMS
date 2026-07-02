@@ -25,7 +25,7 @@ func JWTAuth(jwtSecret string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "未登录或 Token 缺失"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "未登录或 Token 缺失", "code": "auth.token_missing"})
 			return
 		}
 
@@ -38,7 +38,7 @@ func JWTAuth(jwtSecret string) gin.HandlerFunc {
 			return []byte(jwtSecret), nil
 		})
 		if err != nil || !token.Valid {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Token 无效或已过期，请重新登录"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Token 无效或已过期，请重新登录", "code": "auth.token_invalid"})
 			return
 		}
 
@@ -52,6 +52,7 @@ func JWTAuth(jwtSecret string) gin.HandlerFunc {
 			if !allowedPaths[path] {
 				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 					"error":   "must_change_password",
+					"code":    "auth.must_change_password",
 					"message": "请先修改初始密码后再使用系统",
 				})
 				return
@@ -67,11 +68,11 @@ func JWTAuth(jwtSecret string) gin.HandlerFunc {
 func AdminRequired(c *gin.Context) {
 	raw, exists := c.Get(CtxUserKey)
 	if !exists {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "未认证"})
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "未认证", "code": "auth.unauthenticated"})
 		return
 	}
 	if !raw.(*Claims).IsAdmin {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "权限不足，该操作需要管理员权限"})
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "权限不足，该操作需要管理员权限", "code": "auth.admin_required"})
 		return
 	}
 	c.Next()

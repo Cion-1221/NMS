@@ -244,7 +244,7 @@ func (p *PKI) Finalize() error {
 	}
 	prevPath := filepath.Join(p.dir, "ca-previous.crt")
 	if !fileExists(prevPath) {
-		return fmt.Errorf("当前没有待终结的轮换")
+		return &CodedError{Code: "agent.ca_no_pending", Msg: "当前没有待终结的轮换"}
 	}
 	if err := os.Remove(prevPath); err != nil {
 		return fmt.Errorf("删除 ca-previous.crt 失败: %w", err)

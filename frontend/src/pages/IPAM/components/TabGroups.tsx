@@ -4,7 +4,7 @@ import { ExclamationCircleFilled, PlusOutlined, SearchOutlined } from '@ant-desi
 import type { ColumnsType } from 'antd/es/table';
 import { getGroups, createGroup, updateGroup, deleteGroup } from '../../../api/ipam';
 import type { IPAMGroup } from '../../../types/ipam';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 
 const { confirm } = Modal;
 
@@ -21,7 +21,7 @@ const TabGroups: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try { const r = await getGroups(); setData(r.data); }
-    catch { message.error('Failed to load groups'); }
+    catch (err) { message.error(apiErrMsg(err)); }
     finally { setLoading(false); }
   };
 
@@ -49,7 +49,7 @@ const TabGroups: React.FC = () => {
       cancelText: t('common.cancel'),
       onOk: async () => {
         try { await deleteGroup(r.id); message.success(t('ipam.group.delDone')); loadData(); }
-        catch { message.error('Delete failed'); }
+        catch (err) { message.error(apiErrMsg(err)); }
       },
     });
   };
@@ -60,7 +60,7 @@ const TabGroups: React.FC = () => {
       if (mode === 'create') { await createGroup(values); message.success(t('ipam.group.createOk')); }
       else { await updateGroup(editing!.id, values); message.success(t('ipam.group.saveOk')); }
       setOpen(false); loadData();
-    } catch { message.error('Request failed'); }
+    } catch (err) { message.error(apiErrMsg(err)); }
   };
 
   const columns: ColumnsType<IPAMGroup> = [

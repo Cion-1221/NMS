@@ -7,7 +7,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { listUsers, createUser, updateUser, deleteUser, listGroups } from '../../../api/system';
 import { SysUser, SysGroup } from '../../../types/system';
 import { useAuth } from '../../../contexts/AuthContext';
-import { useT } from '../../../i18n';
+import { apiErrMsg, useT } from '../../../i18n';
 import PageHeader from '../../../components/PageHeader';
 import StatusTag from '../../../components/StatusTag';
 
@@ -36,7 +36,7 @@ const SystemUserPage: React.FC = () => {
       const [ur, gr] = await Promise.all([listUsers(), listGroups()]);
       setUsers(ur.data);
       setGroups(gr.data);
-    } catch { message.error('Failed to load data'); }
+    } catch (err) { message.error(apiErrMsg(err)); }
     finally  { setLoading(false); }
   };
 
@@ -52,7 +52,7 @@ const SystemUserPage: React.FC = () => {
       setCreateOpen(false);
       createForm.resetFields();
       fetchData();
-    } catch (err: any) { message.error(err?.response?.data?.error ?? 'Create failed'); }
+    } catch (err: any) { message.error(apiErrMsg(err)); }
     finally { setCreating(false); }
   };
 
@@ -70,14 +70,14 @@ const SystemUserPage: React.FC = () => {
     const payload: any = {};
     if (v.group_id !== editTarget.group_id) payload.group_id = v.group_id;
     if (v.password) payload.password = v.password;
-    if (!Object.keys(payload).length) { message.info('Nothing changed'); setEditOpen(false); setEditing(false); return; }
+    if (!Object.keys(payload).length) { message.info(t('sys.user.nothingChanged')); setEditOpen(false); setEditing(false); return; }
     try {
       await updateUser(editTarget.id, payload);
       message.success(t('sys.user.editOk'));
       setEditOpen(false);
       editForm.resetFields();
       fetchData();
-    } catch (err: any) { message.error(err?.response?.data?.error ?? 'Update failed'); }
+    } catch (err: any) { message.error(apiErrMsg(err)); }
     finally { setEditing(false); }
   };
 
@@ -91,7 +91,7 @@ const SystemUserPage: React.FC = () => {
       cancelText: t('common.cancel'),
       onOk: async () => {
         try { await deleteUser(r.id); message.success(t('sys.user.delOk')); fetchData(); }
-        catch (err: any) { message.error(err?.response?.data?.error ?? 'Delete failed'); }
+        catch (err: any) { message.error(apiErrMsg(err)); }
       },
     });
   };
@@ -194,9 +194,9 @@ const SystemUserPage: React.FC = () => {
             <Select options={groupOptions} disabled={editTarget?.id === me?.id} />
           </Form.Item>
           <Form.Item label={t('sys.user.resetPwd')} name="password"
-            rules={[{ min: 8, message: 'At least 8 characters' }]}
+            rules={[{ min: 8, message: t('sys.user.pwdMin') }]}
             extra={t('sys.user.resetHint')}>
-            <Input.Password placeholder="Leave blank to keep current" />
+            <Input.Password placeholder={t('sys.user.pwdKeepPh')} />
           </Form.Item>
         </Form>
         {editTarget?.id === me?.id && (
