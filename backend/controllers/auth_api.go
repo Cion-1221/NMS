@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -25,11 +26,16 @@ type AuthConfig struct {
 
 // ─── 内部工具函数 ─────────────────────────────────────────────────────────────
 
-// buildToken 签发 Access Token，有效期由用户的 TokenLifetimeHours 决定
-func buildToken(user *models.SysUser, isAdmin bool, secret string) (tokenStr string, expiresAt time.Time, err error) {
+// buildToken 签发 Access Token。有效期 = 用户自设 TokenLifetimeHours，且不超过
+// 管理员在安全设置中配置的全局上限（maxHours，见 login_protection.go 的 SessionPolicy）。
+// 用户组的模块级权限随 Token 固化进 perms 声明，组权限变更在下次刷新时生效。
+func buildToken(user *models.SysUser, isAdmin bool, secret string, maxHours int) (tokenStr string, expiresAt time.Time, err error) {
 	hours := user.TokenLifetimeHours
 	if hours <= 0 || hours > 720 {
 		hours = 24 // 兜底：1h～720h 之外均使用 24h
+	}
+	if maxHours > 0 && hours > maxHours {
+		hours = maxHours
 	}
 	expiresAt = time.Now().Add(time.Duration(hours) * time.Hour)
 
@@ -38,6 +44,7 @@ func buildToken(user *models.SysUser, isAdmin bool, secret string) (tokenStr str
 		Username:           user.Username,
 		IsAdmin:            isAdmin,
 		MustChangePassword: user.MustChangePassword,
+		Permissions:        user.Group.PermList(),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -66,14 +73,19 @@ func hashToken(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// buildUserInfo 构造返回给前端的用户信息
+// buildUserInfo 构造返回给前端的用户信息（permissions 供前端按模块权限隐藏写操作入口）
 func buildUserInfo(user *models.SysUser, isAdmin bool) gin.H {
+	perms := user.Group.PermList()
+	if perms == nil {
+		perms = []string{}
+	}
 	return gin.H{
 		"id":                   user.ID,
 		"username":             user.Username,
 		"group_id":             user.GroupID,
 		"group_name":           user.Group.Name,
 		"is_admin":             isAdmin,
+		"permissions":          perms,
 		"must_change_password": user.MustChangePassword,
 		"token_lifetime_hours": user.TokenLifetimeHours,
 		"theme":                user.Theme,
@@ -143,14 +155,23 @@ func Login(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			return
 		}
 
+		// 停用检查放在密码校验之后：凭错误密码探测不到账号的停用状态（防枚举），
+		// 持有正确凭据的本人则能得到明确提示
+		if !user.Enabled {
+			c.JSON(http.StatusForbidden, gin.H{"error": "账号已被停用，请联系管理员", "code": "auth.account_disabled"})
+			return
+		}
+
 		// 登录成功：清除该 用户名+IP 的失败计数
 		loginGuardSuccess(req.Username, clientIP)
 
-		// 清理过期的 Refresh Token
+		// 清理过期的 Refresh Token + 记录最后登录时间
 		cleanupExpiredTokens(db, user.ID)
+		now := time.Now()
+		db.Model(&user).Update("last_login_at", now)
 
 		isAdmin := user.Group.IsAdmin()
-		accessToken, expiresAt, err := buildToken(&user, isAdmin, cfg.JWTSecret)
+		accessToken, expiresAt, err := buildToken(&user, isAdmin, cfg.JWTSecret, getSessionPolicy(db).MaxTokenLifetimeHours)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Token 生成失败", "code": "server_error"})
 			return
@@ -197,13 +218,17 @@ func Refresh(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "关联用户不存在", "code": "auth.refresh_invalid"})
 			return
 		}
+		if !user.Enabled {
+			c.JSON(http.StatusForbidden, gin.H{"error": "账号已被停用，请联系管理员", "code": "auth.account_disabled"})
+			return
+		}
 
 		// Refresh Token 旋转：删除旧 Token，签发新 Token
 		db.Delete(&rt)
 		cleanupExpiredTokens(db, user.ID)
 
 		isAdmin := user.Group.IsAdmin()
-		accessToken, expiresAt, err := buildToken(&user, isAdmin, cfg.JWTSecret)
+		accessToken, expiresAt, err := buildToken(&user, isAdmin, cfg.JWTSecret, getSessionPolicy(db).MaxTokenLifetimeHours)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Access Token 生成失败", "code": "server_error"})
 			return
@@ -231,6 +256,10 @@ func GetMe(db *gorm.DB) gin.HandlerFunc {
 		var user models.SysUser
 		if err := db.Preload("Group").First(&user, claims.UserID).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在", "code": "auth.user_not_found"})
+			return
+		}
+		if !user.Enabled {
+			c.JSON(http.StatusForbidden, gin.H{"error": "账号已被停用，请联系管理员", "code": "auth.account_disabled"})
 			return
 		}
 		c.JSON(http.StatusOK, buildUserInfo(&user, user.Group.IsAdmin()))
@@ -280,10 +309,12 @@ func ChangePassword(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			return
 		}
 
+		writeSysAudit(db, user.Username, "change_password", "user", user.Username, "User changed own password")
+
 		// 密码修改成功：签发新 Token 对（旧 Refresh Token 自然过期，不强制删除以避免前端竞态）
 		user.MustChangePassword = false
 		isAdmin := user.Group.IsAdmin()
-		accessToken, expiresAt, err := buildToken(&user, isAdmin, cfg.JWTSecret)
+		accessToken, expiresAt, err := buildToken(&user, isAdmin, cfg.JWTSecret, getSessionPolicy(db).MaxTokenLifetimeHours)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Token 签发失败", "code": "server_error"})
 			return
@@ -315,6 +346,15 @@ func UpdateTokenSettings(db *gorm.DB) gin.HandlerFunc {
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误：token_lifetime_hours 须在 1～720 小时之间", "code": "auth.lifetime_range"})
+			return
+		}
+
+		// 不允许超过管理员配置的全局会话时长上限
+		if maxHours := getSessionPolicy(db).MaxTokenLifetimeHours; maxHours > 0 && req.TokenLifetimeHours > maxHours {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": fmt.Sprintf("超出管理员限制的最大会话时长（%d 小时）", maxHours),
+				"code":  "auth.lifetime_over_cap", "max": maxHours,
+			})
 			return
 		}
 

@@ -5,11 +5,13 @@ import type { ColumnsType } from 'antd/es/table';
 import { getDeviceRoles, createDeviceRole, updateDeviceRole, deleteDeviceRole } from '../../../api/device';
 import type { DeviceRole } from '../../../types/device';
 import { apiErrMsg, useT } from '../../../i18n';
+import { PERM_DEVICES_WRITE, useCan } from '../../../utils/perms';
 
 const { confirm } = Modal;
 
 const TabRoles: React.FC = () => {
   const t = useT();
+  const canWrite = useCan(PERM_DEVICES_WRITE);
   const [data, setData]       = useState<DeviceRole[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch]   = useState('');
@@ -96,9 +98,9 @@ const TabRoles: React.FC = () => {
           value={search} onChange={e => setSearch(e.target.value)} allowClear style={{ width: 260 }}
         />
         <Button icon={<ReloadOutlined />} onClick={loadData} loading={loading}>{t('common.refresh')}</Button>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>{t('device.role.add')}</Button>
+        {canWrite && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>{t('device.role.add')}</Button>}
       </Space>
-      <Table columns={columns} dataSource={filtered} rowKey="id" loading={loading}
+      <Table columns={canWrite ? columns : columns.filter((c) => c.key !== 'action')} dataSource={filtered} rowKey="id" loading={loading}
         pagination={{
           defaultPageSize: 20, pageSizeOptions: ['10', '20', '50', '100'],
           showSizeChanger: true, showQuickJumper: true,

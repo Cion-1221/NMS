@@ -274,15 +274,213 @@ func PurgeProbeResults(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// ── 延迟趋势序列 ─────────────────────────────────────────────────────────────
+
+// latencyBucketRow 是延迟序列聚合 SQL 的扫描目标（原始表与归档表共用）。
+type latencyBucketRow struct {
+	Ts     int64
+	LatSum float64
+	LatCnt int64
+	MinMs  *float64
+	MaxMs  *float64
+	Runs   int64
+	Failed int64
+}
+
+// latencySeriesMaxPoints 单次响应的目标显示点数上限（显示桶按此自适应放大）。
+const latencySeriesMaxPoints = 500
+
+// GetLatencySeries GET /api/v1/probe-results/latency-series
+// ?agent_id=&target=&type=&start=&end=（RFC3339，end 缺省为当前时间，start 缺省为 end-1h）
+//
+// 数据源自动选择（Cacti/RRD 同款语义，整窗单一数据源）：
+//  1. 窗口起点落在原始保留期内且窗口 ≤ 45 天 → 查原始表，分桶下限 = 任务 Interval；
+//  2. 否则选择保留期能覆盖起点的最细归档层，显示桶为该层桶的整数倍。
+//
+// 归档桶存的是 lat_sum/lat_cnt，跨粒度重聚合用 SUM(sum)/SUM(cnt) 精确计算。
+func GetLatencySeries(db *gorm.DB, rc RetentionConfig) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		agentID := c.Query("agent_id")
+		target := c.Query("target")
+		typeFilter := c.Query("type")
+		if agentID == "" || target == "" || typeFilter == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少必要参数 agent_id / target / type", "code": "bad_request"})
+			return
+		}
+
+		end := time.Now()
+		if v := c.Query("end"); v != "" {
+			t, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 end 时间格式（需 RFC3339）", "code": "bad_request"})
+				return
+			}
+			end = t
+		}
+		start := end.Add(-time.Hour)
+		if v := c.Query("start"); v != "" {
+			t, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 start 时间格式（需 RFC3339）", "code": "bad_request"})
+				return
+			}
+			start = t
+		}
+		if !start.Before(end) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "start 必须早于 end", "code": "bad_request"})
+			return
+		}
+		windowSec := int64(end.Sub(start).Seconds())
+
+		// 该序列的任务 Interval（原始点粒度）：取最近一条结果反查任务，回退 60s
+		intervalSec := 60
+		var latest models.ProbeResult
+		if err := db.Select("task_id").
+			Where("type = ? AND agent_id = ? AND target = ?", typeFilter, agentID, target).
+			Order("reported_at desc").Limit(1).First(&latest).Error; err == nil && latest.TaskID != nil {
+			var task models.AgentTask
+			if err := db.Select("interval_seconds").First(&task, *latest.TaskID).Error; err == nil && task.IntervalSeconds > 0 {
+				intervalSec = task.IntervalSeconds
+			}
+		}
+
+		// ── 选源 ──
+		// 未配置归档层时无条件走原始表（超出保留期的部分自然为空，不会 panic 于空层列表）
+		rawCovers := rc.ProbeResultsMaxAgeDays == 0 ||
+			start.After(time.Now().AddDate(0, 0, -(rc.ProbeResultsMaxAgeDays-1)))
+		useRaw := len(rc.Rollups) == 0 || (rawCovers && windowSec <= 45*86400)
+
+		var rows []latencyBucketRow
+		source := "raw"
+		sourceBucket := intervalSec
+
+		if useRaw {
+			displayBucket := alignBucket(windowSec, int64(intervalSec))
+			db.Raw(`
+				SELECT CAST(FLOOR(UNIX_TIMESTAMP(reported_at)/?)*? AS SIGNED) AS ts,
+					COALESCE(SUM(latency_ms), 0) AS lat_sum,
+					COUNT(latency_ms) AS lat_cnt,
+					MIN(latency_ms) AS min_ms,
+					MAX(latency_ms) AS max_ms,
+					COUNT(*) AS runs,
+					CAST(SUM(success = 0) AS SIGNED) AS failed
+				FROM probe_results
+				WHERE type = ? AND agent_id = ? AND target = ? AND reported_at >= ? AND reported_at < ?
+				GROUP BY ts ORDER BY ts`,
+				displayBucket, displayBucket, typeFilter, agentID, target, start, end).Scan(&rows)
+			sourceBucket = int(displayBucket)
+		} else {
+			// 选择保留期能覆盖起点的最细归档层；都覆盖不了则用最粗层（尽力返回现存数据）
+			tier := rc.Rollups[len(rc.Rollups)-1]
+			for _, t := range rc.Rollups {
+				if start.After(time.Now().AddDate(0, 0, -t.MaxAgeDays)) {
+					tier = t
+					break
+				}
+			}
+			source = "rollup"
+			tierSec := int64(tier.BucketMinutes) * 60
+			displayBucket := alignBucket(windowSec, tierSec)
+			sourceBucket = int(displayBucket)
+
+			var series models.ProbeSeries
+			if err := db.Where("type = ? AND agent_id = ? AND target = ?", typeFilter, agentID, target).
+				First(&series).Error; err != nil {
+				// 序列尚无归档（新序列或归档未启用期间的数据已过期）——返回空集
+				c.JSON(http.StatusOK, gin.H{
+					"source": source, "source_bucket_seconds": sourceBucket,
+					"interval_seconds": intervalSec, "points": []gin.H{}, "summary": nil,
+				})
+				return
+			}
+			db.Raw(`
+				SELECT CAST(FLOOR(bucket_ts/?)*? AS SIGNED) AS ts,
+					SUM(lat_sum) AS lat_sum,
+					SUM(lat_cnt) AS lat_cnt,
+					MIN(CASE WHEN lat_cnt > 0 THEN min_ms END) AS min_ms,
+					MAX(CASE WHEN lat_cnt > 0 THEN max_ms END) AS max_ms,
+					SUM(runs) AS runs,
+					SUM(failed) AS failed
+				FROM probe_rollups
+				WHERE series_id = ? AND bucket_seconds = ? AND bucket_ts >= ? AND bucket_ts < ?
+				GROUP BY ts ORDER BY ts`,
+				displayBucket, displayBucket, series.ID, tierSec, start.Unix(), end.Unix()).Scan(&rows)
+		}
+
+		// ── 组装响应 + 窗口汇总 ──
+		points := make([]gin.H, 0, len(rows))
+		var sumLat float64
+		var cntLat, totalRuns, totalFailed int64
+		var winMin, winMax *float64
+		for _, r := range rows {
+			var avg *float64
+			if r.LatCnt > 0 {
+				v := r.LatSum / float64(r.LatCnt)
+				avg = &v
+			}
+			points = append(points, gin.H{
+				"ts": r.Ts, "avg_ms": avg, "min_ms": r.MinMs, "max_ms": r.MaxMs,
+				"runs": r.Runs, "failed": r.Failed,
+			})
+			sumLat += r.LatSum
+			cntLat += r.LatCnt
+			totalRuns += r.Runs
+			totalFailed += r.Failed
+			if r.MinMs != nil && (winMin == nil || *r.MinMs < *winMin) {
+				winMin = r.MinMs
+			}
+			if r.MaxMs != nil && (winMax == nil || *r.MaxMs > *winMax) {
+				winMax = r.MaxMs
+			}
+		}
+		var summary gin.H
+		if totalRuns > 0 {
+			var avg *float64
+			if cntLat > 0 {
+				v := sumLat / float64(cntLat)
+				avg = &v
+			}
+			summary = gin.H{
+				"avg_ms": avg, "min_ms": winMin, "max_ms": winMax,
+				"runs": totalRuns, "failed": totalFailed,
+				"loss_pct": float64(totalFailed) / float64(totalRuns) * 100,
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"source":                source,
+			"source_bucket_seconds": sourceBucket,
+			"interval_seconds":      intervalSec,
+			"points":                points,
+			"summary":               summary,
+		})
+	}
+}
+
+// alignBucket 计算显示桶：以 granularity（Interval 或归档层桶）为最小单位，
+// 向上对齐到能把窗口压进 latencySeriesMaxPoints 个点的整数倍。
+func alignBucket(windowSec, granularity int64) int64 {
+	if granularity < 1 {
+		granularity = 60
+	}
+	bucket := windowSec / latencySeriesMaxPoints
+	if bucket < granularity {
+		return granularity
+	}
+	// 向上取整到 granularity 的整数倍
+	return (bucket + granularity - 1) / granularity * granularity
+}
+
 // RegisterProbeResultsRoutes 挂载到主 JWT 引擎，仅需登录（与 IPAM/Devices 同等级别）——
 // 监控结果查看不属于安全敏感操作，不要求管理员权限。清理接口额外要求管理员权限。
-func RegisterProbeResultsRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc) {
+func RegisterProbeResultsRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc, rc RetentionConfig) {
 	pr := r.Group("/api/v1/probe-results")
 	pr.Use(authMW)
 	{
 		pr.GET("", ListProbeResults(db))
 		pr.GET("/latest", GetLatestProbeResults(db))
 		pr.GET("/meshping-matrix", GetMeshPingMatrix(db))
+		pr.GET("/latency-series", GetLatencySeries(db, rc))
 	}
 
 	prAdmin := r.Group("/api/v1/probe-results")

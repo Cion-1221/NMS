@@ -196,6 +196,33 @@ export interface ProbeResult {
   reported_at: string;
 }
 
+/** 延迟趋势序列单点 — 对应 GET /probe-results/latency-series */
+export interface LatencySeriesPoint {
+  ts: number;               // 桶起始时间（Unix 秒，UTC 对齐）
+  avg_ms: number | null;    // null = 该桶全部失败
+  min_ms: number | null;
+  max_ms: number | null;
+  runs: number;
+  failed: number;
+}
+
+export interface LatencySeriesSummary {
+  avg_ms: number | null;
+  min_ms: number | null;
+  max_ms: number | null;
+  runs: number;
+  failed: number;
+  loss_pct: number;
+}
+
+export interface LatencySeriesResp {
+  source: 'raw' | 'rollup';        // raw = 原始点；rollup = 归档层
+  source_bucket_seconds: number;   // 实际显示粒度（秒）
+  interval_seconds: number;        // 该序列的任务 Interval
+  points: LatencySeriesPoint[];
+  summary: LatencySeriesSummary | null;
+}
+
 /** Probe Results 通用查询参数 — 服务端分页 + 过滤（type 固定，由各 Tab 传入） */
 export interface ProbeResultListParams {
   page: number;

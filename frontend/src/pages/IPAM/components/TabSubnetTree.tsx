@@ -11,6 +11,7 @@ import {
 } from '../../../api/ipam';
 import type { RootPrefix, SubnetNode, IPAMGroup, IPAMType, IPAMVRF } from '../../../types/ipam';
 import { apiErrMsg, useT } from '../../../i18n';
+import { PERM_IPAM_WRITE, useCan } from '../../../utils/perms';
 import { cidrMatchesSearch } from '../../../utils/cidr';
 import { FONT_MONO } from '../../../theme/theme';
 
@@ -98,6 +99,7 @@ function nodeUtilization(node: UINode): number | null {
 
 const TabSubnetTree: React.FC = () => {
   const t = useT();
+  const canWrite = useCan(PERM_IPAM_WRITE);
   const { token } = theme.useToken();
 
   const [roots, setRoots]       = useState<RootPrefix[]>([]);
@@ -389,7 +391,7 @@ const TabSubnetTree: React.FC = () => {
       </Space>
 
       <Table
-        columns={columns}
+        columns={canWrite ? columns : columns.filter((c) => c.key !== 'action')}
         dataSource={visibleData}
         rowKey="key"
         loading={loading}

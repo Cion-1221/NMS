@@ -1,10 +1,11 @@
-﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tooltip, message } from 'antd';
-import { DeleteOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
+import { DeleteOutlined, LineChartOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { getLatestProbeResults, getAgents, deleteProbeResultPair, lookupASN } from '../../../api/agent';
 import type { Agent, MtrHop, ProbeResult, TaskType } from '../../../types/agent';
 import { apiErrMsg, useT } from '../../../i18n';
+import { PERM_ADMIN, useCan } from '../../../utils/perms';
 import { useDebounced } from '../../../utils/useDebounced';
 import StatusTag from '../../../components/StatusTag';
 import RelativeTime from '../../../components/RelativeTime';
@@ -14,12 +15,20 @@ const mono = (v: React.ReactNode) => (
   <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span>
 );
 
+// 延迟趋势弹窗内含 @ant-design/charts（G2，体积大）——懒加载，首次打开才拉取 chunk
+const LatencyTrendModal = React.lazy(() => import('./LatencyTrendModal'));
+
+// 路径类结果无标量延迟趋势价值（且不参与归档），不提供趋势图入口
+const PATH_TYPES: string[] = ['mtr', 'meshmtr', 'traceroute'];
+
 interface Props {
   type: TaskType;
 }
 
 const TabGenericResults: React.FC<Props> = ({ type }) => {
   const t = useT();
+  const isAdminUser = useCan(PERM_ADMIN);
+  const [trend, setTrend] = useState<{ agentId: string; target: string; probeType: string; label: string } | null>(null);
   const [data, setData]         = useState<ProbeResult[]>([]);
   const [agents, setAgents]     = useState<Agent[]>([]);
   const [loading, setLoading]   = useState(false);
@@ -135,17 +144,33 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
       render: (v: string) => <RelativeTime value={v} />,
     },
     {
-      title: t('common.actions'), key: 'action', width: 80, fixed: 'right' as const,
+      // 延迟趋势对所有登录用户开放（只读）；删除仅管理员（后端 AdminRequired 双重保障）
+      title: t('common.actions'), key: 'action', width: 110, fixed: 'right' as const,
       render: (_: unknown, r: ProbeResult) => (
-        <Popconfirm
-          title={t('proberesults.delConfirm')}
-          onConfirm={() => handleDelete(r)}
-          okText={t('common.delete')}
-          okButtonProps={{ danger: true }}
-          cancelText={t('common.cancel')}
-        >
-          <Button type="text" size="small" danger icon={<DeleteOutlined />} />
-        </Popconfirm>
+        <Space size={0}>
+          {!PATH_TYPES.includes(r.type) && (
+            <Tooltip title={t('trend.action')}>
+              <Button
+                type="text" size="small" icon={<LineChartOutlined />}
+                onClick={() => setTrend({
+                  agentId: r.agent_id, target: r.target, probeType: r.type,
+                  label: `${r.agent_id} → ${r.target}`,
+                })}
+              />
+            </Tooltip>
+          )}
+          {isAdminUser && (
+            <Popconfirm
+              title={t('proberesults.delConfirm')}
+              onConfirm={() => handleDelete(r)}
+              okText={t('common.delete')}
+              okButtonProps={{ danger: true }}
+              cancelText={t('common.cancel')}
+            >
+              <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+            </Popconfirm>
+          )}
+        </Space>
       ),
     },
   ];
@@ -244,6 +269,20 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
           ]}
         />
       </Modal>
+
+      {/* 延迟趋势 Modal（懒加载：首次打开才拉取图表 chunk） */}
+      {trend && (
+        <Suspense fallback={null}>
+          <LatencyTrendModal
+            open
+            onClose={() => setTrend(null)}
+            agentId={trend.agentId}
+            target={trend.target}
+            probeType={trend.probeType}
+            label={trend.label}
+          />
+        </Suspense>
+      )}
     </div>
   );
 };

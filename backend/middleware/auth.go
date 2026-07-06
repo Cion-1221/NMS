@@ -8,12 +8,14 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// Claims JWT 载荷定义
+// Claims JWT 载荷定义。Permissions 为所属用户组的模块级权限快照（如 ipam:write），
+// 与 IsAdmin 一样在签发时固化——组权限变更在下次 Token 刷新时生效。
 type Claims struct {
-	UserID             uint   `json:"user_id"`
-	Username           string `json:"username"`
-	IsAdmin            bool   `json:"is_admin"`
-	MustChangePassword bool   `json:"must_change_password"`
+	UserID             uint     `json:"user_id"`
+	Username           string   `json:"username"`
+	IsAdmin            bool     `json:"is_admin"`
+	MustChangePassword bool     `json:"must_change_password"`
+	Permissions        []string `json:"perms,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -61,6 +63,33 @@ func JWTAuth(jwtSecret string) gin.HandlerFunc {
 
 		c.Set(CtxUserKey, claims)
 		c.Next()
+	}
+}
+
+// RequirePerm 模块级权限校验中间件（必须在 JWTAuth 之后使用）：
+// 管理员直通；否则要求 JWT 权限声明中包含指定权限（如 "ipam:write"）。
+func RequirePerm(perm string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		raw, exists := c.Get(CtxUserKey)
+		if !exists {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "未认证", "code": "auth.unauthenticated"})
+			return
+		}
+		claims := raw.(*Claims)
+		if claims.IsAdmin {
+			c.Next()
+			return
+		}
+		for _, p := range claims.Permissions {
+			if p == perm {
+				c.Next()
+				return
+			}
+		}
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error": "权限不足，该操作需要权限: " + perm,
+			"code":  "auth.perm_required", "perm": perm,
+		})
 	}
 }
 

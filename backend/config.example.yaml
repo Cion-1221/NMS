@@ -53,12 +53,34 @@ asndb:
   # 手动重载已有文件（覆盖文件后调用）：
   #   POST /api/v1/admin/asndb/reload    （需管理员 JWT）
 
-# 审计日志 / 探测结果保留策略（可省略，省略时使用所示默认值）
+# 审计日志 / 探测结果分层保留策略（可省略，省略时使用所示默认值且不启用归档）
 audit:
-  # IPAM / Devices / Agent 审计日志自动保留天数，超期每日自动清理；0 = 永久保留
+  # IPAM / Devices / Agent / System 审计日志自动保留天数，超期每日自动清理；0 = 永久保留
   max_age_days: 180
-  # Agent 周期探测写入的 probe_results 保留天数（量级远高于审计日志，默认更短）；0 = 永久保留
+
+  # ── 探测结果分层保留（Cacti RRA 风格）────────────────────────────────────────
+  # 原始探测点（粒度 = Probe Config 的 Interval，如 300s 任务 = 5 分钟/点）。
+  # 启用下方 probe_rollups 归档后建议缩短（推荐 14），长期数据由归档层接力；
+  # 未启用归档时保持较长（默认 30）；0 = 永久保留
   probe_results_max_age_days: 30
+  # 路径类结果（mtr/meshmtr/traceroute，detail 为大 JSON、仅消费最新快照）独立保留
+  # 天数；0 = 跟随 probe_results_max_age_days。启用归档并延长标量数据时建议单独设短
+  path_results_max_age_days: 0
+
+  # 降采样归档层（推荐配置，取消注释即启用）：后台任务每小时把原始点聚合到各层
+  # （均值/最值/丢包），各层独立保留；延迟趋势图按时间范围自动选择最细可用数据源。
+  # 注意：归档只能从启用后开始积累，历史已清理的数据无法追溯。
+  # 各层 bucket_minutes 必须严格递增；启用归档时 probe_results_max_age_days 需
+  # ≥ 最大桶的 2 倍天数 + 2（如含 1 天桶则至少 4 天）。
+  # probe_rollups:
+  #   - bucket_minutes: 5        # 5 分钟均值
+  #     max_age_days: 183        #   保留 6 个月
+  #   - bucket_minutes: 30       # 30 分钟均值
+  #     max_age_days: 366        #   保留 12 个月
+  #   - bucket_minutes: 120      # 2 小时均值
+  #     max_age_days: 1096       #   保留 3 年
+  #   - bucket_minutes: 1440     # 1 天均值
+  #     max_age_days: 3660       #   保留 10 年
 
 # Agent PKI：内置 CA + mTLS 自动引导注册体系（整个 agent_pki 块可省略，省略时使用下列默认值）
 agent_pki:

@@ -13,6 +13,7 @@ import {
 import type { Device, DeviceSite, DevicePoP, DeviceRole, DeviceVendor } from '../../../types/device';
 import type { TranslationKey } from '../../../i18n/translations';
 import { apiErrMsg, useT } from '../../../i18n';
+import { PERM_DEVICES_WRITE, useCan } from '../../../utils/perms';
 import { useDebounced } from '../../../utils/useDebounced';
 import StatusTag from '../../../components/StatusTag';
 import { FONT_MONO } from '../../../theme/theme';
@@ -70,6 +71,7 @@ function isValidIPv6(v: string): boolean {
 // ── Component ─────────────────────────────────────────────────────────────────
 const TabDeviceList: React.FC = () => {
   const t = useT();
+  const canWrite = useCan(PERM_DEVICES_WRITE);
 
   const STATUS_OPTIONS = STATUS_VALUES.map(v => ({
     value: v,
@@ -468,14 +470,16 @@ const TabDeviceList: React.FC = () => {
         >
           {t('common.refresh')}
         </Button>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          {t('device.add')}
-        </Button>
+        {canWrite && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            {t('device.add')}
+          </Button>
+        )}
       </Space>
 
       {/* ── Table (server-side pagination) ── */}
       <Table
-        columns={columns}
+        columns={canWrite ? columns : columns.filter((c) => c.key !== 'action')}
         dataSource={data}
         rowKey="id"
         loading={loading}

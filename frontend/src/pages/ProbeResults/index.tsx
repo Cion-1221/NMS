@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Button, Form, InputNumber, Modal, Tabs, message } from 'antd';
 import { DeleteOutlined } from '@ant-design/icons';
 import { apiErrMsg, useT } from '../../i18n';
+import { PERM_ADMIN, useCan } from '../../utils/perms';
 import { purgeProbeResults } from '../../api/agent';
 import PageHeader from '../../components/PageHeader';
 import TabGenericResults from './components/TabGenericResults';
@@ -9,6 +10,7 @@ import TabMeshPingMatrix from './components/TabMeshPingMatrix';
 
 const ProbeResultsPage: React.FC = () => {
   const t = useT();
+  const isAdminUser = useCan(PERM_ADMIN);
   const [activeKey, setActiveKey] = useState('1');
   const [versions, setVersions]   = useState<Record<string, number>>({ '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 });
   const [purgeOpen, setPurgeOpen] = useState(false);
@@ -55,7 +57,9 @@ const ProbeResultsPage: React.FC = () => {
       <PageHeader
         title={t('proberesults.title')}
         subtitle={t('proberesults.subtitle')}
-        actions={<Button danger icon={<DeleteOutlined />} onClick={openPurge}>{t('proberesults.purge')}</Button>}
+        actions={isAdminUser
+          ? <Button danger icon={<DeleteOutlined />} onClick={openPurge}>{t('proberesults.purge')}</Button>
+          : undefined}
       />
       <Tabs
         activeKey={activeKey}

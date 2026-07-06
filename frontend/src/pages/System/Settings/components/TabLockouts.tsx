@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Input, Space, Table, message } from 'antd';
+import { Alert, Button, Input, Space, Table, message } from 'antd';
 import { ReloadOutlined, SearchOutlined, UnlockOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { listLockouts, unlockLockouts } from '../../../../api/system';
@@ -7,6 +7,7 @@ import type { LockoutEntry } from '../../../../types/system';
 import { apiErrMsg, useT } from '../../../../i18n';
 import { useDebounced } from '../../../../utils/useDebounced';
 import StatusTag from '../../../../components/StatusTag';
+import RelativeTime from '../../../../components/RelativeTime';
 import { FONT_MONO } from '../../../../theme/theme';
 
 const mono = (v: React.ReactNode) => (
@@ -83,12 +84,12 @@ const TabLockouts: React.FC = () => {
     { title: t('sys.user.username'), dataIndex: 'username', key: 'username', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
     { title: t('sysset.lockouts.ip'), dataIndex: 'ip', key: 'ip', width: 160, render: (v: string) => mono(v) },
     {
-      title: t('sysset.lockouts.lockedAt'), dataIndex: 'locked_at', key: 'locked_at', width: 180,
-      render: (v: string) => mono(new Date(v).toLocaleString()),
+      title: t('sysset.lockouts.lockedAt'), dataIndex: 'locked_at', key: 'locked_at', width: 150,
+      render: (v: string) => <RelativeTime value={v} />,
     },
     {
-      title: t('sysset.lockouts.lockedUntil'), dataIndex: 'locked_until', key: 'locked_until', width: 180,
-      render: (v: string) => mono(new Date(v).toLocaleString()),
+      title: t('sysset.lockouts.lockedUntil'), dataIndex: 'locked_until', key: 'locked_until', width: 150,
+      render: (v: string) => <RelativeTime value={v} />,
     },
     {
       title: t('sysset.lockouts.remaining'), key: 'remaining', width: 110, align: 'center' as const,
@@ -109,6 +110,9 @@ const TabLockouts: React.FC = () => {
 
   return (
     <div>
+      {/* 内存态特性说明：避免管理员对"重启后列表清空"产生困惑 */}
+      <Alert type="info" showIcon message={t('sysset.lockouts.memNote')} style={{ marginBottom: 16 }} />
+
       {/* ── 搜索 + 操作栏 ── */}
       <Space wrap style={{ marginBottom: 16 }}>
         <Input

@@ -5,6 +5,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { getVRFs, createVRF, updateVRF, deleteVRF } from '../../../api/ipam';
 import type { IPAMVRF } from '../../../types/ipam';
 import { apiErrMsg, useT } from '../../../i18n';
+import { PERM_IPAM_WRITE, useCan } from '../../../utils/perms';
 import { FONT_MONO } from '../../../theme/theme';
 
 const mono = (v: React.ReactNode) => (
@@ -15,6 +16,7 @@ const { confirm } = Modal;
 
 const TabVRF: React.FC = () => {
   const t = useT();
+  const canWrite = useCan(PERM_IPAM_WRITE);
   const [data, setData]       = useState<IPAMVRF[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch]   = useState('');
@@ -93,9 +95,9 @@ const TabVRF: React.FC = () => {
         <Input prefix={<SearchOutlined />}
           placeholder={`${t('ipam.vrf.name')} / RD / ${t('ipam.vrf.desc')}`}
           value={search} onChange={(e) => setSearch(e.target.value)} allowClear style={{ width: 280 }} />
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>{t('ipam.vrf.add')}</Button>
+        {canWrite && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>{t('ipam.vrf.add')}</Button>}
       </Space>
-      <Table columns={columns} dataSource={filtered} rowKey="id" loading={loading}
+      <Table columns={canWrite ? columns : columns.filter((c) => c.key !== 'action')} dataSource={filtered} rowKey="id" loading={loading}
         pagination={{
           defaultPageSize: 20, pageSizeOptions: ['10', '20', '50', '100'],
           showSizeChanger: true, showQuickJumper: true,

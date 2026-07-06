@@ -11,6 +11,7 @@ import {
 } from '../../../api/ipam';
 import type { RootPrefix, IPAMGroup, IPAMType, IPAMVRF } from '../../../types/ipam';
 import { apiErrMsg, useT } from '../../../i18n';
+import { PERM_IPAM_WRITE, useCan } from '../../../utils/perms';
 import { cidrMatchesSearch } from '../../../utils/cidr';
 import StatusTag from '../../../components/StatusTag';
 import { FONT_MONO } from '../../../theme/theme';
@@ -19,6 +20,7 @@ const { confirm } = Modal;
 
 const TabRootPrefix: React.FC = () => {
   const t = useT();
+  const canWrite = useCan(PERM_IPAM_WRITE);
   const [data, setData]       = useState<RootPrefix[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -202,13 +204,15 @@ const TabRootPrefix: React.FC = () => {
           allowClear style={{ width: 110 }}
           options={[{ value: 4, label: 'IPv4' }, { value: 6, label: 'IPv6' }]}
         />
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          {t('ipam.root.add')}
-        </Button>
+        {canWrite && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            {t('ipam.root.add')}
+          </Button>
+        )}
       </Space>
 
       <Table
-        columns={columns}
+        columns={canWrite ? columns : columns.filter((c) => c.key !== 'action')}
         dataSource={filtered}
         rowKey="id"
         loading={loading}

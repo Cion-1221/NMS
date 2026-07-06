@@ -4,6 +4,8 @@ export interface AuthUser {
   group_id: number;
   group_name: string;
   is_admin: boolean;
+  /** 所属用户组的模块级权限，如 ["ipam:write"]；admin 隐含全部权限 */
+  permissions: string[];
   must_change_password: boolean;
   token_lifetime_hours: number;
   /** 'light' | 'dark' | 'system' */

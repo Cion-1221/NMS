@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"nms-backend/core"
+	"nms-backend/middleware"
 	"nms-backend/models"
 
 	"github.com/gin-gonic/gin"
@@ -848,39 +849,42 @@ func PurgeDeviceAuditLogs(db *gorm.DB) gin.HandlerFunc {
 func RegisterDeviceRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc) {
 	api := r.Group("/api/v1/devices")
 	api.Use(authMW)
+	// 读操作对任何已登录用户开放；写操作需要 devices:write 权限（admin 直通）；
+	// 审计日志清理仅限管理员。
+	w := middleware.RequirePerm(models.PermDevicesWrite)
 	{
 		// Devices
 		api.GET("", ListDevices(db))
-		api.POST("", CreateDevice(db))
-		api.PUT("/:id", UpdateDevice(db))
-		api.DELETE("/:id", DeleteDevice(db))
+		api.POST("", w, CreateDevice(db))
+		api.PUT("/:id", w, UpdateDevice(db))
+		api.DELETE("/:id", w, DeleteDevice(db))
 
 		// Sites
 		api.GET("/sites", ListDeviceSites(db))
-		api.POST("/sites", CreateDeviceSite(db))
-		api.PUT("/sites/:id", UpdateDeviceSite(db))
-		api.DELETE("/sites/:id", DeleteDeviceSite(db))
+		api.POST("/sites", w, CreateDeviceSite(db))
+		api.PUT("/sites/:id", w, UpdateDeviceSite(db))
+		api.DELETE("/sites/:id", w, DeleteDeviceSite(db))
 
 		// PoPs
 		api.GET("/pops", ListDevicePoPs(db))
-		api.POST("/pops", CreateDevicePoP(db))
-		api.PUT("/pops/:id", UpdateDevicePoP(db))
-		api.DELETE("/pops/:id", DeleteDevicePoP(db))
+		api.POST("/pops", w, CreateDevicePoP(db))
+		api.PUT("/pops/:id", w, UpdateDevicePoP(db))
+		api.DELETE("/pops/:id", w, DeleteDevicePoP(db))
 
 		// Roles
 		api.GET("/roles", ListDeviceRoles(db))
-		api.POST("/roles", CreateDeviceRole(db))
-		api.PUT("/roles/:id", UpdateDeviceRole(db))
-		api.DELETE("/roles/:id", DeleteDeviceRole(db))
+		api.POST("/roles", w, CreateDeviceRole(db))
+		api.PUT("/roles/:id", w, UpdateDeviceRole(db))
+		api.DELETE("/roles/:id", w, DeleteDeviceRole(db))
 
 		// Vendors
 		api.GET("/vendors", ListDeviceVendors(db))
-		api.POST("/vendors", CreateDeviceVendor(db))
-		api.PUT("/vendors/:id", UpdateDeviceVendor(db))
-		api.DELETE("/vendors/:id", DeleteDeviceVendor(db))
+		api.POST("/vendors", w, CreateDeviceVendor(db))
+		api.PUT("/vendors/:id", w, UpdateDeviceVendor(db))
+		api.DELETE("/vendors/:id", w, DeleteDeviceVendor(db))
 
-		// Audit Log
+		// Audit Log（查看：登录即可；清理：仅管理员）
 		api.GET("/audit-logs", ListDeviceAuditLogs(db))
-		api.DELETE("/audit-logs", PurgeDeviceAuditLogs(db))
+		api.DELETE("/audit-logs", middleware.AdminRequired, PurgeDeviceAuditLogs(db))
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"nms-backend/core"
+	"nms-backend/middleware"
 	"nms-backend/models"
 
 	"github.com/gin-gonic/gin"
@@ -792,37 +793,40 @@ func PurgeAuditLogs(db *gorm.DB) gin.HandlerFunc {
 func RegisterIPAMRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc) {
 	api := r.Group("/api/v1/ipam")
 	api.Use(authMW)
+	// 读操作对任何已登录用户开放；写操作需要 ipam:write 权限（admin 直通）；
+	// 审计日志清理仅限管理员。
+	w := middleware.RequirePerm(models.PermIPAMWrite)
 	{
 		// Root Prefixes
-		api.POST("/root-prefixes", CreateRootPrefix(db))
+		api.POST("/root-prefixes", w, CreateRootPrefix(db))
 		api.GET("/root-prefixes", ListRootPrefixes(db))
-		api.PUT("/root-prefixes/:id", UpdateRootPrefix(db))
-		api.DELETE("/root-prefixes/:id", DeleteRootPrefix(db))
+		api.PUT("/root-prefixes/:id", w, UpdateRootPrefix(db))
+		api.DELETE("/root-prefixes/:id", w, DeleteRootPrefix(db))
 
 		// Subnet Tree & Operations
 		api.GET("/root-prefixes/:id/tree", GetSubnetTree(db))
-		api.POST("/split", SplitSubnet(db))
-		api.POST("/merge", MergeSubnets(db))
-		api.PUT("/subnets/:id", UpdateSubnet(db))
+		api.POST("/split", w, SplitSubnet(db))
+		api.POST("/merge", w, MergeSubnets(db))
+		api.PUT("/subnets/:id", w, UpdateSubnet(db))
 
 		// Lookup Tables
 		api.GET("/groups", ListIPAMGroups(db))
-		api.POST("/groups", CreateIPAMGroup(db))
-		api.PUT("/groups/:id", UpdateIPAMGroup(db))
-		api.DELETE("/groups/:id", DeleteIPAMGroup(db))
+		api.POST("/groups", w, CreateIPAMGroup(db))
+		api.PUT("/groups/:id", w, UpdateIPAMGroup(db))
+		api.DELETE("/groups/:id", w, DeleteIPAMGroup(db))
 
 		api.GET("/types", ListIPAMTypes(db))
-		api.POST("/types", CreateIPAMType(db))
-		api.PUT("/types/:id", UpdateIPAMType(db))
-		api.DELETE("/types/:id", DeleteIPAMType(db))
+		api.POST("/types", w, CreateIPAMType(db))
+		api.PUT("/types/:id", w, UpdateIPAMType(db))
+		api.DELETE("/types/:id", w, DeleteIPAMType(db))
 
 		api.GET("/vrfs", ListVRFs(db))
-		api.POST("/vrfs", CreateVRF(db))
-		api.PUT("/vrfs/:id", UpdateVRF(db))
-		api.DELETE("/vrfs/:id", DeleteVRF(db))
+		api.POST("/vrfs", w, CreateVRF(db))
+		api.PUT("/vrfs/:id", w, UpdateVRF(db))
+		api.DELETE("/vrfs/:id", w, DeleteVRF(db))
 
-		// Audit Log
+		// Audit Log（查看：登录即可；清理：仅管理员）
 		api.GET("/audit-logs", ListAuditLogs(db))
-		api.DELETE("/audit-logs", PurgeAuditLogs(db))
+		api.DELETE("/audit-logs", middleware.AdminRequired, PurgeAuditLogs(db))
 	}
 }

@@ -4,6 +4,7 @@ import {
   CreateUserReq, UpdateUserReq,
   CreateGroupReq, UpdateGroupReq,
   SecuritySettings, LockoutListResp,
+  SessionPolicy, SysAuditLogListResp,
 } from '../types/system';
 
 // ── 用户管理 ──────────────────────────────────────────────────────────────────
@@ -18,6 +19,10 @@ export const updateUser = (id: number, data: UpdateUserReq) =>
 
 export const deleteUser = (id: number) =>
   client.delete(`/system/users/${id}`);
+
+// 吊销用户全部 Refresh Token（会话在当前 Access Token 到期后无法续期）
+export const forceLogoutUser = (id: number) =>
+  client.post<{ revoked: number }>(`/system/users/${id}/force-logout`);
 
 // ── 用户组管理 ─────────────────────────────────────────────────────────────────
 export const listGroups = () =>
@@ -46,3 +51,17 @@ export const listLockouts = (params: { page: number; page_size: number; q?: stri
 
 export const unlockLockouts = (keys: string[]) =>
   client.post<{ unlocked: number }>('/system/security/lockouts/unlock', { keys });
+
+// ── 会话策略（全局最大会话时长）───────────────────────────────────────────────
+export const getSessionPolicy = () =>
+  client.get<SessionPolicy>('/system/settings/session');
+
+export const updateSessionPolicy = (data: SessionPolicy) =>
+  client.put<SessionPolicy>('/system/settings/session', data);
+
+// ── System 审计日志 ───────────────────────────────────────────────────────────
+export const listSysAuditLogs = (params: { page: number; page_size: number; username?: string; action?: string }) =>
+  client.get<SysAuditLogListResp>('/system/audit-logs', { params });
+
+export const purgeSysAuditLogs = (days: number) =>
+  client.delete<{ deleted: number }>('/system/audit-logs', { params: { days } });

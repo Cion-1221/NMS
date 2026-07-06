@@ -242,6 +242,76 @@ func loginGuardSuccess(username, ip string) {
 	loginGuard.success(loginGuardKey(username, ip))
 }
 
+// ── 会话策略（管理员配置的全局会话时长上限）──────────────────────────────────────
+// 存储于 sys_settings（key=session_policy）。buildToken 在签发时按此上限钳制用户
+// 自设的会话时长；UpdateTokenSettings 直接拒绝超限的新设置。
+
+const sessionPolicyKey = "session_policy"
+
+// SessionPolicy 会话策略，System 界面可调
+type SessionPolicy struct {
+	// 全局最大会话（Access Token）时长（小时），1-720；默认 720 = 不额外限制
+	MaxTokenLifetimeHours int `json:"max_token_lifetime_hours"`
+}
+
+func defaultSessionPolicy() SessionPolicy {
+	return SessionPolicy{MaxTokenLifetimeHours: 720}
+}
+
+// getSessionPolicy 读取会话策略；记录缺失或损坏时回退默认值
+func getSessionPolicy(db *gorm.DB) SessionPolicy {
+	var row models.SysSetting
+	if err := db.Where("setting_key = ?", sessionPolicyKey).First(&row).Error; err != nil {
+		return defaultSessionPolicy()
+	}
+	var s SessionPolicy
+	if err := json.Unmarshal([]byte(row.Value), &s); err != nil {
+		return defaultSessionPolicy()
+	}
+	return s
+}
+
+func saveSessionPolicy(db *gorm.DB, s SessionPolicy) error {
+	raw, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	var row models.SysSetting
+	if err := db.Where("setting_key = ?", sessionPolicyKey).First(&row).Error; err != nil {
+		return db.Create(&models.SysSetting{Key: sessionPolicyKey, Value: string(raw)}).Error
+	}
+	return db.Model(&row).Update("value", string(raw)).Error
+}
+
+// GetSessionPolicyAPI GET /api/v1/system/settings/session
+func GetSessionPolicyAPI(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, getSessionPolicy(db))
+	}
+}
+
+// UpdateSessionPolicyAPI PUT /api/v1/system/settings/session
+func UpdateSessionPolicyAPI(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req SessionPolicy
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error(), "code": "bad_request"})
+			return
+		}
+		if req.MaxTokenLifetimeHours < 1 || req.MaxTokenLifetimeHours > 720 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "最大会话时长取值范围 1-720 小时", "code": "sys.session_cap_range"})
+			return
+		}
+		if err := saveSessionPolicy(db, req); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error(), "code": "server_error"})
+			return
+		}
+		writeSysAudit(db, getUsername(c), "update_session_policy", "settings", sessionPolicyKey,
+			fmt.Sprintf("Set max token lifetime to %d hours", req.MaxTokenLifetimeHours))
+		c.JSON(http.StatusOK, req)
+	}
+}
+
 // ── System 模块管理 API（注册在 /api/v1/system 下，自带管理员门禁）────────────────
 
 // GetSecuritySettings GET /api/v1/system/settings/security
@@ -275,6 +345,9 @@ func UpdateSecuritySettings(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error(), "code": "server_error"})
 			return
 		}
+		writeSysAudit(db, getUsername(c), "update_security_settings", "settings", loginProtectionKey,
+			fmt.Sprintf("Login protection: enabled=%v, max_attempts=%d, window=%dm, lockout=%dm",
+				req.Enabled, req.MaxAttempts, req.WindowMinutes, req.LockoutMinutes))
 		c.JSON(http.StatusOK, req)
 	}
 }
@@ -323,7 +396,7 @@ func ListLockouts() gin.HandlerFunc {
 
 // UnlockLockouts POST /api/v1/system/security/lockouts/unlock
 // 管理员手动解除锁定，支持单条或批量（keys 来自 ListLockouts 返回的 key 字段）
-func UnlockLockouts() gin.HandlerFunc {
+func UnlockLockouts(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
 			Keys []string `json:"keys" binding:"required,min=1"`
@@ -335,6 +408,8 @@ func UnlockLockouts() gin.HandlerFunc {
 		n := loginGuard.unlock(req.Keys)
 		slog.Info("管理员手动解除登录锁定",
 			"operator", getUsername(c), "requested", len(req.Keys), "unlocked", n)
+		writeSysAudit(db, getUsername(c), "unlock_lockouts", "lockout", strings.Join(req.Keys, ","),
+			fmt.Sprintf("Manually unlocked %d of %d requested lockout entries", n, len(req.Keys)))
 		c.JSON(http.StatusOK, gin.H{"unlocked": n})
 	}
 }

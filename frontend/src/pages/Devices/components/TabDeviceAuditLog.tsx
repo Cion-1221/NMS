@@ -5,6 +5,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { getDeviceAuditLogs, purgeDeviceAuditLogs } from '../../../api/device';
 import type { DeviceAuditLog } from '../../../types/device';
 import { apiErrMsg, useT } from '../../../i18n';
+import { PERM_ADMIN, useCan } from '../../../utils/perms';
 import { FONT_MONO } from '../../../theme/theme';
 
 const mono = (v: React.ReactNode) => (
@@ -54,6 +55,7 @@ const RESOURCE_OPTIONS = [
 
 const TabDeviceAuditLog: React.FC = () => {
   const t = useT();
+  const isAdminUser = useCan(PERM_ADMIN);
 
   const [data, setData]         = useState<DeviceAuditLog[]>([]);
   const [total, setTotal]       = useState(0);
@@ -191,18 +193,20 @@ const TabDeviceAuditLog: React.FC = () => {
         scroll={{ x: 900 }}
       />
 
-      {/* Purge control */}
-      <Space style={{ marginTop: 16 }} wrap>
-        <span style={{ fontWeight: 500 }}>{t('device.audit.retain')}</span>
-        <InputNumber
-          min={1} max={3650} value={retainDays}
-          onChange={v => setRetainDays(v ?? 90)}
-          addonAfter={t('device.audit.days')} style={{ width: 180 }}
-        />
-        <Button danger icon={<DeleteOutlined />} onClick={handlePurge}>
-          {t('device.audit.purge')}
-        </Button>
-      </Space>
+      {/* Purge control（清理为破坏性操作，仅管理员可见；后端 AdminRequired 双重保障） */}
+      {isAdminUser && (
+        <Space style={{ marginTop: 16 }} wrap>
+          <span style={{ fontWeight: 500 }}>{t('device.audit.retain')}</span>
+          <InputNumber
+            min={1} max={3650} value={retainDays}
+            onChange={v => setRetainDays(v ?? 90)}
+            addonAfter={t('device.audit.days')} style={{ width: 180 }}
+          />
+          <Button danger icon={<DeleteOutlined />} onClick={handlePurge}>
+            {t('device.audit.purge')}
+          </Button>
+        </Space>
+      )}
     </div>
   );
 };

@@ -6,6 +6,7 @@ import type {
   AgentTokenListResp, CreateAgentTokenReq, CreateAgentTokenResp,
   AgentRelease, AgentReleaseProgress,
   ProbeResultListParams, ProbeResultListResp, MeshPingMatrixResp, MeshPingMatrixParams,
+  LatencySeriesResp,
 } from '../types/agent';
 
 // ── Agent 管理 ────────────────────────────────────────────────────────────────
@@ -107,6 +108,11 @@ export const getMeshPingMatrix = (params: MeshPingMatrixParams) =>
 
 export const deleteProbeResultPair = (agentId: string, target: string, type: string) =>
   client.delete('/probe-results/pair', { params: { agent_id: agentId, target, type } });
+
+// 延迟趋势序列：服务端自动选源（原始点/归档层）并聚合到 ≤500 个显示点
+export const getLatencySeries = (params: {
+  agent_id: string; target: string; type: string; start: string; end: string;
+}) => client.get<LatencySeriesResp>('/probe-results/latency-series', { params });
 
 export const purgeProbeResults = (days: number) =>
   client.delete<{ deleted: number }>('/probe-results', { params: { days } });

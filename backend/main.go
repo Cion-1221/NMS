@@ -52,10 +52,19 @@ type Config struct {
 	} `mapstructure:"jwt"`
 	Log LogConfig `mapstructure:"log"`
 	Audit struct {
-		// 审计日志（IPAM/Devices/Agent 人工操作记录）保留天数，0 = 永久保留
+		// 审计日志（IPAM/Devices/Agent/System 人工操作记录）保留天数，0 = 永久保留
 		MaxAgeDays int `mapstructure:"max_age_days"`
-		// probe_results（Agent 自动周期探测写入，量级远高于审计日志）保留天数，0 = 永久保留
+		// 原始探测点（粒度=任务 Interval）保留天数，0 = 永久保留。
+		// 启用 probe_rollups 归档后可大幅缩短（长期数据由归档层接力）
 		ProbeResultsMaxAgeDays int `mapstructure:"probe_results_max_age_days"`
+		// 路径类结果（mtr/meshmtr/traceroute，detail 为大 JSON）独立保留天数，
+		// 0 = 跟随 probe_results_max_age_days
+		PathResultsMaxAgeDays int `mapstructure:"path_results_max_age_days"`
+		// 降采样归档层（Cacti RRA 风格），不配置 = 不启用
+		ProbeRollups []struct {
+			BucketMinutes int `mapstructure:"bucket_minutes"`
+			MaxAgeDays    int `mapstructure:"max_age_days"`
+		} `mapstructure:"probe_rollups"`
 	} `mapstructure:"audit"`
 	// ASN 查询：基于 CAIDA RouteViews + RIPE 数据的 IP→ASN 前缀匹配
 	ASNDB struct {
@@ -94,9 +103,11 @@ func loadConfig() (*Config, error) {
 	viper.SetDefault("database.conn_max_lifetime_minutes", 60)
 	viper.SetDefault("database.conn_max_idle_time_minutes", 10)
 
-	// 审计日志保留缺省值
+	// 审计日志保留缺省值。probe_results 保持 30 天（与旧版一致）；path_results 0 =
+	// 跟随全局；归档层默认不启用——推荐配置见 config.example.yaml 的 audit 块
 	viper.SetDefault("audit.max_age_days", 180)
 	viper.SetDefault("audit.probe_results_max_age_days", 30)
+	viper.SetDefault("audit.path_results_max_age_days", 0)
 
 	// ASN DB 缺省值：功能默认关闭，开启后使用标准路径
 	viper.SetDefault("asndb.enabled", false)
@@ -233,6 +244,7 @@ func main() {
 		&models.SysUser{},
 		&models.SysRefreshToken{},
 		&models.SysSetting{},
+		&models.SysAuditLog{},
 		// Agent（Group 必须先于引用它的 Agent/Task；Agent 必须先于引用它的 Task/ProbeResult）
 		&models.AgentGroup{},
 		&models.Agent{},
@@ -241,6 +253,9 @@ func main() {
 		&models.ProbeResult{},
 		&models.AgentAuditLog{},
 		&models.AgentRelease{},
+		// 探测结果降采样归档（序列维表 + 归档桶）
+		&models.ProbeSeries{},
+		&models.ProbeRollup{},
 	); err != nil {
 		slog.Error("自动迁移数据库失败", "err", err)
 		os.Exit(1)
@@ -256,8 +271,26 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 审计日志 + 探测结果自动保留（后台任务，对应 max_age_days = 0 时不启用）
-	controllers.StartAuditRetention(db, cfg.Audit.MaxAgeDays, cfg.Audit.ProbeResultsMaxAgeDays)
+	// 保留策略装配 + 启动校验（配置矛盾会静默损坏长期数据，fail-fast）
+	retention := controllers.RetentionConfig{
+		AuditMaxAgeDays:        cfg.Audit.MaxAgeDays,
+		ProbeResultsMaxAgeDays: cfg.Audit.ProbeResultsMaxAgeDays,
+		PathResultsMaxAgeDays:  cfg.Audit.PathResultsMaxAgeDays,
+	}
+	for _, t := range cfg.Audit.ProbeRollups {
+		retention.Rollups = append(retention.Rollups, controllers.RollupTier{
+			BucketMinutes: t.BucketMinutes, MaxAgeDays: t.MaxAgeDays,
+		})
+	}
+	if err := controllers.ValidateRetentionConfig(retention); err != nil {
+		slog.Error("audit 保留策略配置无效", "err", err)
+		os.Exit(1)
+	}
+
+	// 审计日志 + 探测结果自动保留（后台任务）
+	controllers.StartAuditRetention(db, retention)
+	// 探测结果降采样归档（Cacti RRA 风格，未配置归档层时不启动）
+	controllers.StartProbeRollups(db, retention)
 
 	// Agent PKI：启动时自动生成/加载内置 Root CA（10 年期，跨重启持久化于磁盘）
 	var pki *core.PKI
@@ -314,7 +347,7 @@ func main() {
 	// Agent 管理路由（list/update/delete/groups/tasks/tokens）和探测结果路由不依赖 PKI，
 	// 无论 agent_pki.enabled 是否开启都注册，确保前端页面始终可用。
 	controllers.RegisterAgentAdminRoutes(r, db, authMW, releasesDir)
-	controllers.RegisterProbeResultsRoutes(r, db, authMW)
+	controllers.RegisterProbeResultsRoutes(r, db, authMW, retention)
 	// NOC 看板聚合端点（任何已登录用户可访问，只读）
 	controllers.RegisterOverviewRoutes(r, db, authMW)
 	if pki != nil {

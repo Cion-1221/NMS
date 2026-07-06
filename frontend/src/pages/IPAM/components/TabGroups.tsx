@@ -5,11 +5,13 @@ import type { ColumnsType } from 'antd/es/table';
 import { getGroups, createGroup, updateGroup, deleteGroup } from '../../../api/ipam';
 import type { IPAMGroup } from '../../../types/ipam';
 import { apiErrMsg, useT } from '../../../i18n';
+import { PERM_IPAM_WRITE, useCan } from '../../../utils/perms';
 
 const { confirm } = Modal;
 
 const TabGroups: React.FC = () => {
   const t = useT();
+  const canWrite = useCan(PERM_IPAM_WRITE);
   const [data, setData]       = useState<IPAMGroup[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch]   = useState('');
@@ -84,9 +86,9 @@ const TabGroups: React.FC = () => {
       <Space style={{ marginBottom: 16 }}>
         <Input prefix={<SearchOutlined />} placeholder={`${t('ipam.group.name')} / ${t('ipam.group.desc')}`}
           value={search} onChange={(e) => setSearch(e.target.value)} allowClear style={{ width: 260 }} />
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>{t('ipam.group.add')}</Button>
+        {canWrite && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>{t('ipam.group.add')}</Button>}
       </Space>
-      <Table columns={columns} dataSource={filtered} rowKey="id" loading={loading}
+      <Table columns={canWrite ? columns : columns.filter((c) => c.key !== 'action')} dataSource={filtered} rowKey="id" loading={loading}
         pagination={{
           defaultPageSize: 20, pageSizeOptions: ['10', '20', '50', '100'],
           showSizeChanger: true, showQuickJumper: true,

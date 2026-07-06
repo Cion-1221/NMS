@@ -12,6 +12,7 @@ import {
 } from '../../../api/device';
 import type { DeviceSite, DevicePoP } from '../../../types/device';
 import { apiErrMsg, useT } from '../../../i18n';
+import { PERM_DEVICES_WRITE, useCan } from '../../../utils/perms';
 
 const { confirm } = Modal;
 
@@ -23,6 +24,7 @@ const { confirm } = Modal;
 
 const TabSites: React.FC = () => {
   const t = useT();
+  const canWrite = useCan(PERM_DEVICES_WRITE);
 
   // ── Sites table ───────────────────────────────────────────────────────────────
   const [data, setData]       = useState<DeviceSite[]>([]);
@@ -305,14 +307,16 @@ const TabSites: React.FC = () => {
         <Button icon={<ReloadOutlined />} onClick={loadData} loading={loading}>
           {t('common.refresh')}
         </Button>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          {t('device.site.add')}
-        </Button>
+        {canWrite && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            {t('device.site.add')}
+          </Button>
+        )}
       </Space>
 
       {/* ── Sites table ── */}
       <Table
-        columns={siteColumns}
+        columns={canWrite ? siteColumns : siteColumns.filter((c) => c.key !== 'action')}
         dataSource={filtered}
         rowKey="id"
         loading={loading}
@@ -393,9 +397,11 @@ const TabSites: React.FC = () => {
         <Divider titlePlacement="start">{t('device.tab.pops')}</Divider>
         <div style={{ marginBottom: 12 }}>
           <Space>
-            <Button type="primary" icon={<PlusOutlined />} size="small" onClick={openPopCreate}>
-              {t('device.pop.add')}
-            </Button>
+            {canWrite && (
+              <Button type="primary" icon={<PlusOutlined />} size="small" onClick={openPopCreate}>
+                {t('device.pop.add')}
+              </Button>
+            )}
             <Button
               icon={<ReloadOutlined />}
               size="small"
@@ -407,7 +413,7 @@ const TabSites: React.FC = () => {
           </Space>
         </div>
         <Table
-          columns={popColumns}
+          columns={canWrite ? popColumns : popColumns.filter((c) => c.key !== 'action')}
           dataSource={pops}
           rowKey="id"
           loading={popLoading}
