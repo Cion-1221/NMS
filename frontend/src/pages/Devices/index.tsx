@@ -6,13 +6,14 @@ import TabDeviceList from './components/TabDeviceList';
 import TabSites from './components/TabSites';
 import TabRoles from './components/TabRoles';
 import TabVendors from './components/TabVendors';
+import TabMIBs from './components/TabMIBs';
 import TabDeviceAuditLog from './components/TabDeviceAuditLog';
 
 const DevicesPage: React.FC = () => {
   const t = useT();
   const [activeKey, setActiveKey] = useState('1');
   // Each tab's version number; incrementing forces a remount → fresh data on every tab switch
-  const [versions, setVersions] = useState({ '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 });
+  const [versions, setVersions] = useState({ '1': 0, '2': 0, '3': 0, '4': 0, '5': 0, '6': 0 });
 
   const handleTabChange = (key: string) => {
     setActiveKey(key);
@@ -40,6 +41,11 @@ const DevicesPage: React.FC = () => {
       key: '4',
       label: t('device.tab.vendors'),
       children: <TabVendors key={versions['4']} />,
+    },
+    {
+      key: '6',
+      label: t('device.tab.mibs'),
+      children: <TabMIBs key={versions['6']} />,
     },
     {
       key: '5',

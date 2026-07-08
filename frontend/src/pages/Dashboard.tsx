@@ -170,15 +170,25 @@ const Dashboard: React.FC = () => {
   // ── Derived display values ──
   const dev = devices;
   const activePct = dev && dev.total ? (dev.active / dev.total) * 100 : 0;
+  // SNMP 运行状态分面（仅统计开启采集的设备）；后端未升级时字段缺失 → 整块隐藏
+  const oper = overview?.devices.oper;
 
-  // Active alerts = mesh-derived (failed cells + high latency) + an offline-agents
-  // summary alert, recomputed each render from fresh state, severity-sorted, capped.
+  // Active alerts = SNMP device-down facets + mesh-derived (failed cells + high
+  // latency) + an offline-agents summary alert, recomputed each render from fresh
+  // state, severity-sorted, capped.
   const alerts: Alert[] = (() => {
+    const devOper: Alert[] = [];
+    if (oper && oper.down > 0) {
+      devOper.push({ sev: 'critical', title: `${oper.down} device${oper.down > 1 ? 's' : ''} down (SNMP)`, meta: `${oper.monitored} monitored` });
+    }
+    if (oper && oper.proxy_down > 0) {
+      devOper.push({ sev: 'warning', title: `${oper.proxy_down} device${oper.proxy_down > 1 ? 's' : ''} proxy down`, meta: 'assigned agent unreachable' });
+    }
     const offline: Alert[] = summary && summary.offline_agents > 0
       ? [{ sev: 'warning', title: `${summary.offline_agents} agent${summary.offline_agents > 1 ? 's' : ''} offline`, meta: `${summary.online_agents}/${summary.total_agents} online` }]
       : [];
     const order = { critical: 0, warning: 1, info: 2 } as const;
-    return [...meshAlerts, ...offline].sort((a, b) => order[a.sev] - order[b.sev]).slice(0, 6);
+    return [...devOper, ...meshAlerts, ...offline].sort((a, b) => order[a.sev] - order[b.sev]).slice(0, 6);
   })();
 
   const statusData = dev ? [
@@ -227,7 +237,10 @@ const Dashboard: React.FC = () => {
           <MetricCard icon={<DesktopOutlined />} iconBg={token.colorPrimaryBg} iconColor={token.colorPrimary}
             label={t('kpi.devices')}
             value={dev ? dev.total.toLocaleString() : '—'}
-            sub={dev ? `${dev.active.toLocaleString()} active · ${dev.offline} offline` : ' '}
+            sub={oper && oper.monitored > 0
+              ? `${oper.up} up · ${oper.down} down · ${oper.proxy_down} proxy down`
+              : dev ? `${dev.active.toLocaleString()} active · ${dev.offline} decommissioned` : ' '}
+            subColor={oper && (oper.down > 0 || oper.proxy_down > 0) ? token.colorError : undefined}
             series={[]} lineColor={p.accent} />
         </Col>
         <Col xs={24} sm={12} xl={6}>
@@ -289,6 +302,17 @@ const Dashboard: React.FC = () => {
             <Col xs={24} md={12}>
               <Card title={t('dashboard.deviceStatus')}>
                 {statusData.length ? <Pie {...(donutConfig as any)} /> : <Skeleton active paragraph={{ rows: 3 }} />}
+                {/* SNMP 运行状态速览（开启采集的设备才计入；proxy down = 探针失联）*/}
+                {oper && oper.monitored > 0 && (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
+                    <StatusTag status="up" label={`${t('device.operStatus.up')} ${oper.up}`} tone="success" />
+                    <StatusTag status="down" label={`${t('device.operStatus.down')} ${oper.down}`}
+                      tone={oper.down > 0 ? 'danger' : 'neutral'} />
+                    <StatusTag status="proxy_down" label={`${t('device.operStatus.proxyDown')} ${oper.proxy_down}`}
+                      tone={oper.proxy_down > 0 ? 'warning' : 'neutral'} />
+                    <StatusTag status="unknown" label={`${t('device.operStatus.unknown')} ${oper.unknown}`} tone="neutral" />
+                  </div>
+                )}
               </Card>
             </Col>
           </Row>

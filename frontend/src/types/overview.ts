@@ -5,9 +5,22 @@ export interface OverviewProbeBucket {
   failed: number;
 }
 
+/** SNMP 运行状态分面（仅统计 polling_mode != none 的设备）。 */
+export interface OverviewDeviceOper {
+  monitored: number;
+  up: number;
+  down: number;
+  /** unknown 且原因为探针失联/吊销 — 采集链路故障，需要立即处理 */
+  proxy_down: number;
+  unknown: number;
+}
+
 export interface OverviewResp {
   range: string;
-  devices: { total: number; active: number; offline: number; maintenance: number; planned: number };
+  devices: {
+    total: number; active: number; offline: number; maintenance: number; planned: number;
+    oper: OverviewDeviceOper;
+  };
   agents: { total: number; online: number; offline: number; revoked: number };
   probes: { window_runs: number; window_failed: number; failure_rate_pct: number; delta_pct: number };
   probe_series: OverviewProbeBucket[];

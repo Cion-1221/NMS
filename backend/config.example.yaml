@@ -82,6 +82,48 @@ audit:
   #   - bucket_minutes: 1440     # 1 天均值
   #     max_age_days: 3660       #   保留 10 年
 
+# SNMP 设备采集（整个 snmp 块可省略，省略时使用下列默认值）
+# 设备在 Devices 页逐台开启：采集模式 Direct（Server 直连）或 Agent Proxy（探针代理）。
+# 采集内容为 RFC 1213 system 组（sysUpTime/sysName/sysDescr/sysLocation/sysContact），
+# 结论驱动设备"运行状态"（up/down/unknown）；管理状态（active/maintenance/planned）
+# 仍由用户设置，两者独立。
+snmp:
+  # 总开关：关闭后不启动 Direct 轮询器与运行状态看门狗，也不向 Agent 下发 snmp_poll 任务
+  enabled: true
+  # 快轮询默认间隔（秒）：每次只采 sysUpTime（报文最小化，兼做存活判定）。
+  # 设备表单里可逐台覆盖（10–86400）
+  default_interval_seconds: 60
+  # 每 N 次快轮询附带一次完整 system 组采集（资产信息变化很慢，无需每轮都取）
+  inventory_every_n: 10
+  # 单次 SNMP 请求超时（秒）与重试次数（总请求数 = 1 + retries）
+  timeout_seconds: 3
+  retries: 1
+  # Direct 模式内置轮询器的并发上限（同一时刻在途的 SNMP 请求数）
+  max_concurrent: 16
+  # 自定义 OID 指标时序保留天数（gauge 原值 / counter 每秒速率），0 = 永久。
+  # 数据量估算：每设备每 OID 每周期 1 行——16 OID × 60s 周期 ≈ 2.3 万行/天/设备
+  metrics_max_age_days: 14
+  # 指标降采样归档层（Cacti RRA 风格，同 audit.probe_rollups；取消注释即启用）：
+  # 后台任务每小时把原始点聚合到各层，趋势图按时间范围自动选源，长窗口曲线不断档。
+  # 各层 bucket_minutes 必须严格递增；启用后 metrics_max_age_days 需 ≥ 最大桶天数×2+2
+  # metric_rollups:
+  #   - bucket_minutes: 5        # 5 分钟均值
+  #     max_age_days: 90         #   保留 3 个月
+  #   - bucket_minutes: 60       # 1 小时均值
+  #     max_age_days: 366        #   保留 12 个月
+  #   - bucket_minutes: 1440     # 1 天均值
+  #     max_age_days: 1096       #   保留 3 年
+  # MIB 文件库存储目录（Devices → MIBs Tab 上传的文件；建议纳入备份，不进版本控制）
+  mibs_dir: "data/mibs"
+  # SNMP 凭证静态加密口令（community / SNMPv3 口令的 encryption at rest）。
+  # 留空 = 明文存库（凭证本就永不出现在任何 API 响应中）；配置任意强随机字符串后，
+  # 启动时自动加密存量明文凭证，此后写入一律密文（AES-256-GCM）。
+  # ⚠️ 口令务必纳入备份：全部丢失后已加密凭证不可恢复，只能逐台重新录入
+  credentials_key: ""
+  # 密钥轮换：把 credentials_key 换成新口令、旧口令填到这里，重启后启动清扫自动把
+  # 全部凭证重封为新密钥（读路径过渡期两把钥都认），之后即可清空此项
+  credentials_key_previous: ""
+
 # Agent PKI：内置 CA + mTLS 自动引导注册体系（整个 agent_pki 块可省略，省略时使用下列默认值）
 agent_pki:
   # 是否启用 Agent 体系；关闭后不会生成 CA，也不会监听 enroll/sync 两个端口

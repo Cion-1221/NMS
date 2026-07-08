@@ -179,6 +179,11 @@ func DeleteAgent(db *gorm.DB) gin.HandlerFunc {
 			if err := tx.Where("scope = ? AND agent_id = ?", "agent", agentID).Delete(&models.AgentTask{}).Error; err != nil {
 				return fmt.Errorf("清除专属任务失败: %w", err)
 			}
+			// 解绑以此 Agent 为 SNMP 采集探针的设备，运行状态立即归位 unknown
+			//（watchdog 的 agent_revoked 规则也会兜底，这里同步处理让前端立刻一致）
+			if err := tx.Exec("UPDATE devices SET snmp_agent_id = NULL, oper_status = 'unknown', oper_reason = 'agent_revoked' WHERE snmp_agent_id = ?", agentID).Error; err != nil {
+				return fmt.Errorf("解绑设备采集探针失败: %w", err)
+			}
 			return tx.Delete(&agent).Error
 		})
 		if txErr != nil {

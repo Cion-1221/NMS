@@ -59,6 +59,41 @@ func GetOverview(db *gorm.DB) gin.HandlerFunc {
 		}
 		devices["total"] = devTotal
 
+		// ── Devices 运行状态分面（SNMP 采集结论，仅统计开启采集的设备）──
+		// proxy_down 单列：unknown 且原因为探针失联/吊销——设备本身状态未知，但对
+		// NOC 而言它是需要立即处理的采集链路故障，不能淹没在普通 unknown 里。
+		type operCount struct {
+			OperStatus string
+			OperReason string
+			Cnt        int64
+		}
+		var operRows []operCount
+		db.Model(&models.Device{}).
+			Select("oper_status, oper_reason, COUNT(*) AS cnt").
+			Where("polling_mode <> 'none'").
+			Group("oper_status, oper_reason").Scan(&operRows)
+		var operMonitored, operUp, operDown, operProxyDown, operUnknown int64
+		for _, r := range operRows {
+			operMonitored += r.Cnt
+			switch {
+			case r.OperStatus == "up":
+				operUp += r.Cnt
+			case r.OperStatus == "down":
+				operDown += r.Cnt
+			case r.OperReason == "agent_down" || r.OperReason == "agent_revoked":
+				operProxyDown += r.Cnt
+			default:
+				operUnknown += r.Cnt
+			}
+		}
+		devices["oper"] = gin.H{
+			"monitored":  operMonitored,
+			"up":         operUp,
+			"down":       operDown,
+			"proxy_down": operProxyDown,
+			"unknown":    operUnknown,
+		}
+
 		// ── Agents：total/online/offline/revoked（与 GetAgentSummary 同口径）──
 		var agTotal, agRevoked, agOnline int64
 		db.Model(&models.Agent{}).Count(&agTotal)

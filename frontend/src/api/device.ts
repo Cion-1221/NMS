@@ -2,6 +2,8 @@ import client from './client';
 import type {
   Device, CreateDeviceReq, UpdateDeviceReq, DeviceListParams, DeviceListResp,
   DeviceSite, DevicePoP, DeviceRole, DeviceVendor, DeviceAuditLog,
+  AgentLite, DeviceSNMPDetail, SNMPTestResult, DeviceMIB,
+  DeviceSNMPOIDEntry, MIBTranslation,
 } from '../types/device';
 
 // ── Sites ──────────────────────────────────────────────────────────────────────
@@ -76,6 +78,65 @@ export const updateDevice = (id: number, data: UpdateDeviceReq) =>
 
 export const deleteDevice = (id: number) =>
   client.delete(`/devices/${id}`);
+
+// ── SNMP 辅助端点 ──────────────────────────────────────────────────────────────
+
+// 表单"采集探针"下拉的数据源（登录即可读，不需要 Agent 模块的 admin 权限）
+export const getDeviceAgentsLite = () =>
+  client.get<AgentLite[]>('/devices/agents-lite');
+
+// 详情 Drawer：设备 SNMP 配置 + 最新状态快照
+export const getDeviceSNMP = (id: number) =>
+  client.get<DeviceSNMPDetail>(`/devices/${id}/snmp`);
+
+// 立即测试（仅 direct 模式）：同步采集一次并落库，约 6 秒内返回
+export const testDeviceSNMP = (id: number) =>
+  client.post<SNMPTestResult>(`/devices/${id}/snmp/test`);
+
+// ── 自定义标量 OID（Drawer 内管理，随快轮询采集）────────────────────────────────
+
+export const createDeviceSNMPOID = (deviceId: number, data: { oid: string; name?: string; unit?: string; kind?: string }) =>
+  client.post<DeviceSNMPOIDEntry>(`/devices/${deviceId}/snmp/oids`, data);
+
+export const updateDeviceSNMPOID = (deviceId: number, oidId: number, data: { oid: string; name?: string; unit?: string; kind?: string }) =>
+  client.put<DeviceSNMPOIDEntry>(`/devices/${deviceId}/snmp/oids/${oidId}`, data);
+
+export const deleteDeviceSNMPOID = (deviceId: number, oidId: number) =>
+  client.delete(`/devices/${deviceId}/snmp/oids/${oidId}`);
+
+// 指标趋势序列（gauge 原值 / counter 每秒速率，时间桶聚合 avg/min/max）
+export const getDeviceOIDSeries = (deviceId: number, oidId: number, range: string) =>
+  client.get<MetricSeriesResp>(`/devices/${deviceId}/snmp/oids/${oidId}/series`, { params: { range } });
+
+// 数字 OID → 可读名（MIB 翻译引擎，最长前缀匹配）
+export const translateMIBOID = (oid: string) =>
+  client.get<MIBTranslation>('/devices/mibs/translate', { params: { oid } });
+
+// ── MIB 文件库 ─────────────────────────────────────────────────────────────────
+
+export const getDeviceMIBs = () =>
+  client.get<DeviceMIB[]>('/devices/mibs');
+
+// multipart 上传（字段名 file）；服务端校验大小/文本/SMI 模块头并提取模块名
+export const uploadDeviceMIB = (file: File) => {
+  const form = new FormData();
+  form.append('file', file);
+  return client.post<DeviceMIB>('/devices/mibs', form);
+};
+
+export const deleteDeviceMIB = (id: number) =>
+  client.delete(`/devices/mibs/${id}`);
+
+// 带 JWT 的下载：axios 拿 blob 后用临时 object URL 触发浏览器保存
+export const downloadDeviceMIB = async (id: number, fileName: string) => {
+  const resp = await client.get<Blob>(`/devices/mibs/${id}/download`, { responseType: 'blob' });
+  const url = URL.createObjectURL(resp.data);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(url);
+};
 
 // ── Audit Logs ─────────────────────────────────────────────────────────────────
 

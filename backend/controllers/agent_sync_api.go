@@ -21,18 +21,46 @@ import (
 const onlineThreshold = 5 * time.Minute
 
 // taskPayload 是下发给 Agent 的单条任务结构。
+// SNMP 字段仅 snmp_poll 类型携带（omitempty），旧版 Agent 解析不受影响。
 type taskPayload struct {
-	TaskID          uint     `json:"task_id"`
-	Type            string   `json:"type"`
-	IntervalSeconds int      `json:"interval_seconds"`
-	Targets         []string `json:"targets"`
+	TaskID          uint            `json:"task_id"`
+	Type            string          `json:"type"`
+	IntervalSeconds int             `json:"interval_seconds"`
+	Targets         []string        `json:"targets"`
+	SNMP            *snmpTaskParams `json:"snmp,omitempty"`
 }
+
+// snmpTaskParams 是 snmp_poll 任务的参数块。凭证经 mTLS 信道以明文下发（静态
+// 加密只作用于库内存储；安全性等同现有任务体系），Agent 端只在内存持有、不落盘。
+type snmpTaskParams struct {
+	DeviceID        uint     `json:"device_id"`
+	Version         string   `json:"version"` // 1 / 2c / 3
+	Community       string   `json:"community,omitempty"`
+	Port            int      `json:"port"`
+	TimeoutSeconds  int      `json:"timeout_seconds"`
+	Retries         int      `json:"retries"`
+	InventoryEveryN int      `json:"inventory_every_n"` // 每 N 次快轮询附带完整 system 组
+	V3User          string   `json:"v3_user,omitempty"` // ── SNMPv3（USM）──
+	V3AuthProto     string   `json:"v3_auth_proto,omitempty"`
+	V3AuthPass      string   `json:"v3_auth_pass,omitempty"`
+	V3PrivProto     string   `json:"v3_priv_proto,omitempty"`
+	V3PrivPass      string   `json:"v3_priv_pass,omitempty"`
+	ExtraOIDs       []string `json:"extra_oids,omitempty"`         // 自定义标量 OID，随每次快轮询一并 GET
+	CollectIfaces   bool     `json:"collect_interfaces,omitempty"` // 每周期 WALK ifTable/ifXTable
+}
+
+// snmpTaskIDBase：合成任务的虚拟 TaskID 偏移。snmp_poll 任务不存在于 agent_tasks
+// 表（从 devices 表即时合成，见 resolveSNMPPollTasks），但 Agent 端调度器按 task_id
+// 整数做 goroutine reconcile，必须全局唯一——真实 AgentTask 自增 ID 不可能达到 2^30，
+// 用 1<<30 + device_id 保证两个命名空间永不冲突。
+const snmpTaskIDBase = 1 << 30
 
 // GetAgentTasks GET /api/v1/agent-sync/tasks
 // mTLS 校验已由 AgentMTLS 中间件完成并将 Agent 记录注入 context。
 // 组装该 Agent 当前生效的任务列表：全局任务 + 所属 Group 任务 + 专属任务；
-// meshping 任务的目标列表动态替换为同组存活 Agent 的 IP。
-func GetAgentTasks(db *gorm.DB) gin.HandlerFunc {
+// meshping 任务的目标列表动态替换为同组存活 Agent 的 IP；此外附加从 devices 表
+// 即时合成的 snmp_poll 任务（指派给本 Agent 的探针代理采集，见 resolveSNMPPollTasks）。
+func GetAgentTasks(db *gorm.DB, snmpCfg SNMPConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		agent := middleware.GetAgent(c)
 		if agent == nil {
@@ -64,6 +92,12 @@ func GetAgentTasks(db *gorm.DB) gin.HandlerFunc {
 			payloads = append(payloads, taskPayload{
 				TaskID: t.ID, Type: t.Type, IntervalSeconds: t.IntervalSeconds, Targets: targets,
 			})
+		}
+
+		// SNMP 探针代理任务：从 devices 表即时合成（devices 即真源，改配置/换探针
+		// 无需同步任何任务记录，下个同步周期自动生效——与 meshping 动态解析同思路）
+		if snmpCfg.Enabled {
+			payloads = append(payloads, resolveSNMPPollTasks(db, agent, snmpCfg)...)
 		}
 
 		var sourceIP, sourceIPv4, sourceIPv6 *string
@@ -157,6 +191,96 @@ func resolveMeshPingTargets(db *gorm.DB, self *models.Agent, task models.AgentTa
 	return targets
 }
 
+// resolveSNMPPollTasks 为当前 Agent 合成 snmp_poll 任务列表：polling_mode='agent'
+// 且 snmp_agent_id 指向本 Agent 的所有设备，每台一条。status 为 planned（未上架）
+// 或 offline（已停用）的设备不采集。目标 IP 优先 IPv4，缺失时用 IPv6。
+// 库内静态加密的凭证在此解封后随 mTLS 信道下发。
+func resolveSNMPPollTasks(db *gorm.DB, agent *models.Agent, cfg SNMPConfig) []taskPayload {
+	cfg.Normalize()
+	var devices []models.Device
+	db.Where("polling_mode = ? AND snmp_agent_id = ? AND status NOT IN ('planned','offline')", "agent", agent.AgentID).
+		Order("id asc").Find(&devices)
+	if len(devices) == 0 {
+		return nil
+	}
+
+	// 一次性取出这批设备的全部自定义 OID，按设备分组
+	ids := make([]uint, 0, len(devices))
+	for _, d := range devices {
+		ids = append(ids, d.ID)
+	}
+	var oidRows []models.DeviceSNMPOID
+	db.Where("device_id IN ?", ids).Order("id asc").Find(&oidRows)
+	oidsByDevice := make(map[uint][]string, len(devices))
+	for _, r := range oidRows {
+		oidsByDevice[r.DeviceID] = append(oidsByDevice[r.DeviceID], r.OID)
+	}
+
+	payloads := make([]taskPayload, 0, len(devices))
+	for _, d := range devices {
+		target := ""
+		if d.ManagementIP != nil && *d.ManagementIP != "" {
+			target = *d.ManagementIP
+		} else if d.ManagementIPv6 != nil && *d.ManagementIPv6 != "" {
+			target = *d.ManagementIPv6
+		}
+		if target == "" {
+			continue // 无目标不下发（建库校验已挡住，这里防御脏数据）
+		}
+		params := &snmpTaskParams{
+			DeviceID:        d.ID,
+			Version:         d.SNMPVersion,
+			Port:            d.SNMPPort,
+			TimeoutSeconds:  cfg.TimeoutSeconds,
+			Retries:         cfg.Retries,
+			InventoryEveryN: cfg.InventoryEveryN,
+			ExtraOIDs:       oidsByDevice[d.ID],
+			CollectIfaces:   d.CollectInterfaces,
+		}
+		if d.SNMPVersion == "3" {
+			if d.SNMPV3User == nil || *d.SNMPV3User == "" {
+				continue // v3 无用户名不下发
+			}
+			params.V3User = *d.SNMPV3User
+			if d.SNMPV3AuthProto != nil {
+				params.V3AuthProto = *d.SNMPV3AuthProto
+			}
+			if d.SNMPV3PrivProto != nil {
+				params.V3PrivProto = *d.SNMPV3PrivProto
+			}
+			if params.V3AuthProto != "" && d.SNMPV3AuthPass != nil {
+				params.V3AuthPass = openSNMPSecret(cfg, d.ID, "v3_auth_pass", *d.SNMPV3AuthPass)
+				if params.V3AuthPass == "" {
+					continue // 解密失败不下发（日志已由 openSNMPSecret 记录）
+				}
+			}
+			if params.V3PrivProto != "" && d.SNMPV3PrivPass != nil {
+				params.V3PrivPass = openSNMPSecret(cfg, d.ID, "v3_priv_pass", *d.SNMPV3PrivPass)
+				if params.V3PrivPass == "" {
+					continue
+				}
+			}
+		} else {
+			params.Community = openSNMPSecret(cfg, d.ID, "community", d.SNMPCommunity)
+			if params.Community == "" {
+				continue // 无凭证/解密失败不下发
+			}
+		}
+		interval := cfg.DefaultIntervalSeconds
+		if d.SNMPIntervalSeconds != nil && *d.SNMPIntervalSeconds >= 10 {
+			interval = *d.SNMPIntervalSeconds
+		}
+		payloads = append(payloads, taskPayload{
+			TaskID:          snmpTaskIDBase + d.ID,
+			Type:            "snmp_poll",
+			IntervalSeconds: interval,
+			Targets:         []string{target},
+			SNMP:            params,
+		})
+	}
+	return payloads
+}
+
 // ── 结果上报 ───────────────────────────────────────────────────────────────
 
 type probeResultIn struct {
@@ -199,6 +323,91 @@ func PostAgentResults(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 		c.JSON(http.StatusOK, gin.H{"received": len(rows)})
+	}
+}
+
+// ── SNMP 采集结果上报 ────────────────────────────────────────────────────────
+
+// snmpResultIn 与 Agent 端 probe.SNMPResult 一一对应。
+// CollectedAt（unix 秒）是 Agent 侧的采集时刻——批量上报会把同一设备的多个采集
+// 点在几毫秒内先后送达，counter 速率换算必须以它为时间基准，不能用入库时刻。
+type snmpResultIn struct {
+	DeviceID      uint              `json:"device_id" binding:"required"`
+	CollectedAt   int64             `json:"collected_at"`
+	Success       bool              `json:"success"`
+	ErrorKind     string            `json:"error_kind"`
+	Error         string            `json:"error"`
+	LatencyMs     *float64          `json:"latency_ms"`
+	UptimeTicks   *int64            `json:"uptime_ticks"`
+	HasInventory  bool              `json:"has_inventory"`
+	SysName       string            `json:"sys_name"`
+	SysDescr      string            `json:"sys_descr"`
+	SysObjectID   string            `json:"sys_object_id"`
+	SysLocation   string            `json:"sys_location"`
+	SysContact    string            `json:"sys_contact"`
+	Values        []snmpOIDValue    `json:"values"`         // 自定义 OID 采集值
+	HasInterfaces bool              `json:"has_interfaces"` // WALK 明确成功才 reconcile 维表
+	Interfaces    []snmpInterfaceIn `json:"interfaces"`
+}
+
+// PostAgentSNMPResults POST /api/v1/agent-sync/snmp-results —— 探针代理模式的
+// SNMP 结论回传，不走 probe_results（那是延迟时序热表，SNMP 快照是状态语义）。
+//
+// 越权防御：每条结果必须命中"该设备当前确实以 agent 模式指派给调用方"才落库——
+// 一台被攻陷的 Agent 只能影响指派给它的设备，无法伪造全网设备状态；配置刚被
+// 管理员改走（换探针/关采集）时迟到的结果同样被丢弃。
+func PostAgentSNMPResults(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		agent := middleware.GetAgent(c)
+		if agent == nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "未认证"})
+			return
+		}
+		var req struct {
+			Results []snmpResultIn `json:"results" binding:"required,dive"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+			return
+		}
+
+		accepted, rejected := 0, 0
+		for _, r := range req.Results {
+			var device models.Device
+			err := db.Select("id").
+				Where("id = ? AND polling_mode = ? AND snmp_agent_id = ?", r.DeviceID, "agent", agent.AgentID).
+				Take(&device).Error
+			if err != nil {
+				rejected++
+				continue
+			}
+			obs := snmpObservation{
+				Success:       r.Success,
+				ErrorKind:     r.ErrorKind,
+				Error:         r.Error,
+				LatencyMs:     r.LatencyMs,
+				UptimeTicks:   r.UptimeTicks,
+				HasInventory:  r.HasInventory,
+				SysName:       r.SysName,
+				SysDescr:      r.SysDescr,
+				SysObjectID:   r.SysObjectID,
+				SysLocation:   r.SysLocation,
+				SysContact:    r.SysContact,
+				Values:        r.Values,
+				HasInterfaces: r.HasInterfaces,
+				Interfaces:    r.Interfaces,
+			}
+			if r.CollectedAt > 0 {
+				obs.CollectedAt = time.Unix(r.CollectedAt, 0)
+			}
+			applySNMPResult(db, r.DeviceID, &agent.AgentID, obs)
+			accepted++
+		}
+		if rejected > 0 {
+			slog.Warn("SNMP 结果部分被拒（设备未指派给该 Agent 或配置已变更）",
+				"agent_id", agent.AgentID, "accepted", accepted, "rejected", rejected)
+		}
+		c.JSON(http.StatusOK, gin.H{"received": accepted, "rejected": rejected})
 	}
 }
 
@@ -290,12 +499,13 @@ func GetAgentBinary(db *gorm.DB) gin.HandlerFunc {
 }
 
 // RegisterAgentSyncRoutes 挂载到独立的 sync mTLS 引擎（tls.RequireAndVerifyClientCert）。
-func RegisterAgentSyncRoutes(r *gin.Engine, db *gorm.DB, pki *core.PKI, clientCertDays int) {
+func RegisterAgentSyncRoutes(r *gin.Engine, db *gorm.DB, pki *core.PKI, clientCertDays int, snmpCfg SNMPConfig) {
 	sync := r.Group("/api/v1/agent-sync")
 	sync.Use(middleware.AgentMTLS(db))
 	{
-		sync.GET("/tasks", GetAgentTasks(db))
+		sync.GET("/tasks", GetAgentTasks(db, snmpCfg))
 		sync.POST("/results", PostAgentResults(db))
+		sync.POST("/snmp-results", PostAgentSNMPResults(db))
 		sync.POST("/renew-cert", RenewAgentCert(db, pki, clientCertDays))
 		sync.GET("/my-ip", GetMyIP)
 		sync.GET("/binary/:id", GetAgentBinary(db))

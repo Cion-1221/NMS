@@ -95,21 +95,26 @@ func StartProbeRollups(db *gorm.DB, rc RetentionConfig) {
 const rollupLockName = "nms_probe_rollup"
 
 func runProbeRollups(db *gorm.DB, rc RetentionConfig) {
-	// GET_LOCK 是会话级的：必须用 db.Connection 把加锁、干活、解锁钉在同一条
-	// 连接上——否则连接池可能用另一条连接执行 RELEASE_LOCK，导致锁泄漏。
+	// GET_LOCK 是会话级的：加锁与解锁必须发生在同一条连接上，故用 db.Connection
+	// 钉住一条连接专门持锁。实际的聚合/清理工作必须放回普通连接池（db）执行——
+	// 钉住的 conn 内部共享同一个 Statement，builder API（Where/Delete）会被此前
+	// Scan(&got) 残留的目标污染，报 "Table not set / unsupported data type"；
+	// 锁操作本身只用 Raw/Exec（自带完整 SQL），不受影响。
 	err := db.Connection(func(conn *gorm.DB) error {
 		var got int
-		conn.Raw("SELECT GET_LOCK(?, 0)", rollupLockName).Scan(&got)
+		if err := conn.Raw("SELECT GET_LOCK(?, 0)", rollupLockName).Scan(&got).Error; err != nil {
+			return err
+		}
 		if got != 1 {
 			slog.Info("归档：其他实例正在执行，本轮跳过")
 			return nil
 		}
 		defer conn.Exec("SELECT RELEASE_LOCK(?)", rollupLockName)
-		doProbeRollups(conn, rc)
+		doProbeRollups(db, rc)
 		return nil
 	})
 	if err != nil {
-		slog.Error("归档：获取数据库连接失败", "err", err)
+		slog.Error("归档：加锁执行失败", "err", err)
 	}
 }
 

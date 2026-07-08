@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -23,6 +25,13 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
+
+// builtinMIBFS：编译进二进制的标准 MIB 基础模块（SNMPv2-SMI/TC/CONF、IF-MIB 等），
+// 首次启动 seed 进 MIB 文件库——厂商 MIB 几乎都 IMPORTS 它们。清单与来源见
+// backend/mibs_builtin/README.md。
+//
+//go:embed mibs_builtin/*.mib
+var builtinMIBFS embed.FS
 
 // Config 全量配置结构，对应 config.yaml
 type Config struct {
@@ -75,6 +84,30 @@ type Config struct {
 		// UpdateHour：每天几点执行自动下载更新（0–23，服务器本地时间）
 		UpdateHour int `mapstructure:"update_hour"`
 	} `mapstructure:"asndb"`
+	// SNMP 设备采集：Direct 模式内置轮询器 + 运行状态看门狗 + 探针代理任务合成
+	SNMP struct {
+		Enabled                bool   `mapstructure:"enabled"`
+		DefaultIntervalSeconds int    `mapstructure:"default_interval_seconds"` // 快轮询间隔（sysUpTime + 存活）
+		InventoryEveryN        int    `mapstructure:"inventory_every_n"`        // 每 N 次快轮询附带完整 system 组
+		TimeoutSeconds         int    `mapstructure:"timeout_seconds"`
+		Retries                int    `mapstructure:"retries"`
+		MaxConcurrent          int    `mapstructure:"max_concurrent"`       // Direct poller 并发上限
+		MetricsMaxAgeDays      int    `mapstructure:"metrics_max_age_days"` // 自定义 OID 时序保留天数，0 = 永久
+		// MetricRollups：指标时序降采样归档层（Cacti RRA 风格，同 audit.probe_rollups；
+		// 不配置 = 不启用，长窗口趋势查询只能覆盖原始点保留期内的数据）
+		MetricRollups []struct {
+			BucketMinutes int `mapstructure:"bucket_minutes"`
+			MaxAgeDays    int `mapstructure:"max_age_days"`
+		} `mapstructure:"metric_rollups"`
+		MibsDir string `mapstructure:"mibs_dir"` // MIB 文件库存储目录
+		// CredentialsKey：SNMP 凭证静态加密口令（任意长度，SHA-256 派生 AES-256 密钥）。
+		// 留空 = 明文存储；配置后启动时自动加密存量明文凭证。
+		// CredentialsKeyPrevious：密钥轮换过渡用的上一代口令——轮换时 key 填新口令、
+		// previous 填旧口令，重启后启动清扫自动把全部凭证重封为新密钥，之后可移除
+		// previous。⚠️ 两把口令都丢失时已加密凭证不可恢复，只能重新录入。
+		CredentialsKey         string `mapstructure:"credentials_key"`
+		CredentialsKeyPrevious string `mapstructure:"credentials_key_previous"`
+	} `mapstructure:"snmp"`
 	// Agent PKI：内置 CA + mTLS 注册引导/任务同步两个独立 TLS 端口
 	AgentPKI struct {
 		Enabled        bool     `mapstructure:"enabled"`
@@ -115,6 +148,18 @@ func loadConfig() (*Config, error) {
 	viper.SetDefault("asndb.v6_prefix_file", "data/asndb/pfx2as_v6.txt")
 	viper.SetDefault("asndb.names_file", "data/asndb/asnames.txt")
 	viper.SetDefault("asndb.update_hour", 3)
+
+	// SNMP 采集缺省值：功能默认开启（没有配置任何设备开启采集时零开销）
+	viper.SetDefault("snmp.enabled", true)
+	viper.SetDefault("snmp.default_interval_seconds", 60)
+	viper.SetDefault("snmp.inventory_every_n", 10)
+	viper.SetDefault("snmp.timeout_seconds", 3)
+	viper.SetDefault("snmp.retries", 1)
+	viper.SetDefault("snmp.max_concurrent", 16)
+	viper.SetDefault("snmp.metrics_max_age_days", 14)
+	viper.SetDefault("snmp.mibs_dir", "data/mibs")
+	viper.SetDefault("snmp.credentials_key", "")
+	viper.SetDefault("snmp.credentials_key_previous", "")
 
 	// Agent PKI 缺省值：旧版 config.yaml 未配置时保持开箱即用
 	viper.SetDefault("agent_pki.enabled", true)
@@ -238,6 +283,12 @@ func main() {
 		&models.DeviceRole{},
 		&models.DeviceVendor{},
 		&models.Device{},
+		&models.DeviceSNMPState{},
+		&models.DeviceSNMPOID{},
+		&models.DeviceMetricPoint{},
+		&models.DeviceMetricRollup{},
+		&models.DeviceInterface{},
+		&models.DeviceMIB{},
 		&models.DeviceAuditLog{},
 		// System
 		&models.SysGroup{},
@@ -271,6 +322,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 确保 MIB 文件库目录存在（与 snmp.enabled 无关——MIB 库是独立资产管理）
+	mibsDir := filepath.Clean(cfg.SNMP.MibsDir)
+	if err := os.MkdirAll(mibsDir, 0755); err != nil {
+		slog.Error("创建 mibs 目录失败", "err", err, "dir", mibsDir)
+		os.Exit(1)
+	}
+
 	// 保留策略装配 + 启动校验（配置矛盾会静默损坏长期数据，fail-fast）
 	retention := controllers.RetentionConfig{
 		AuditMaxAgeDays:        cfg.Audit.MaxAgeDays,
@@ -291,6 +349,59 @@ func main() {
 	controllers.StartAuditRetention(db, retention)
 	// 探测结果降采样归档（Cacti RRA 风格，未配置归档层时不启动）
 	controllers.StartProbeRollups(db, retention)
+
+	// SNMP 凭证静态加密（snmp.credentials_key 配置后启用；previous 供密钥轮换过渡）
+	secretBox, err := core.NewSecretBox(cfg.SNMP.CredentialsKey, cfg.SNMP.CredentialsKeyPrevious)
+	if err != nil {
+		slog.Error("初始化凭证加密失败", "err", err)
+		os.Exit(1)
+	}
+
+	// SNMP 设备采集装配：Direct 模式内置轮询器 + 运行状态看门狗。
+	// 看门狗对 direct/agent 两种模式统一兜底，与 agent_pki 是否启用无关。
+	snmpCfg := controllers.SNMPConfig{
+		Enabled:                cfg.SNMP.Enabled,
+		DefaultIntervalSeconds: cfg.SNMP.DefaultIntervalSeconds,
+		InventoryEveryN:        cfg.SNMP.InventoryEveryN,
+		TimeoutSeconds:         cfg.SNMP.TimeoutSeconds,
+		Retries:                cfg.SNMP.Retries,
+		MaxConcurrent:          cfg.SNMP.MaxConcurrent,
+		MetricsMaxAgeDays:      cfg.SNMP.MetricsMaxAgeDays,
+		Secrets:                secretBox,
+	}
+	for _, t := range cfg.SNMP.MetricRollups {
+		snmpCfg.MetricRollups = append(snmpCfg.MetricRollups, controllers.RollupTier{
+			BucketMinutes: t.BucketMinutes, MaxAgeDays: t.MaxAgeDays,
+		})
+	}
+	if err := controllers.ValidateMetricRollups(snmpCfg.MetricRollups, snmpCfg.MetricsMaxAgeDays); err != nil {
+		slog.Error("snmp.metric_rollups 配置无效", "err", err)
+		os.Exit(1)
+	}
+	if secretBox != nil {
+		slog.Info("snmp: 凭证静态加密已启用")
+		// 一次性把存量明文凭证加密（幂等，重复启动零副作用）
+		controllers.EncryptExistingSNMPCredentials(db, snmpCfg)
+	}
+	if snmpCfg.Enabled {
+		controllers.StartDeviceSNMPPoller(db, snmpCfg)
+		controllers.StartDeviceOperStatusSweeper(db, snmpCfg)
+		controllers.StartDeviceMetricRetention(db, snmpCfg)
+		controllers.StartDeviceMetricRollups(db, snmpCfg)
+	} else {
+		slog.Info("snmp: 设备 SNMP 采集已禁用（snmp.enabled = false）")
+	}
+
+	// 首次启动：内置标准 MIB 基础模块 seed 进文件库（幂等标记，尊重后续人工删除）
+	if builtinSub, err := fs.Sub(builtinMIBFS, "mibs_builtin"); err == nil {
+		controllers.SeedBuiltinMIBs(db, mibsDir, builtinSub)
+	} else {
+		slog.Error("内置 MIB 资源初始化失败", "err", err)
+	}
+
+	// MIB 翻译引擎：加载 MIB 文件库（解析失败的模块回写状态，不阻塞启动）
+	mibEngine := controllers.NewMIBEngine(mibsDir)
+	mibEngine.Rebuild(db)
 
 	// Agent PKI：启动时自动生成/加载内置 Root CA（10 年期，跨重启持久化于磁盘）
 	var pki *core.PKI
@@ -342,7 +453,7 @@ func main() {
 	// 注册各模块路由
 	controllers.RegisterAuthRoutes(r, db, authCfg)
 	controllers.RegisterIPAMRoutes(r, db, authMW)
-	controllers.RegisterDeviceRoutes(r, db, authMW)
+	controllers.RegisterDeviceRoutes(r, db, authMW, snmpCfg, mibsDir, mibEngine)
 	controllers.RegisterSystemRoutes(r, db, authMW)
 	// Agent 管理路由（list/update/delete/groups/tasks/tokens）和探测结果路由不依赖 PKI，
 	// 无论 agent_pki.enabled 是否开启都注册，确保前端页面始终可用。
@@ -437,7 +548,7 @@ func main() {
 		// header，由 mTLS 中间件单独校验地址族，不受此影响）
 		_ = syncEngine.SetTrustedProxies(nil)
 		syncEngine.Use(middleware.Recovery())
-		controllers.RegisterAgentSyncRoutes(syncEngine, db, pki, cfg.AgentPKI.ClientCertDays)
+		controllers.RegisterAgentSyncRoutes(syncEngine, db, pki, cfg.AgentPKI.ClientCertDays, snmpCfg)
 		syncSrv = &http.Server{
 			Addr:      fmt.Sprintf(":%d", cfg.AgentPKI.SyncPort),
 			Handler:   syncEngine,
