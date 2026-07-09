@@ -725,9 +725,21 @@ const TabDeviceList: React.FC = () => {
     { title: t('device.role'),   key: 'role',   render: (_, r) => r.role?.name   ?? '—' },
     { title: t('device.vendor'), key: 'vendor', render: (_, r) => r.vendor?.name ?? '—' },
     {
-      title: t('device.remark'), dataIndex: 'remark', key: 'remark', width: 180, ellipsis: true,
+      title: t('device.remark'), dataIndex: 'remark', key: 'remark', width: 180,
+      // 手动内联截断而非列级 ellipsis：tableLayout="auto" 下 antd 的 ellipsis
+      // 依赖 fixed 布局才能可靠生效，长文本会把列撑开而不是截断；这里用
+      // maxWidth + overflow:hidden 自行限定，与表格整体布局模式无关。
       render: (v: string) => v
-        ? <Tooltip title={v} placement="topLeft"><span>{v}</span></Tooltip>
+        ? (
+          <Tooltip title={v} placement="topLeft">
+            <span style={{
+              display: 'inline-block', maxWidth: 180, overflow: 'hidden',
+              textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom',
+            }}>
+              {v}
+            </span>
+          </Tooltip>
+        )
         : '—',
     },
     {
@@ -845,16 +857,17 @@ const TabDeviceList: React.FC = () => {
       </Space>
 
       {/* ── Table (server-side pagination) ──
-          tableLayout="fixed" 而非 scroll.x：显式宽度的列严格锁宽（remark 的
-          ellipsis 依赖这个才能真正截断，而非被长文本撑开列宽）；未设宽度的
-          Site/PoP/Role/Vendor 四列自动均分剩余空间——不会触发 antd 的横向
-          滚动包裹层，也就不会再出现表格自身的左右拖动条。*/}
+          默认 tableLayout="auto"（不设 scroll、不设 tableLayout="fixed"）：
+          未设宽度的 Site/PoP/Role/Vendor 四列才会真正按各自内容宽度自适应——
+          fixed 布局下无宽度列只会平分剩余空间，无法体现"短名称窄、长名称宽"的
+          差异。remark 的截断因此改为手动内联样式（见下方 render），不再依赖
+          fixed 布局才能生效。不设 scroll.x 意味着 antd 的横向滚动包裹层从不会
+          被创建，也就不会再出现表格自身的左右拖动条。*/}
       <Table
         columns={canWrite ? columns : columns.filter((c) => c.key !== 'action')}
         dataSource={data}
         rowKey="id"
         loading={loading}
-        tableLayout="fixed"
         pagination={{
           current: page,
           pageSize,
