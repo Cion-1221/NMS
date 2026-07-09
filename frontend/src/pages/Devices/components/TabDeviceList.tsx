@@ -881,7 +881,7 @@ const TabDeviceList: React.FC = () => {
         width={760}
       >
         <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
-          <Divider orientation="left" orientationMargin={0} plain style={sectionDividerStyle}>
+          <Divider titlePlacement="left" orientationMargin={0} plain style={sectionDividerStyle}>
             {t('device.form.basicSection')}
           </Divider>
           <Row gutter={16}>
@@ -902,7 +902,7 @@ const TabDeviceList: React.FC = () => {
             </Col>
           </Row>
 
-          <Divider orientation="left" orientationMargin={0} plain style={sectionDividerStyle}>
+          <Divider titlePlacement="left" orientationMargin={0} plain style={sectionDividerStyle}>
             {t('device.form.networkSection')}
           </Divider>
           <Row gutter={16}>
@@ -938,7 +938,7 @@ const TabDeviceList: React.FC = () => {
             </Col>
           </Row>
 
-          <Divider orientation="left" orientationMargin={0} plain style={sectionDividerStyle}>
+          <Divider titlePlacement="left" orientationMargin={0} plain style={sectionDividerStyle}>
             {t('device.form.assignSection')}
           </Divider>
           <Row gutter={16}>
@@ -975,7 +975,7 @@ const TabDeviceList: React.FC = () => {
             </Col>
           </Row>
 
-          <Divider orientation="left" orientationMargin={0} plain style={sectionDividerStyle}>
+          <Divider titlePlacement="left" orientationMargin={0} plain style={sectionDividerStyle}>
             {t('device.form.snmpSection')}
           </Divider>
           <Row gutter={16}>

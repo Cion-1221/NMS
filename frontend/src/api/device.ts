@@ -3,7 +3,7 @@ import type {
   Device, CreateDeviceReq, UpdateDeviceReq, DeviceListParams, DeviceListResp,
   DeviceSite, DevicePoP, DeviceRole, DeviceVendor, DeviceAuditLog,
   AgentLite, DeviceSNMPDetail, SNMPTestResult, DeviceMIB,
-  DeviceSNMPOIDEntry, MIBTranslation,
+  DeviceSNMPOIDEntry, MIBTranslation, MetricSeriesResp,
 } from '../types/device';
 
 // ── Sites ──────────────────────────────────────────────────────────────────────
