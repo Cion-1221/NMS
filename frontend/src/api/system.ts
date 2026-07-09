@@ -60,7 +60,7 @@ export const updateSessionPolicy = (data: SessionPolicy) =>
   client.put<SessionPolicy>('/system/settings/session', data);
 
 // ── System 审计日志 ───────────────────────────────────────────────────────────
-export const listSysAuditLogs = (params: { page: number; page_size: number; username?: string; action?: string }) =>
+export const listSysAuditLogs = (params: { page: number; page_size: number; username?: string; action?: string; resource_type?: string }) =>
   client.get<SysAuditLogListResp>('/system/audit-logs', { params });
 
 export const purgeSysAuditLogs = (days: number) =>

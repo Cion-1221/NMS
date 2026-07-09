@@ -213,11 +213,11 @@ const t = {
   'ipam.audit.resourceId': { en: 'ID', zh: 'ID' },
   'ipam.audit.detail':     { en: 'Detail', zh: '详情' },
   'ipam.audit.time':       { en: 'Time', zh: '操作时间' },
-  'ipam.audit.retain':     { en: 'Retain last', zh: '保留最近' },
   'ipam.audit.days':       { en: 'days', zh: '天的日志' },
   'ipam.audit.purge':      { en: 'Purge Old Logs', zh: '清理过期日志' },
-  'ipam.audit.purgeOk':    { en: 'Purged successfully', zh: '清理完成' },
-  'ipam.audit.purgeConfirm': { en: 'Permanently delete logs older than {days} days?', zh: '将永久删除 {days} 天之前的操作记录，确认？' },
+  'ipam.audit.purgeTitle': { en: 'Purge IPAM Audit Logs', zh: '清理 IPAM 审计日志' },
+  'ipam.audit.purgeBody':  { en: 'Keep logs from the most recent N days and permanently delete the rest:', zh: '保留最近 N 天的日志，其余永久删除：' },
+  'ipam.audit.purgeOk':    { en: 'Deleted {n} records', zh: '已删除 {n} 条记录' },
 
   // ── Devices ─────────────────────────────────────────────────────────────────
   'device.title':              { en: 'Device Management', zh: '设备管理' },
@@ -451,11 +451,11 @@ const t = {
   'device.audit.resource':     { en: 'Resource', zh: '资源类型' },
   'device.audit.resourceId':   { en: 'ID', zh: 'ID' },
   'device.audit.detail':       { en: 'Detail', zh: '详情' },
-  'device.audit.retain':       { en: 'Retain last', zh: '保留最近' },
   'device.audit.days':         { en: 'days', zh: '天的日志' },
   'device.audit.purge':        { en: 'Purge Old Logs', zh: '清理过期日志' },
-  'device.audit.purgeOk':      { en: 'Purged successfully', zh: '清理完成' },
-  'device.audit.purgeConfirm': { en: 'Permanently delete logs older than {days} days?', zh: '将永久删除 {days} 天之前的操作记录，确认？' },
+  'device.audit.purgeTitle':   { en: 'Purge Device Audit Logs', zh: '清理 Device 审计日志' },
+  'device.audit.purgeBody':    { en: 'Keep logs from the most recent N days and permanently delete the rest:', zh: '保留最近 N 天的日志，其余永久删除：' },
+  'device.audit.purgeOk':      { en: 'Deleted {n} records', zh: '已删除 {n} 条记录' },
 
   // ── System ──────────────────────────────────────────────────────────────────
   'sys.user.title':      { en: 'User Management', zh: '用户管理' },
@@ -728,6 +728,7 @@ const t = {
   'sysaudit.time':       { en: 'Time', zh: '时间' },
   'sysaudit.action':     { en: 'Action', zh: '操作' },
   'sysaudit.resource':   { en: 'Resource', zh: '资源' },
+  'sysaudit.resourceId': { en: 'ID', zh: 'ID' },
   'sysaudit.detail':     { en: 'Detail', zh: '详情' },
   'sysaudit.search':     { en: 'Search username…', zh: '搜索用户名…' },
   'sysaudit.purge':      { en: 'Purge Old Logs', zh: '清理历史日志' },

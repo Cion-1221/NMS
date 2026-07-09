@@ -522,7 +522,8 @@ func DeleteGroup(db *gorm.DB) gin.HandlerFunc {
 
 // ─── System 审计日志 ─────────────────────────────────────────────────────────
 
-// ListSysAuditLogs GET /api/v1/system/audit-logs（分页 + username/action 过滤）
+// ListSysAuditLogs GET /api/v1/system/audit-logs（分页 + username/action/resource_type 过滤，
+// 与 Device/IPAM 的审计日志端点保持同款过滤参数集）
 func ListSysAuditLogs(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -539,6 +540,9 @@ func ListSysAuditLogs(db *gorm.DB) gin.HandlerFunc {
 		}
 		if a := c.Query("action"); a != "" {
 			query = query.Where("action = ?", a)
+		}
+		if rt := c.Query("resource_type"); rt != "" {
+			query = query.Where("resource_type = ?", rt)
 		}
 		var total int64
 		query.Count(&total)

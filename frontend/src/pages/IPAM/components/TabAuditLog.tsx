@@ -56,6 +56,8 @@ const TabAuditLog: React.FC = () => {
   const [filterAction,   setFilterAction]   = useState<string | undefined>();
   const [filterResource, setFilterResource] = useState<string | undefined>();
 
+  const [purgeOpen, setPurgeOpen] = useState(false);
+
   const loadLogs = async (p = page, ps = pageSize, u = filterUser, a = filterAction, rt = filterResource) => {
     setLoading(true);
     try {
@@ -82,22 +84,14 @@ const TabAuditLog: React.FC = () => {
     loadLogs(p, ps, filterUser, filterAction, filterResource);
   };
 
-  const handlePurge = () => {
-    Modal.confirm({
-      title:      t('ipam.audit.purge'),
-      content:    t('ipam.audit.purgeConfirm', { days: retainDays }),
-      okType:     'danger',
-      okText:     t('ipam.audit.purge'),
-      cancelText: t('common.cancel'),
-      onOk: async () => {
-        try {
-          const r = await purgeAuditLogs(retainDays);
-          message.success(`${t('ipam.audit.purgeOk')} (${r.data.deleted} rows)`);
-          loadLogs(1, pageSize, filterUser, filterAction, filterResource);
-          setPage(1);
-        } catch (err) { message.error(apiErrMsg(err)); }
-      },
-    });
+  const handlePurge = async () => {
+    try {
+      const r = await purgeAuditLogs(retainDays);
+      message.success(t('ipam.audit.purgeOk', { n: Number(r.data.deleted) }));
+      setPurgeOpen(false);
+      loadLogs(1, pageSize, filterUser, filterAction, filterResource);
+      setPage(1);
+    } catch (err) { message.error(apiErrMsg(err)); }
   };
 
   const columns: ColumnsType<IPAMAuditLog> = [
@@ -155,6 +149,12 @@ const TabAuditLog: React.FC = () => {
           options={RESOURCE_OPTIONS}
         />
         <Button type="primary" onClick={handleSearch}>{t('common.search') ?? 'Search'}</Button>
+        {/* 清理为破坏性操作，仅管理员可见；后端 AdminRequired 双重保障 */}
+        {isAdminUser && (
+          <Button danger icon={<DeleteOutlined />} onClick={() => setPurgeOpen(true)}>
+            {t('ipam.audit.purge')}
+          </Button>
+        )}
       </Space>
 
       <Table
@@ -175,20 +175,21 @@ const TabAuditLog: React.FC = () => {
         scroll={{ x: 900 }}
       />
 
-      {/* Purge control（清理为破坏性操作，仅管理员可见；后端 AdminRequired 双重保障） */}
-      {isAdminUser && (
-        <Space style={{ marginTop: 16 }} wrap>
-          <span style={{ fontWeight: 500 }}>{t('ipam.audit.retain')}</span>
-          <InputNumber
-            min={1} max={3650} value={retainDays}
-            onChange={(v) => setRetainDays(v ?? 90)}
-            addonAfter={t('ipam.audit.days')} style={{ width: 180 }}
-          />
-          <Button danger icon={<DeleteOutlined />} onClick={handlePurge}>
-            {t('ipam.audit.purge')}
-          </Button>
-        </Space>
-      )}
+      <Modal
+        title={t('ipam.audit.purgeTitle')}
+        open={purgeOpen}
+        onOk={handlePurge}
+        onCancel={() => setPurgeOpen(false)}
+        okText={t('common.confirm')}
+        okType="danger"
+        cancelText={t('common.cancel')}
+        width={420}
+      >
+        <p style={{ marginTop: 12 }}>{t('ipam.audit.purgeBody')}</p>
+        <InputNumber min={1} max={3650} value={retainDays}
+          onChange={(v) => setRetainDays(v ?? 90)} style={{ width: 160 }}
+          addonAfter={t('ipam.audit.days')} />
+      </Modal>
     </div>
   );
 };
