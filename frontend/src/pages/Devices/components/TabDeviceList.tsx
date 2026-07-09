@@ -522,14 +522,16 @@ const TabDeviceList: React.FC = () => {
     if (trendEntry) void loadTrend(trendEntry, r);
   };
 
-  // 趋势图 x 轴标签：24h 内只显时分，7d/30d 加月日，90d（天级桶）只显月日
+  // 趋势图 x 轴标签。标签必须逐桶唯一（分类轴会合并重复标签，导致末点被画回
+  // 最左端拉出横穿全图的假直线）：24h 窗口经落桶对齐后首尾桶的 HH:mm 相同，
+  // 因此 24h 及以上一律带月日；只有严格小于 24h 的 1h/6h 用纯时分。
   const trendLabel = (ts: string) => {
     const d = new Date(ts);
     const hh = String(d.getHours()).padStart(2, '0');
     const mm = String(d.getMinutes()).padStart(2, '0');
     if (trendRange === '90d') return `${d.getMonth() + 1}/${d.getDate()}`;
-    if (trendRange === '7d' || trendRange === '30d') return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`;
-    return `${hh}:${mm}`;
+    if (trendRange === '1h' || trendRange === '6h') return `${hh}:${mm}`;
+    return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`;
   };
 
   // counter 序列的值是每秒速率，单位展示自动追加 /s

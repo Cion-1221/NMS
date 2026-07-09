@@ -122,7 +122,7 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
     },
     {
       title: t('proberesults.detail'), dataIndex: 'detail', key: 'detail',
-      render: (v: string) => {
+      render: (v: string, r: ProbeResult) => {
         if (type === 'mtr' && v) {
           try {
             const hops: MtrHop[] = JSON.parse(v);
@@ -134,9 +134,25 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
             );
           } catch { /* fall through */ }
         }
-        return v
-          ? <Tooltip title={v}><span style={{ maxWidth: 300, display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{v}</span></Tooltip>
-          : '—';
+        const detailNode = v
+          ? <Tooltip title={v}><span style={{ maxWidth: 240, display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{v}</span></Tooltip>
+          : <span style={{ color: 'var(--ant-color-text-quaternary)' }}>—</span>;
+        // 延迟趋势入口随 detail 一起展示（对所有登录用户开放，只读）
+        if (PATH_TYPES.includes(r.type)) return detailNode;
+        return (
+          <Space size={4}>
+            {detailNode}
+            <Tooltip title={t('trend.action')}>
+              <Button
+                type="link" size="small" style={{ padding: 0 }} icon={<LineChartOutlined />}
+                onClick={() => setTrend({
+                  agentId: r.agent_id, target: r.target, probeType: r.type,
+                  label: `${agentMap.get(r.agent_id) ?? r.agent_id} → ${r.target}`,
+                })}
+              />
+            </Tooltip>
+          </Space>
+        );
       },
     },
     {
@@ -144,21 +160,10 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
       render: (v: string) => <RelativeTime value={v} />,
     },
     {
-      // 延迟趋势对所有登录用户开放（只读）；删除仅管理员（后端 AdminRequired 双重保障）
-      title: t('common.actions'), key: 'action', width: 110, fixed: 'right' as const,
+      // 删除仅管理员（后端 AdminRequired 双重保障）；延迟趋势入口已随 detail 列展示
+      title: t('common.actions'), key: 'action', width: 60, fixed: 'right' as const,
       render: (_: unknown, r: ProbeResult) => (
         <Space size={0}>
-          {!PATH_TYPES.includes(r.type) && (
-            <Tooltip title={t('trend.action')}>
-              <Button
-                type="text" size="small" icon={<LineChartOutlined />}
-                onClick={() => setTrend({
-                  agentId: r.agent_id, target: r.target, probeType: r.type,
-                  label: `${r.agent_id} → ${r.target}`,
-                })}
-              />
-            </Tooltip>
-          )}
           {isAdminUser && (
             <Popconfirm
               title={t('proberesults.delConfirm')}
@@ -200,7 +205,7 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
         <Button icon={<ReloadOutlined />} onClick={() => { void loadData(); }} loading={loading}>{t('common.refresh')}</Button>
       </Space>
       <Table
-        columns={columns}
+        columns={isAdminUser ? columns : columns.filter((c) => c.key !== 'action')}
         dataSource={data}
         rowKey="id"
         loading={loading}
