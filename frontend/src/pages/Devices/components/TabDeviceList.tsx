@@ -866,7 +866,7 @@ const TabDeviceList: React.FC = () => {
             }
           },
         }}
-        scroll={{ x: 1830 }}
+        scroll={{ x: 1710 }}
       />
 
       {/* ── Create / Edit Modal（两列布局 + SNMP 采集区块）── */}
