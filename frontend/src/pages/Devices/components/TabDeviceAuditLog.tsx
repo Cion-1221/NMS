@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Input, InputNumber, Modal, Select, Space, Table, Tag, Tooltip, message } from 'antd';
 import { DeleteOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
@@ -6,6 +6,7 @@ import { getDeviceAuditLogs, purgeDeviceAuditLogs } from '../../../api/device';
 import type { DeviceAuditLog } from '../../../types/device';
 import { apiErrMsg, useT } from '../../../i18n';
 import { PERM_ADMIN, useCan } from '../../../utils/perms';
+import { useDebounced } from '../../../utils/useDebounced';
 import { FONT_MONO } from '../../../theme/theme';
 
 const mono = (v: React.ReactNode) => (
@@ -70,33 +71,37 @@ const TabDeviceAuditLog: React.FC = () => {
 
   const [purgeOpen, setPurgeOpen] = useState(false);
 
-  const loadLogs = async (
-    p = page, ps = pageSize,
-    u = filterUser, a = filterAction, rt = filterResource,
-  ) => {
+  // 用户名文本框防抖实时搜索；Action/Resource 下拉选中即时生效（与 Device List
+  // 主列表同款交互，不再需要单独的 Search 按钮）
+  const debUser = useDebounced(filterUser);
+  const reqSeq = useRef(0);
+
+  const loadLogs = useCallback(async () => {
+    const seq = ++reqSeq.current;
     setLoading(true);
     try {
-      const r = await getDeviceAuditLogs(p, ps, {
-        username:      u  || undefined,
-        action:        a  || undefined,
-        resource_type: rt || undefined,
+      const r = await getDeviceAuditLogs(page, pageSize, {
+        username:      debUser        || undefined,
+        action:        filterAction   || undefined,
+        resource_type: filterResource || undefined,
       });
+      if (seq !== reqSeq.current) return;
       setData(r.data.items ?? []);
       setTotal(r.data.total);
     } catch (err: unknown) {
-      message.error(apiErrMsg(err));
+      if (seq === reqSeq.current) message.error(apiErrMsg(err));
     } finally {
-      setLoading(false);
+      if (seq === reqSeq.current) setLoading(false);
     }
-  };
+  }, [page, pageSize, debUser, filterAction, filterResource]);
 
-  useEffect(() => { loadLogs(); }, []);
-
-  const handleSearch = () => { setPage(1); loadLogs(1, pageSize, filterUser, filterAction, filterResource); };
+  // 筛选条件变化时回到第一页（loadLogs 依赖变化会自动触发重新查询）
+  useEffect(() => { setPage(1); }, [debUser, filterAction, filterResource]);
+  useEffect(() => { void loadLogs(); }, [loadLogs]);
 
   const handleTableChange = (p: number, ps: number) => {
-    setPage(p); setPageSize(ps);
-    loadLogs(p, ps, filterUser, filterAction, filterResource);
+    // 切换每页条数时回到第一页，避免落在超出范围的页码上
+    if (ps !== pageSize) { setPageSize(ps); setPage(1); } else { setPage(p); }
   };
 
   const handlePurge = async () => {
@@ -104,8 +109,8 @@ const TabDeviceAuditLog: React.FC = () => {
       const r = await purgeDeviceAuditLogs(retainDays);
       message.success(t('device.audit.purgeOk', { n: Number(r.data.deleted) }));
       setPurgeOpen(false);
-      loadLogs(1, pageSize, filterUser, filterAction, filterResource);
       setPage(1);
+      void loadLogs();
     } catch (err: unknown) { message.error(apiErrMsg(err)); }
   };
 
@@ -146,7 +151,6 @@ const TabDeviceAuditLog: React.FC = () => {
           placeholder={t('device.audit.operator')}
           value={filterUser}
           onChange={e => setFilterUser(e.target.value)}
-          onPressEnter={handleSearch}
           allowClear style={{ width: 160 }}
         />
         <Select
@@ -163,8 +167,7 @@ const TabDeviceAuditLog: React.FC = () => {
           allowClear style={{ width: 140 }}
           options={RESOURCE_OPTIONS}
         />
-        <Button type="primary" onClick={handleSearch}>{t('common.search')}</Button>
-        <Button icon={<ReloadOutlined />} onClick={() => loadLogs()} loading={loading}>
+        <Button icon={<ReloadOutlined />} onClick={() => { void loadLogs(); }} loading={loading}>
           {t('common.refresh')}
         </Button>
         {/* 清理为破坏性操作，仅管理员可见；后端 AdminRequired 双重保障 */}

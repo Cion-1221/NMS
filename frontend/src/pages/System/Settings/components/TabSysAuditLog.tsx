@@ -5,6 +5,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { listSysAuditLogs, purgeSysAuditLogs } from '../../../../api/system';
 import type { SysAuditLog } from '../../../../types/system';
 import { apiErrMsg, useT } from '../../../../i18n';
+import { useDebounced } from '../../../../utils/useDebounced';
 import { FONT_MONO } from '../../../../theme/theme';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,20 +65,20 @@ const TabSysAuditLog: React.FC = () => {
   const [purgeOpen, setPurgeOpen] = useState(false);
   const [purgeDays, setPurgeDays] = useState<number>(180);
 
+  // 用户名文本框防抖实时搜索；Action/Resource 下拉选中即时生效（与 Device List
+  // 主列表同款交互，不再需要单独的 Search 按钮）
+  const debUser = useDebounced(filterUser);
   const reqSeq = useRef(0);
 
-  const loadLogs = useCallback(async (
-    p = page, ps = pageSize,
-    u = filterUser, a = filterAction, rt = filterResource,
-  ) => {
+  const loadLogs = useCallback(async () => {
     const seq = ++reqSeq.current;
     setLoading(true);
     try {
       const r = await listSysAuditLogs({
-        page: p, page_size: ps,
-        username:      u  || undefined,
-        action:        a  || undefined,
-        resource_type: rt || undefined,
+        page, page_size: pageSize,
+        username:      debUser        || undefined,
+        action:        filterAction   || undefined,
+        resource_type: filterResource || undefined,
       });
       if (seq !== reqSeq.current) return;
       setData(r.data.items ?? []);
@@ -87,16 +88,15 @@ const TabSysAuditLog: React.FC = () => {
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [page, pageSize, debUser, filterAction, filterResource]);
 
-  useEffect(() => { void loadLogs(1, pageSize); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleSearch = () => { setPage(1); void loadLogs(1, pageSize, filterUser, filterAction, filterResource); };
+  // 筛选条件变化时回到第一页（loadLogs 依赖变化会自动触发重新查询）
+  useEffect(() => { setPage(1); }, [debUser, filterAction, filterResource]);
+  useEffect(() => { void loadLogs(); }, [loadLogs]);
 
   const handleTableChange = (p: number, ps: number) => {
-    setPage(p); setPageSize(ps);
-    void loadLogs(p, ps, filterUser, filterAction, filterResource);
+    // 切换每页条数时回到第一页，避免落在超出范围的页码上
+    if (ps !== pageSize) { setPageSize(ps); setPage(1); } else { setPage(p); }
   };
 
   const handlePurge = async () => {
@@ -104,8 +104,8 @@ const TabSysAuditLog: React.FC = () => {
       const r = await purgeSysAuditLogs(purgeDays);
       message.success(t('sysaudit.purgeOk', { n: Number(r.data.deleted) }));
       setPurgeOpen(false);
-      void loadLogs(1, pageSize, filterUser, filterAction, filterResource);
       setPage(1);
+      void loadLogs();
     } catch (err: unknown) { message.error(apiErrMsg(err)); }
   };
 
@@ -146,7 +146,6 @@ const TabSysAuditLog: React.FC = () => {
           placeholder={t('sysaudit.search')}
           value={filterUser}
           onChange={e => setFilterUser(e.target.value)}
-          onPressEnter={handleSearch}
           allowClear style={{ width: 160 }}
         />
         <Select
@@ -163,7 +162,6 @@ const TabSysAuditLog: React.FC = () => {
           allowClear style={{ width: 140 }}
           options={RESOURCE_OPTIONS}
         />
-        <Button type="primary" onClick={handleSearch}>{t('common.search')}</Button>
         <Button icon={<ReloadOutlined />} onClick={() => { void loadLogs(); }} loading={loading}>
           {t('common.refresh')}
         </Button>
