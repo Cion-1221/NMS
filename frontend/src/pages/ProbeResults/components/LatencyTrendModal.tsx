@@ -345,7 +345,7 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
               margin: '14px 0 4px',
             }}>
-              <span style={{ fontSize: 12, color: token.colorTextSecondary, fontWeight: 600 }}>{t('trend.loss')}</span>
+              <span style={{ fontSize: 12, color: token.colorTextSecondary, fontWeight: 600 }}>{t('trend.packetLoss')}</span>
               <span style={{ fontSize: 11, color: token.colorTextTertiary, fontFamily: FONT_MONO }}>
                 max {lossData.length ? Math.max(...lossData.map((d) => d.loss)).toFixed(1) : '0.0'}%
               </span>
