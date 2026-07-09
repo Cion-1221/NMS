@@ -1,9 +1,16 @@
 /**
  * LatencyTrendModal — 单条探测序列（源 Agent → 目标）的历史延迟趋势图。
- * ★ Direction A "Clarity" 重设计版：标题胶囊 + 统计条 + min–max 区间带 + 丢包子图。
+ * ★ Direction A "Clarity" 重设计版：标题胶囊 + 统计条 + 三线趋势图 + 丢包子图。
  *
  * 数据来自 GET /probe-results/latency-series：服务端按所选时间范围自动在
  * 原始点/归档层之间选源（Cacti/RRD 语义），并聚合到 ≤500 个显示点。
+ *
+ * 主图曾尝试"Area(min-max 区间带) + Line(avg) 两个独立图表实例绝对定位叠加"的
+ * 视觉方案，上线后实测两个独立图表实例各自的坐标系无法保证像素对齐（AntV 官方
+ * 也未文档化这种叠加用法），导致线条错位出现假性尖峰，且区间带填色对比度过低
+ * 近乎不可见。现改回单一 Line 图表 + colorField 三序列（avg/min/max 共享同一
+ * 坐标系，与本功能最早上线时的实现一致，已验证稳定），仅通过分类色阶做视觉区分
+ * （avg 主色加粗，min/max 同色变淡），避免复现错位问题。
  *
  * 本文件 import 了 @ant-design/charts（G2，体积大）——调用方必须通过
  * React.lazy 引入本组件，首次打开弹窗才加载图表 chunk（与 Dashboard 同款策略）。
@@ -11,7 +18,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Button, DatePicker, Modal, Segmented, Space, Spin, theme } from 'antd';
 import { DownloadOutlined } from '@ant-design/icons';
-import { Area, Column, Line } from '@ant-design/charts';
+import { Column, Line } from '@ant-design/charts';
 import dayjs, { Dayjs } from 'dayjs';
 import { getLatencySeries } from '../../../api/agent';
 import type { LatencySeriesResp } from '../../../types/agent';
@@ -41,6 +48,10 @@ const PRESETS: { key: string; seconds: number }[] = [
   { key: '1y',  seconds: 366 * 24 * 3600 },
 ];
 
+// x 轴最多展示的标签个数（G2 5 的 point/band 分类轴不支持 tickCount，需要
+// 自行按数据密度抽样，否则几百个桶会把时间标签挤成一团无法辨认）
+const MAX_X_LABELS = 10;
+
 // 粒度的紧凑展示（30s / 5m / 2h / 1d），中英通用
 const fmtBucket = (sec: number): string => {
   if (sec < 60) return `${sec}s`;
@@ -51,10 +62,6 @@ const fmtBucket = (sec: number): string => {
 
 const fmtMs = (v: number | null | undefined): string =>
   v == null ? '—' : `${v.toFixed(1)} ms`;
-
-/** 区间带图与丢包图共用的左右内边距，保证两图纵向对齐 */
-const PAD_L = 46;
-const PAD_R = 12;
 
 const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, probeType, label }) => {
   const t = useT();
@@ -104,27 +111,23 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
   const windowSec = range[1].diff(range[0], 'second');
   const timeFmt = windowSec < 86400 ? 'HH:mm' : windowSec <= 8 * 86400 ? 'MM-DD HH:mm' : 'YYYY-MM-DD';
 
-  // 区间带（min–max）与主线（avg）数据
-  const bandData = useMemo(() => {
-    if (!data) return [];
-    return data.points
-      .filter((p) => p.min_ms != null && p.max_ms != null)
-      .map((p) => ({
-        time: dayjs(p.ts * 1000).format(timeFmt),
-        min: Number(p.min_ms!.toFixed(2)),
-        max: Number(p.max_ms!.toFixed(2)),
-      }));
-  }, [data, timeFmt]);
+  const AVG_LABEL = t('trend.avg');
+  const MIN_LABEL = t('trend.min');
+  const MAX_LABEL = t('trend.max');
 
-  const avgData = useMemo(() => {
+  // 主图数据：avg/min/max 三条同色阶序列，长表结构（一行一个 metric），
+  // 共享同一张图表实例、同一套坐标系——避免"多图叠加对齐"的脆弱方案。
+  const chartData = useMemo(() => {
     if (!data) return [];
-    return data.points
-      .filter((p) => p.avg_ms != null)
-      .map((p) => ({
-        time: dayjs(p.ts * 1000).format(timeFmt),
-        avg: Number(p.avg_ms!.toFixed(2)),
-      }));
-  }, [data, timeFmt]);
+    const rows: { time: string; ms: number; metric: string }[] = [];
+    for (const p of data.points) {
+      const time = dayjs(p.ts * 1000).format(timeFmt);
+      if (p.min_ms != null) rows.push({ time, ms: Number(p.min_ms.toFixed(2)), metric: MIN_LABEL });
+      if (p.max_ms != null) rows.push({ time, ms: Number(p.max_ms.toFixed(2)), metric: MAX_LABEL });
+      if (p.avg_ms != null) rows.push({ time, ms: Number(p.avg_ms.toFixed(2)), metric: AVG_LABEL });
+    }
+    return rows;
+  }, [data, timeFmt, AVG_LABEL, MIN_LABEL, MAX_LABEL]);
 
   // 丢包率序列（逐桶 failed/runs），与主图共用时间轴格式
   const lossData = useMemo(() => {
@@ -135,12 +138,24 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
     }));
   }, [data, timeFmt]);
 
-  // 区间带与主线共用同一 Y 轴上限，保证两图坐标系一致（G2 各图独立 scale，需显式钉住）
-  const yMax = useMemo(() => {
-    const vals = bandData.map((d) => d.max);
-    if (!vals.length) return undefined;
-    return Math.ceil((Math.max(...vals) * 1.06) / 10) * 10;
-  }, [bandData]);
+  // x 轴标签抽样：按桶数量等间隔挑选 ≤MAX_X_LABELS 个标签展示，其余位置的
+  // 刻度仍然存在（保持每个点的横坐标准确），只是 label 留空——用固定的
+  // labelFormatter 抽样代替 G2 的自动防重叠（该功能在 point/band 分类轴上
+  // 不生效，且已知版本存在 labelAutoRotate/Ellipsis 相关 bug，故不依赖它）。
+  const xKeepLabels = useMemo(() => {
+    const keep = new Set<string>();
+    if (!data || data.points.length === 0) return keep;
+    const labels = data.points.map((p) => dayjs(p.ts * 1000).format(timeFmt));
+    const step = Math.max(1, Math.ceil(labels.length / MAX_X_LABELS));
+    for (let i = 0; i < labels.length; i += step) keep.add(labels[i]);
+    keep.add(labels[labels.length - 1]);
+    return keep;
+  }, [data, timeFmt]);
+
+  const xLabelFormatter = useCallback((v: unknown) => {
+    const s = typeof v === 'string' ? v : String(v);
+    return xKeepLabels.has(s) ? s : '';
+  }, [xKeepLabels]);
 
   // 导出当前显示的聚合序列为 CSV（BOM 头保证 Excel 正确识别 UTF-8）
   const exportCsv = () => {
@@ -161,46 +176,33 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
 
   const g2Theme = resolvedTheme === 'dark' ? 'classicDark' : 'classic';
 
-  // ---- 主图：min–max 区间带（底层，带坐标轴）----
-  // @ant-design/charts v2 (G2 5)：yField 传 [low, high] 即区间面积图。
-  const bandConfig = {
-    data: bandData,
+  // ---- 主图：avg/min/max 三序列，同一坐标系，仅用分类色阶区分主次 ----
+  const chartConfig = {
+    data: chartData,
     xField: 'time',
-    yField: ['min', 'max'],
+    yField: 'ms',
+    colorField: 'metric',
+    seriesField: 'metric',
     height: 300,
     animate: false,
     theme: g2Theme,
-    paddingLeft: PAD_L,
-    paddingRight: PAD_R,
-    style: { fill: token.colorPrimaryBg, fillOpacity: 1 },
-    scale: { y: { domainMax: yMax, nice: true } },
+    scale: {
+      color: {
+        domain: [MIN_LABEL, MAX_LABEL, AVG_LABEL],
+        range: [token.colorBorderSecondary, token.colorBorderSecondary, token.colorPrimary],
+      },
+      y: { nice: true },
+    },
     axis: {
-      x: { labelFontFamily: FONT_MONO, labelFontSize: 10.5, labelFill: token.colorTextTertiary, line: false, tick: false },
+      x: { labelFontFamily: FONT_MONO, labelFontSize: 10.5, labelFill: token.colorTextTertiary, labelFormatter: xLabelFormatter },
       y: { labelFontFamily: FONT_MONO, labelFontSize: 10.5, labelFill: token.colorTextTertiary, gridLineDash: [3, 4], gridStroke: token.colorBorderSecondary, title: false },
     },
-    tooltip: false,
+    // 不覆盖 tooltip：多序列（colorField）折线图的默认 tooltip 已按 metric 分组
+    // 逐行展示，与本功能最早上线时的实现一致、已验证稳定，自定义 items 反而
+    // 有破坏分组行为的风险。
   } as any;
 
-  // ---- 主图：avg 主线（顶层，绝对定位叠加，无轴，负责 tooltip）----
-  const lineConfig = {
-    data: avgData,
-    xField: 'time',
-    yField: 'avg',
-    height: 300,
-    animate: false,
-    theme: g2Theme,
-    paddingLeft: PAD_L,
-    paddingRight: PAD_R,
-    style: { stroke: token.colorPrimary, lineWidth: 2.4 },
-    scale: { y: { domainMax: yMax, nice: true } },
-    axis: false,
-    tooltip: {
-      title: 'time',
-      items: [{ channel: 'y', name: t('trend.avg'), valueFormatter: (v: number) => `${v.toFixed(1)} ms` }],
-    },
-  } as any;
-
-  // ---- 丢包率条形图（与主图同 padding 对齐）----
+  // ---- 丢包率条形图 ----
   const lossConfig = {
     data: lossData,
     xField: 'time',
@@ -208,8 +210,6 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
     height: 88,
     animate: false,
     theme: g2Theme,
-    paddingLeft: PAD_L,
-    paddingRight: PAD_R,
     style: { fill: token.colorError, radiusTopLeft: 1.5, radiusTopRight: 1.5 },
     axis: {
       x: false,
@@ -333,23 +333,17 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
                 <span style={{ fontSize: 12, color: token.colorTextSecondary }}>{t('trend.avg')}</span>
               </span>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-                <span style={{ width: 14, height: 9, borderRadius: 2.5, background: token.colorPrimaryBg, border: `1px solid ${token.colorPrimaryBorder}` }} />
-                <span style={{ fontSize: 12, color: token.colorTextSecondary }}>{t('trend.min')}–{t('trend.max')}</span>
+                <span style={{ width: 14, height: 2, borderRadius: 2, background: token.colorBorderSecondary }} />
+                <span style={{ fontSize: 12, color: token.colorTextSecondary }}>{t('trend.min')} / {t('trend.max')}</span>
               </span>
             </div>
 
-            {/* 主图：区间带打底，avg 线绝对定位叠加（padding 一致故坐标对齐） */}
-            <div style={{ position: 'relative', height: 300 }}>
-              <Area {...bandConfig} />
-              <div style={{ position: 'absolute', inset: 0 }}>
-                <Line {...lineConfig} />
-              </div>
-            </div>
+            <Line {...chartConfig} />
 
             {/* 丢包率 */}
             <div style={{
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              margin: `14px ${PAD_R}px 4px ${PAD_L}px`,
+              margin: '14px 0 4px',
             }}>
               <span style={{ fontSize: 12, color: token.colorTextSecondary, fontWeight: 600 }}>{t('trend.loss')}</span>
               <span style={{ fontSize: 11, color: token.colorTextTertiary, fontFamily: FONT_MONO }}>
