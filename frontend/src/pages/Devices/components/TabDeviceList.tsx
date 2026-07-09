@@ -718,10 +718,12 @@ const TabDeviceList: React.FC = () => {
           : mono(up);
       },
     },
-    { title: t('device.site'),   key: 'site',   width: 120, render: (_, r) => r.site?.name   ?? '—' },
-    { title: t('device.pop'),    key: 'pop',    width: 120, render: (_, r) => r.pop?.name    ?? '—' },
-    { title: t('device.role'),   key: 'role',   width: 120, render: (_, r) => r.role?.name   ?? '—' },
-    { title: t('device.vendor'), key: 'vendor', width: 120, render: (_, r) => r.vendor?.name ?? '—' },
+    // Site/PoP/Role/Vendor 不设固定宽度——随内容自适应（表格已取消 scroll.x，
+    // 交给浏览器的默认表格布局按各列实际内容分配宽度，短名称不占多余空间）
+    { title: t('device.site'),   key: 'site',   render: (_, r) => r.site?.name   ?? '—' },
+    { title: t('device.pop'),    key: 'pop',    render: (_, r) => r.pop?.name    ?? '—' },
+    { title: t('device.role'),   key: 'role',   render: (_, r) => r.role?.name   ?? '—' },
+    { title: t('device.vendor'), key: 'vendor', render: (_, r) => r.vendor?.name ?? '—' },
     {
       title: t('device.remark'), dataIndex: 'remark', key: 'remark', width: 180, ellipsis: true,
       render: (v: string) => v
@@ -729,7 +731,7 @@ const TabDeviceList: React.FC = () => {
         : '—',
     },
     {
-      title: t('common.actions'), key: 'action', width: 130, fixed: 'right' as const,
+      title: t('common.actions'), key: 'action', width: 130,
       render: (_: unknown, r: Device) => (
         <Space size={4}>
           <Button type="link"  size="small" onClick={() => openEdit(r)}>{t('common.edit')}</Button>
@@ -842,12 +844,17 @@ const TabDeviceList: React.FC = () => {
         )}
       </Space>
 
-      {/* ── Table (server-side pagination) ── */}
+      {/* ── Table (server-side pagination) ──
+          tableLayout="fixed" 而非 scroll.x：显式宽度的列严格锁宽（remark 的
+          ellipsis 依赖这个才能真正截断，而非被长文本撑开列宽）；未设宽度的
+          Site/PoP/Role/Vendor 四列自动均分剩余空间——不会触发 antd 的横向
+          滚动包裹层，也就不会再出现表格自身的左右拖动条。*/}
       <Table
         columns={canWrite ? columns : columns.filter((c) => c.key !== 'action')}
         dataSource={data}
         rowKey="id"
         loading={loading}
+        tableLayout="fixed"
         pagination={{
           current: page,
           pageSize,
@@ -866,7 +873,6 @@ const TabDeviceList: React.FC = () => {
             }
           },
         }}
-        scroll={{ x: 1710 }}
       />
 
       {/* ── Create / Edit Modal（两列布局 + SNMP 采集区块）── */}
