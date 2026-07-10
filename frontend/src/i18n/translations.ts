@@ -612,7 +612,7 @@ const t = {
   'agent.task.typeMultiHint': { en: 'Select multiple types — one task will be created per type, sharing the same targets/interval/scope.', zh: '可多选——每个选中的类型会各自创建一条独立任务，共享相同的 Target/Interval/Scope。' },
   'agent.task.typeEditHint':  { en: 'An existing task is always a single type.', zh: '已创建的任务类型为单一类型。' },
   'agent.task.targets':       { en: 'Target IPs', zh: 'Target IPs' },
-  'agent.task.targetsHint':   { en: 'One IPv4/IPv6 address per line. Ignored for meshping/meshmtr (resolved automatically from live group members).', zh: '每行一个 IPv4/IPv6 地址。meshping/meshmtr 类型会忽略此字段，自动解析为同组存活 Agent 的 IP。' },
+  'agent.task.targetsHint':   { en: 'One IPv4/IPv6 address per line. tcpping/httpcheck may add an optional :port (IPv6 as [addr]:port). dnscheck expects a domain name to resolve, not an IP. Ignored for meshping/meshmtr (resolved automatically from live group members).', zh: '每行一个 IPv4/IPv6 地址。tcpping/httpcheck 类型可选加 :port 后缀（IPv6 用 [地址]:port 括号形式）。dnscheck 类型请填写待解析的域名，而非 IP。meshping/meshmtr 类型会忽略此字段，自动解析为同组存活 Agent 的 IP。' },
   'agent.task.meshAuto':        { en: '(auto: live group members)', zh: '（自动：同组存活 Agent）' },
   'agent.task.meshAutoTargets': { en: 'Target IPs are auto-resolved by the server: all live agents (Global scope) or all live agents in the specified group (Group scope).', zh: 'Target IP 由 Server 动态解析：Global 范围下为所有存活 Agent，Group 范围下为指定分组内的存活 Agent。' },
   'agent.task.interval':      { en: 'Interval', zh: '周期' },

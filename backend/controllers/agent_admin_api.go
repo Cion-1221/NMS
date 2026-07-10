@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -73,6 +74,19 @@ var validTaskTypes = map[string]bool{
 
 // meshAutoTypes：目标列表由 Server 动态解析的任务类型，不需要也不应校验 targets_raw。
 var meshAutoTypes = map[string]bool{"meshping": true, "meshmtr": true}
+
+// portOptionalTypes：targets_raw 每行允许携带 host:port（IPv6 用 [addr]:port 括号形式，
+// 与 Agent 侧 net.SplitHostPort 解析方式一致）后缀的任务类型——tcpping 用端口做 TCP
+// 探测目标，httpcheck 用端口构造探测 URL；两者省略端口时 Agent 侧也有默认值兜底
+// （分别见 NMS_Agent 的 tcpping.go/httpcheck.go），因此端口是可选的、不是必须的。
+var portOptionalTypes = map[string]bool{"tcpping": true, "httpcheck": true}
+
+// domainTargetTypes：target 是待解析的域名而非 IP——dnscheck 在 Agent 侧直接把整串
+// target 传给 net.Resolver.LookupIPAddr(ctx, target) 当 hostname 查询（NMS_Agent 的
+// dnscheck.go 完全不做 host:port 拆分/IP 校验），因此不能套用 IPv4/IPv6 校验；这里
+// 只做非空、不含空白的最基本检查，格式是否是合法域名交给 Agent 运行时解析失败去
+// 兜底（与 tcpping/httpcheck 对畸形 host:port 不做穷举校验的宽松策略一致）。
+var domainTargetTypes = map[string]bool{"dnscheck": true}
 
 // ── Agent 管理（List / 修改 SourceIP+Group / 删除 / 作废证书）──────────────────
 
@@ -322,14 +336,46 @@ func ListAgentTasks(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// validateTargets 校验 targets_raw 里每一行都是合法的 IPv4 或 IPv6 地址（netip.ParseAddr
-// 对两者一视同仁）。meshping 任务的 Target 由 Server 动态解析，调用方应跳过校验。
-func validateTargets(raw string) string {
+// validateTargets 校验 targets_raw 里每一行都是合法的 IPv4/IPv6 地址（netip.ParseAddr
+// 对两者一视同仁）。若 types 中包含 tcpping/httpcheck，额外放行 host:port 后缀
+// （IPv6 用 [addr]:port 括号形式）——先按 net.SplitHostPort 拆出 host 再校验，
+// 与 Agent 侧解析方式一致。若 types 中包含 dnscheck（target 是待解析的域名，见
+// domainTargetTypes 注释），改为只做非空/不含空白的宽松检查。meshping/meshmtr 的
+// Target 由 Server 动态解析，调用方应跳过校验。
+func validateTargets(raw string, types []string) string {
+	portTolerant := false
+	domainTolerant := false
+	for _, ty := range types {
+		if portOptionalTypes[ty] {
+			portTolerant = true
+		}
+		if domainTargetTypes[ty] {
+			domainTolerant = true
+		}
+	}
 	task := models.AgentTask{TargetsRaw: raw}
 	for _, target := range task.Targets() {
-		if _, err := netip.ParseAddr(target); err != nil {
-			return fmt.Sprintf("无效的 Target 地址: %s（仅支持 IPv4/IPv6 地址）", target)
+		if _, err := netip.ParseAddr(target); err == nil {
+			continue
 		}
+		if portTolerant {
+			if host, _, err := net.SplitHostPort(target); err == nil {
+				if _, err := netip.ParseAddr(host); err == nil {
+					continue
+				}
+			}
+		}
+		if domainTolerant && !strings.ContainsAny(target, " \t") {
+			continue
+		}
+		hint := "仅支持 IPv4/IPv6 地址"
+		switch {
+		case portTolerant:
+			hint = "仅支持 IPv4/IPv6 地址，可选 host:port（IPv6 用 [addr]:port）"
+		case domainTolerant:
+			hint = "仅支持 IPv4/IPv6 地址或域名"
+		}
+		return fmt.Sprintf("无效的 Target 地址: %s（%s）", target, hint)
 	}
 	return ""
 }
@@ -389,7 +435,7 @@ func CreateAgentTasks(db *gorm.DB) gin.HandlerFunc {
 		// meshping/meshmtr 的 Target 由 Server 动态解析，忽略用户填写的内容；其余类型必须是
 		// 合法的 IPv4/IPv6 地址。多选类型时只要有一个需要手动指定 Target 的类型就触发校验。
 		if needsTargetValidation {
-			if msg := validateTargets(req.TargetsRaw); msg != "" {
+			if msg := validateTargets(req.TargetsRaw, req.Types); msg != "" {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "agent.invalid_target"})
 				return
 			}
@@ -444,7 +490,7 @@ func UpdateAgentTask(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		if !meshAutoTypes[req.Type] {
-			if msg := validateTargets(req.TargetsRaw); msg != "" {
+			if msg := validateTargets(req.TargetsRaw, []string{req.Type}); msg != "" {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "agent.invalid_target"})
 				return
 			}
