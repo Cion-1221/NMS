@@ -9,6 +9,7 @@ import { PERM_ADMIN, useCan } from '../../../utils/perms';
 import { useDebounced } from '../../../utils/useDebounced';
 import StatusTag from '../../../components/StatusTag';
 import RelativeTime from '../../../components/RelativeTime';
+import LatencySpark from '../../../components/LatencySpark';
 import { FONT_MONO } from '../../../theme/theme';
 
 const mono = (v: React.ReactNode) => (
@@ -104,7 +105,7 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
 
   const columns: ColumnsType<ProbeResult> = [
     {
-      title: t('agent.list.hostname'), key: 'hostname', width: 160,
+      title: t('agent.list.hostname'), key: 'hostname',
       render: (_: unknown, r: ProbeResult) => (
         <Tooltip title={r.agent_id}>
           <span style={{ cursor: 'default' }}>{agentMap.get(r.agent_id) ?? r.agent_id}</span>
@@ -113,16 +114,16 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
     },
     { title: t('proberesults.target'), dataIndex: 'target', key: 'target', render: (v: string) => mono(v) },
     {
-      title: t('common.status'), dataIndex: 'success', key: 'success', width: 100,
+      title: t('common.status'), dataIndex: 'success', key: 'success',
       render: (v: boolean) => <StatusTag status={v ? 'success' : 'failed'} label={v ? t('proberesults.success') : t('proberesults.failed')} />,
     },
     {
-      title: t('proberesults.latency'), dataIndex: 'latency_ms', key: 'latency_ms', width: 110,
+      title: t('proberesults.latency'), dataIndex: 'latency_ms', key: 'latency_ms',
       render: (v: number | null) => (v == null ? '—' : mono(`${v.toFixed(1)} ms`)),
     },
     {
       title: t('proberesults.detail'), dataIndex: 'detail', key: 'detail',
-      render: (v: string, r: ProbeResult) => {
+      render: (v: string) => {
         if (type === 'mtr' && v) {
           try {
             const hops: MtrHop[] = JSON.parse(v);
@@ -134,36 +135,33 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
             );
           } catch { /* fall through */ }
         }
-        const detailNode = v
-          ? <Tooltip title={v}><span style={{ maxWidth: 240, display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{v}</span></Tooltip>
-          : <span style={{ color: 'var(--ant-color-text-quaternary)' }}>—</span>;
-        // 延迟趋势入口随 detail 一起展示（对所有登录用户开放，只读）
-        if (PATH_TYPES.includes(r.type)) return detailNode;
-        return (
-          <Space size={4}>
-            {detailNode}
-            <Tooltip title={t('trend.action')}>
+        return v
+          ? <Tooltip title={v}><span style={{ maxWidth: 300, display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{v}</span></Tooltip>
+          : '—';
+      },
+    },
+    {
+      title: t('proberesults.reportedAt'), dataIndex: 'reported_at', key: 'reported_at',
+      render: (v: string) => <RelativeTime value={v} />,
+    },
+    {
+      // 延迟趋势对所有登录用户开放（只读）；删除仅管理员（后端 AdminRequired 双重保障）
+      title: t('common.actions'), key: 'action', fixed: 'right' as const,
+      render: (_: unknown, r: ProbeResult) => (
+        <Space size={0}>
+          {!PATH_TYPES.includes(r.type) && (
+            <Tooltip title={
+              <LatencySpark agentId={r.agent_id} target={r.target} type={r.type} reportedAt={r.reported_at} />
+            }>
               <Button
-                type="link" size="small" style={{ padding: 0 }} icon={<LineChartOutlined />}
+                type="text" size="small" icon={<LineChartOutlined />}
                 onClick={() => setTrend({
                   agentId: r.agent_id, target: r.target, probeType: r.type,
                   label: `${agentMap.get(r.agent_id) ?? r.agent_id} → ${r.target}`,
                 })}
               />
             </Tooltip>
-          </Space>
-        );
-      },
-    },
-    {
-      title: t('proberesults.reportedAt'), dataIndex: 'reported_at', key: 'reported_at', width: 150,
-      render: (v: string) => <RelativeTime value={v} />,
-    },
-    {
-      // 删除仅管理员（后端 AdminRequired 双重保障）；延迟趋势入口已随 detail 列展示
-      title: t('common.actions'), key: 'action', width: 60, fixed: 'right' as const,
-      render: (_: unknown, r: ProbeResult) => (
-        <Space size={0}>
+          )}
           {isAdminUser && (
             <Popconfirm
               title={t('proberesults.delConfirm')}
@@ -205,7 +203,7 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
         <Button icon={<ReloadOutlined />} onClick={() => { void loadData(); }} loading={loading}>{t('common.refresh')}</Button>
       </Space>
       <Table
-        columns={isAdminUser ? columns : columns.filter((c) => c.key !== 'action')}
+        columns={columns}
         dataSource={data}
         rowKey="id"
         loading={loading}
@@ -215,7 +213,6 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
           showTotal: (n, range) => `${range[0]}-${range[1]} / ${n}`,
           onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else { setPage(p); } },
         }}
-        scroll={{ x: 'max-content' }}
       />
       <Modal
         title={t('mtr.hopDetails')}
