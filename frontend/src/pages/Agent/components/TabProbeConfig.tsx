@@ -47,6 +47,11 @@ const TabProbeConfig: React.FC = () => {
     ? (selectedTypes ?? []).length > 0 && (selectedTypes ?? []).every(ty => MESH_AUTO_TYPES.has(ty))
     : selectedType !== undefined && MESH_AUTO_TYPES.has(selectedType);
 
+  // 跳过 TLS 证书校验只对 httpcheck 有意义（裸 IP / 自签证书设备）
+  const showSkipTLS = mode === 'create'
+    ? (selectedTypes ?? []).includes('httpcheck')
+    : selectedType === 'httpcheck';
+
   const loadData = async () => {
     setLoading(true);
     try { const r = await getAgentTasks(); setData(r.data); }
@@ -63,7 +68,7 @@ const TabProbeConfig: React.FC = () => {
   const openCreate = () => {
     setMode('create'); setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ scope: 'global', interval_seconds: 60 });
+    form.setFieldsValue({ scope: 'global', interval_seconds: 60, address_family: 'auto' });
     setOpen(true);
   };
   const openEdit = (r: AgentTask) => {
@@ -73,6 +78,7 @@ const TabProbeConfig: React.FC = () => {
       name: r.name, type: r.type, targets_raw: r.targets_raw,
       interval_seconds: r.interval_seconds, scope: r.scope,
       group_id: r.group_id ?? undefined, agent_id: r.agent_id ?? undefined, enabled: r.enabled,
+      skip_tls_verify: r.skip_tls_verify, address_family: r.address_family ?? 'auto',
     });
     setOpen(true);
   };
@@ -101,6 +107,8 @@ const TabProbeConfig: React.FC = () => {
           interval_seconds: values.interval_seconds, scope: values.scope,
           group_id: values.scope === 'group' ? values.group_id : undefined,
           agent_id: values.scope === 'agent' ? values.agent_id : undefined,
+          skip_tls_verify: values.types?.includes('httpcheck') ? (values.skip_tls_verify ?? false) : false,
+          address_family: values.address_family ?? 'auto',
         });
       } else {
         await updateAgentTask(editing!.id, {
@@ -109,6 +117,8 @@ const TabProbeConfig: React.FC = () => {
           group_id: values.scope === 'group' ? values.group_id : undefined,
           agent_id: values.scope === 'agent' ? values.agent_id : undefined,
           enabled: values.enabled ?? true,
+          skip_tls_verify: values.type === 'httpcheck' ? (values.skip_tls_verify ?? false) : false,
+          address_family: values.address_family ?? 'auto',
         });
       }
       message.success(t('common.success'));
@@ -123,6 +133,7 @@ const TabProbeConfig: React.FC = () => {
       await updateAgentTask(r.id, {
         name: r.name, type: r.type, targets_raw: r.targets_raw, interval_seconds: r.interval_seconds,
         scope: r.scope, group_id: r.group_id, agent_id: r.agent_id, enabled,
+        skip_tls_verify: r.skip_tls_verify, address_family: r.address_family,
       });
       loadData();
     } catch (err: any) { message.error(apiErrMsg(err)); }
@@ -131,7 +142,19 @@ const TabProbeConfig: React.FC = () => {
   const columns: ColumnsType<AgentTask> = [
     { title: t('common.id'), dataIndex: 'id', key: 'id', width: 60, render: (v: number) => mono(v) },
     { title: t('common.name'), dataIndex: 'name', key: 'name', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
-    { title: t('agent.task.type'), dataIndex: 'type', key: 'type', width: 110, render: (v: string) => <Tag style={{ fontFamily: FONT_MONO }}>{v}</Tag> },
+    {
+      title: t('agent.task.type'), dataIndex: 'type', key: 'type', width: 150,
+      render: (v: string, r: AgentTask) => (
+        <Space size={4}>
+          <Tag style={{ fontFamily: FONT_MONO }}>{v}</Tag>
+          {r.address_family && r.address_family !== 'auto' && (
+            <Tag color="blue" style={{ fontFamily: FONT_MONO }}>
+              {r.address_family === 'both' ? 'v4+v6' : r.address_family}
+            </Tag>
+          )}
+        </Space>
+      ),
+    },
     {
       title: t('agent.task.scope'), key: 'scope', width: 180,
       render: (_: unknown, r: AgentTask) => {
@@ -214,7 +237,25 @@ const TabProbeConfig: React.FC = () => {
             />
           ) : (
             <Form.Item label={t('agent.task.targets')} name="targets_raw" tooltip={t('agent.task.targetsHint')}>
-              <Input.TextArea rows={4} placeholder={'8.8.8.8\n2001:4860:4860::8888'} />
+              <Input.TextArea rows={4} placeholder={'8.8.8.8\n2001:4860:4860::8888\nwww.example.com'} />
+            </Form.Item>
+          )}
+          {!meshAutoOnly && (
+            <Form.Item label={t('agent.task.family')} name="address_family" tooltip={t('agent.task.familyHint')}>
+              <Select options={[
+                { value: 'auto', label: t('agent.task.familyAuto') },
+                { value: 'v4', label: 'IPv4' },
+                { value: 'v6', label: 'IPv6' },
+                { value: 'both', label: t('agent.task.familyBoth') },
+              ]} />
+            </Form.Item>
+          )}
+          {showSkipTLS && (
+            <Form.Item
+              label={t('agent.task.skipTLSVerify')} name="skip_tls_verify"
+              valuePropName="checked" tooltip={t('agent.task.skipTLSVerifyHint')}
+            >
+              <Switch />
             </Form.Item>
           )}
           <Form.Item label={t('agent.task.interval')} name="interval_seconds" rules={[{ required: true }]}>

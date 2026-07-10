@@ -489,7 +489,7 @@ func GetSubnetTree(db *gorm.DB) gin.HandlerFunc {
 					GroupID: s.GroupID, Group: s.Group,
 					TypeID: s.TypeID, Type: s.Type,
 					VRFID: s.VRFID, VRF: s.VRF,
-					Remark: s.Remark,
+					Remark:   s.Remark,
 					Children: []SubnetNode{},
 				})
 			}

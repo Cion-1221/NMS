@@ -59,7 +59,7 @@ type Config struct {
 		Secret           string `mapstructure:"secret"`
 		RefreshTokenDays int    `mapstructure:"refresh_token_days"`
 	} `mapstructure:"jwt"`
-	Log LogConfig `mapstructure:"log"`
+	Log   LogConfig `mapstructure:"log"`
 	Audit struct {
 		// 审计日志（IPAM/Devices/Agent/System 人工操作记录）保留天数，0 = 永久保留
 		MaxAgeDays int `mapstructure:"max_age_days"`
@@ -86,13 +86,13 @@ type Config struct {
 	} `mapstructure:"asndb"`
 	// SNMP 设备采集：Direct 模式内置轮询器 + 运行状态看门狗 + 探针代理任务合成
 	SNMP struct {
-		Enabled                bool   `mapstructure:"enabled"`
-		DefaultIntervalSeconds int    `mapstructure:"default_interval_seconds"` // 快轮询间隔（sysUpTime + 存活）
-		InventoryEveryN        int    `mapstructure:"inventory_every_n"`        // 每 N 次快轮询附带完整 system 组
-		TimeoutSeconds         int    `mapstructure:"timeout_seconds"`
-		Retries                int    `mapstructure:"retries"`
-		MaxConcurrent          int    `mapstructure:"max_concurrent"`       // Direct poller 并发上限
-		MetricsMaxAgeDays      int    `mapstructure:"metrics_max_age_days"` // 自定义 OID 时序保留天数，0 = 永久
+		Enabled                bool `mapstructure:"enabled"`
+		DefaultIntervalSeconds int  `mapstructure:"default_interval_seconds"` // 快轮询间隔（sysUpTime + 存活）
+		InventoryEveryN        int  `mapstructure:"inventory_every_n"`        // 每 N 次快轮询附带完整 system 组
+		TimeoutSeconds         int  `mapstructure:"timeout_seconds"`
+		Retries                int  `mapstructure:"retries"`
+		MaxConcurrent          int  `mapstructure:"max_concurrent"`       // Direct poller 并发上限
+		MetricsMaxAgeDays      int  `mapstructure:"metrics_max_age_days"` // 自定义 OID 时序保留天数，0 = 永久
 		// MetricRollups：指标时序降采样归档层（Cacti RRA 风格，同 audit.probe_rollups；
 		// 不配置 = 不启用，长窗口趋势查询只能覆盖原始点保留期内的数据）
 		MetricRollups []struct {

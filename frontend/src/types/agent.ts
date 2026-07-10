@@ -75,6 +75,13 @@ export interface UpdateAgentReq {
   group_id?: number | null;   // null = 清除分组
 }
 
+/**
+ * 域名 target 的解析地址族：auto = 跟随系统解析偏好；v4/v6 = 限定该族；
+ * both = v4+v6 各探测一次（Agent 端结果以 " (v4)"/" (v6)" 后缀区分两条序列）。
+ * 字面 IP target 始终按自身地址族探测，不受此设置影响。
+ */
+export type AddressFamily = 'auto' | 'v4' | 'v6' | 'both';
+
 export interface AgentTask {
   id: number;
   name: string;
@@ -87,6 +94,9 @@ export interface AgentTask {
   agent_id?: string | null;
   agent?: Agent | null;
   enabled: boolean;
+  /** 仅 httpcheck 使用：跳过证书校验（裸 IP / 自签证书设备） */
+  skip_tls_verify: boolean;
+  address_family: AddressFamily;
   created_at: string;
   updated_at: string;
 }
@@ -99,6 +109,8 @@ export interface CreateAgentTasksReq {
   scope: TaskScope;
   group_id?: number | null;
   agent_id?: string | null;
+  skip_tls_verify?: boolean;
+  address_family?: AddressFamily;
 }
 
 export interface UpdateAgentTaskReq {
@@ -110,6 +122,8 @@ export interface UpdateAgentTaskReq {
   group_id?: number | null;
   agent_id?: string | null;
   enabled: boolean;
+  skip_tls_verify?: boolean;
+  address_family?: AddressFamily;
 }
 
 export interface AgentToken {

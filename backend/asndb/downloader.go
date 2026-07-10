@@ -16,7 +16,7 @@ const (
 	caida4BaseURL = "https://publicdata.caida.org/datasets/routing/routeviews-prefix2as"
 	caida6BaseURL = "https://publicdata.caida.org/datasets/routing/routeviews6-prefix2as"
 	ripeNamesURL  = "https://ftp.ripe.net/ripe/asnames/asn.txt"
-	maxDaysBack   = 7           // fall back this many days when current day's CAIDA file is unavailable
+	maxDaysBack   = 7 // fall back this many days when current day's CAIDA file is unavailable
 	httpTimeout   = 15 * time.Minute
 )
 

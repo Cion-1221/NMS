@@ -1,5 +1,5 @@
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tooltip, message } from 'antd';
+import { Button, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, message } from 'antd';
 import { DeleteOutlined, LineChartOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { getLatestProbeResults, getAgents, deleteProbeResultPair, lookupASN } from '../../../api/agent';
@@ -16,6 +16,27 @@ import LatencyTrendModal from './LatencyTrendModal';
 const mono = (v: React.ReactNode) => (
   <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span>
 );
+
+// address_family=both 时 Agent 上报的 target 带 " (v4)"/" (v6)" 后缀——这是两条
+// 独立序列的键（趋势/删除/归档均按完整字符串匹配）。仅在展示层拆成基础 target +
+// 族徽标；校验规则保证正常 target（IP/域名/host:port/URL）不可能天然以该后缀结尾，
+// 不存在误拆。
+const FAM_SUFFIX_RE = / \((v4|v6)\)$/;
+const renderTarget = (v: string) => {
+  const m = v.match(FAM_SUFFIX_RE);
+  if (!m) return mono(v);
+  return (
+    <Space size={6}>
+      {mono(v.slice(0, -m[0].length))}
+      <Tag
+        color={m[1] === 'v4' ? 'blue' : 'purple'}
+        style={{ fontFamily: FONT_MONO, fontSize: 11, lineHeight: '18px', marginRight: 0 }}
+      >
+        {m[1]}
+      </Tag>
+    </Space>
+  );
+};
 
 // 路径类结果无标量延迟趋势价值（且不参与归档），不提供趋势图入口
 const PATH_TYPES: string[] = ['mtr', 'meshmtr', 'traceroute'];
@@ -110,7 +131,7 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
         </Tooltip>
       ),
     },
-    { title: t('proberesults.target'), dataIndex: 'target', key: 'target', render: (v: string) => mono(v) },
+    { title: t('proberesults.target'), dataIndex: 'target', key: 'target', render: renderTarget },
     {
       title: t('common.status'), dataIndex: 'success', key: 'success',
       render: (v: boolean) => <StatusTag status={v ? 'success' : 'failed'} label={v ? t('proberesults.success') : t('proberesults.failed')} />,

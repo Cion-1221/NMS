@@ -8,8 +8,10 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -81,12 +83,14 @@ var meshAutoTypes = map[string]bool{"meshping": true, "meshmtr": true}
 // （分别见 NMS_Agent 的 tcpping.go/httpcheck.go），因此端口是可选的、不是必须的。
 var portOptionalTypes = map[string]bool{"tcpping": true, "httpcheck": true}
 
-// domainTargetTypes：target 是待解析的域名而非 IP——dnscheck 在 Agent 侧直接把整串
-// target 传给 net.Resolver.LookupIPAddr(ctx, target) 当 hostname 查询（NMS_Agent 的
-// dnscheck.go 完全不做 host:port 拆分/IP 校验），因此不能套用 IPv4/IPv6 校验；这里
-// 只做非空、不含空白的最基本检查，格式是否是合法域名交给 Agent 运行时解析失败去
-// 兜底（与 tcpping/httpcheck 对畸形 host:port 不做穷举校验的宽松策略一致）。
-var domainTargetTypes = map[string]bool{"dnscheck": true}
+// validAddressFamilies：AgentTask.AddressFamily 的合法取值。auto = 跟随系统解析
+// 偏好（历史行为）；both = 域名 target 按 v4/v6 各探测一次、出两条结果。
+var validAddressFamilies = map[string]bool{"auto": true, "v4": true, "v6": true, "both": true}
+
+// hostnameRe 允许常见主机名/FQDN（含下划线——RFC 上不合法但内网常见），不做穷举式
+// 校验：域名是否真实可解析交给 Agent 运行时报错兜底（与对畸形 host:port 不做穷举
+// 校验的宽松策略一致）。
+var hostnameRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]{0,251}[A-Za-z0-9])?$`)
 
 // ── Agent 管理（List / 修改 SourceIP+Group / 删除 / 作废证书）──────────────────
 
@@ -336,44 +340,73 @@ func ListAgentTasks(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// validateTargets 校验 targets_raw 里每一行都是合法的 IPv4/IPv6 地址（netip.ParseAddr
-// 对两者一视同仁）。若 types 中包含 tcpping/httpcheck，额外放行 host:port 后缀
-// （IPv6 用 [addr]:port 括号形式）——先按 net.SplitHostPort 拆出 host 再校验，
-// 与 Agent 侧解析方式一致。若 types 中包含 dnscheck（target 是待解析的域名，见
-// domainTargetTypes 注释），改为只做非空/不含空白的宽松检查。meshping/meshmtr 的
-// Target 由 Server 动态解析，调用方应跳过校验。
+// hostOK：字面 IPv4/IPv6 地址（netip.ParseAddr 对两者一视同仁）或形似主机名/域名。
+func hostOK(s string) bool {
+	if _, err := netip.ParseAddr(s); err == nil {
+		return true
+	}
+	return hostnameRe.MatchString(s)
+}
+
+func portOK(p string) bool {
+	n, err := strconv.Atoi(p)
+	return err == nil && n >= 1 && n <= 65535
+}
+
+// targetLineOK 校验 targets_raw 的单行。基础形态是字面 IP 或域名；portTolerant
+// 额外放行 host:port（IPv6 用 [addr]:port 括号形式，与 Agent 侧 net.SplitHostPort
+// 解析方式一致）；urlTolerant 额外放行完整 http(s):// URL（Agent 的 httpcheck
+// 原生支持 scheme 前缀与路径）。
+func targetLineOK(target string, portTolerant, urlTolerant bool) bool {
+	if urlTolerant && (strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://")) {
+		u, err := url.Parse(target)
+		if err != nil || u.Hostname() == "" {
+			return false
+		}
+		if p := u.Port(); p != "" && !portOK(p) {
+			return false
+		}
+		return hostOK(u.Hostname())
+	}
+	if hostOK(target) {
+		return true
+	}
+	if portTolerant {
+		if host, port, err := net.SplitHostPort(target); err == nil {
+			return hostOK(host) && portOK(port)
+		}
+	}
+	return false
+}
+
+// validateTargets 校验 targets_raw 里的每一行。所有需要手动指定 Target 的类型都
+// 接受字面 IPv4/IPv6 地址或域名（域名的解析地址族由任务的 AddressFamily 控制）；
+// tcpping/httpcheck 额外接受 host:port；httpcheck 额外接受完整 http(s):// URL。
+// 多选类型共用同一份 target 列表，校验按并集放行（与既有语义一致：某行只对
+// 部分类型有意义时，其余类型运行时以失败结果兜底）。meshping/meshmtr 的 Target
+// 由 Server 动态解析，调用方应跳过校验。
 func validateTargets(raw string, types []string) string {
 	portTolerant := false
-	domainTolerant := false
+	urlTolerant := false
 	for _, ty := range types {
 		if portOptionalTypes[ty] {
 			portTolerant = true
 		}
-		if domainTargetTypes[ty] {
-			domainTolerant = true
+		if ty == "httpcheck" {
+			urlTolerant = true
 		}
 	}
 	task := models.AgentTask{TargetsRaw: raw}
 	for _, target := range task.Targets() {
-		if _, err := netip.ParseAddr(target); err == nil {
+		if targetLineOK(target, portTolerant, urlTolerant) {
 			continue
 		}
+		hint := "支持 IPv4/IPv6 地址或域名"
 		if portTolerant {
-			if host, _, err := net.SplitHostPort(target); err == nil {
-				if _, err := netip.ParseAddr(host); err == nil {
-					continue
-				}
-			}
+			hint += "，可选 host:port（IPv6 用 [addr]:port）"
 		}
-		if domainTolerant && !strings.ContainsAny(target, " \t") {
-			continue
-		}
-		hint := "仅支持 IPv4/IPv6 地址"
-		switch {
-		case portTolerant:
-			hint = "仅支持 IPv4/IPv6 地址，可选 host:port（IPv6 用 [addr]:port）"
-		case domainTolerant:
-			hint = "仅支持 IPv4/IPv6 地址或域名"
+		if urlTolerant {
+			hint += "，httpcheck 亦支持完整 http(s):// URL"
 		}
 		return fmt.Sprintf("无效的 Target 地址: %s（%s）", target, hint)
 	}
@@ -413,9 +446,18 @@ func CreateAgentTasks(db *gorm.DB) gin.HandlerFunc {
 			Scope           string   `json:"scope" binding:"required"`
 			GroupID         *uint    `json:"group_id"`
 			AgentID         *string  `json:"agent_id"`
+			SkipTLSVerify   bool     `json:"skip_tls_verify"`
+			AddressFamily   string   `json:"address_family"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error(), "code": "bad_request"})
+			return
+		}
+		if req.AddressFamily == "" {
+			req.AddressFamily = "auto"
+		}
+		if !validAddressFamilies[req.AddressFamily] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的地址族，可选: auto / v4 / v6 / both", "code": "agent.invalid_address_family"})
 			return
 		}
 		needsTargetValidation := false
@@ -447,6 +489,7 @@ func CreateAgentTasks(db *gorm.DB) gin.HandlerFunc {
 				Name: req.Name, Type: ty, TargetsRaw: req.TargetsRaw,
 				IntervalSeconds: req.IntervalSeconds, Scope: req.Scope,
 				GroupID: req.GroupID, AgentID: req.AgentID, Enabled: true,
+				SkipTLSVerify: req.SkipTLSVerify, AddressFamily: req.AddressFamily,
 			}
 			if err := db.Create(&task).Error; err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
@@ -476,9 +519,18 @@ func UpdateAgentTask(db *gorm.DB) gin.HandlerFunc {
 			GroupID         *uint   `json:"group_id"`
 			AgentID         *string `json:"agent_id"`
 			Enabled         bool    `json:"enabled"`
+			SkipTLSVerify   bool    `json:"skip_tls_verify"`
+			AddressFamily   string  `json:"address_family"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error(), "code": "bad_request"})
+			return
+		}
+		if req.AddressFamily == "" {
+			req.AddressFamily = "auto"
+		}
+		if !validAddressFamilies[req.AddressFamily] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的地址族，可选: auto / v4 / v6 / both", "code": "agent.invalid_address_family"})
 			return
 		}
 		if !validTaskTypes[req.Type] {
@@ -505,6 +557,7 @@ func UpdateAgentTask(db *gorm.DB) gin.HandlerFunc {
 			"name": req.Name, "type": req.Type, "targets_raw": req.TargetsRaw,
 			"interval_seconds": req.IntervalSeconds, "scope": req.Scope,
 			"group_id": req.GroupID, "agent_id": req.AgentID, "enabled": req.Enabled,
+			"skip_tls_verify": req.SkipTLSVerify, "address_family": req.AddressFamily,
 		}).Error; err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
 			return
@@ -768,7 +821,7 @@ func CreateAgentRelease(db *gorm.DB, releaseDir string) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存文件失败", "code": "server_error"})
 			return
 		}
-		cleanTmp = false            // rename 成功，不再清理（已不是 tmpPath）
+		cleanTmp = false           // rename 成功，不再清理（已不是 tmpPath）
 		os.Chmod(finalPath, 0o755) // 保证文件可执行
 
 		db.Model(&rel).Updates(map[string]interface{}{"file_path": finalPath})

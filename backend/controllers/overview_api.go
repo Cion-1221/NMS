@@ -163,8 +163,8 @@ func GetOverview(db *gorm.DB) gin.HandlerFunc {
 		}
 		var regRows []regionRow
 		db.Table("agents a").
-			Select("COALESCE(g.name, 'Ungrouped') AS region, "+
-				"CAST(COUNT(*) AS SIGNED) AS total, "+
+			Select("COALESCE(g.name, 'Ungrouped') AS region, " +
+				"CAST(COUNT(*) AS SIGNED) AS total, " +
 				"CAST(SUM(CASE WHEN a.status = 'online' AND a.revoked = 0 THEN 1 ELSE 0 END) AS SIGNED) AS online").
 			Joins("LEFT JOIN agent_groups g ON g.id = a.group_id").
 			Group("a.group_id, g.name").Order("total DESC").Limit(6).Scan(&regRows)

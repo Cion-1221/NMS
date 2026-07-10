@@ -48,20 +48,20 @@ func (g *SysGroup) IsAdmin() bool {
 }
 
 type SysUser struct {
-	ID                 uint      `gorm:"primaryKey" json:"id"`
-	Username           string    `gorm:"type:varchar(100);uniqueIndex;not null" json:"username"`
-	PasswordHash       string    `gorm:"type:varchar(255);not null" json:"-"`
-	GroupID            uint      `gorm:"not null;index" json:"group_id"`
-	Group              SysGroup  `gorm:"foreignKey:GroupID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"group,omitempty"`
-	MustChangePassword bool      `gorm:"not null;default:true" json:"must_change_password"`
-	TokenLifetimeHours int       `gorm:"not null;default:24" json:"token_lifetime_hours"`
+	ID                 uint     `gorm:"primaryKey" json:"id"`
+	Username           string   `gorm:"type:varchar(100);uniqueIndex;not null" json:"username"`
+	PasswordHash       string   `gorm:"type:varchar(255);not null" json:"-"`
+	GroupID            uint     `gorm:"not null;index" json:"group_id"`
+	Group              SysGroup `gorm:"foreignKey:GroupID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"group,omitempty"`
+	MustChangePassword bool     `gorm:"not null;default:true" json:"must_change_password"`
+	TokenLifetimeHours int      `gorm:"not null;default:24" json:"token_lifetime_hours"`
 	// Enabled=false 的账号：密码校验通过后仍拒绝登录、Refresh 被拒；停用即吊销全部
 	// Refresh Token（存量 Access Token 在其有效期内仍可用——已知取舍，同密码重置）
 	Enabled     bool       `gorm:"not null;default:true" json:"enabled"`
 	LastLoginAt *time.Time `json:"last_login_at"`
 	// UI preferences (stored per-user)
-	Theme    string `gorm:"type:varchar(20);not null;default:'system'" json:"theme"`
-	Language string `gorm:"type:varchar(10);not null;default:'en'" json:"language"`
+	Theme     string    `gorm:"type:varchar(20);not null;default:'system'" json:"theme"`
+	Language  string    `gorm:"type:varchar(10);not null;default:'en'" json:"language"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	// ActiveSessions 当前未过期的 Refresh Token 数（ListUsers 聚合填充，不入库）

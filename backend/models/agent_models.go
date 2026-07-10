@@ -84,8 +84,16 @@ type AgentTask struct {
 	AgentID         *string     `gorm:"type:varchar(64);index" json:"agent_id"`
 	Agent           *Agent      `gorm:"foreignKey:AgentID;references:AgentID" json:"agent,omitempty"`
 	Enabled         bool        `gorm:"not null;default:true" json:"enabled"`
-	CreatedAt       time.Time   `json:"created_at"`
-	UpdatedAt       time.Time   `json:"updated_at"`
+	// SkipTLSVerify：仅 httpcheck 类型使用——跳过证书校验，用于探测裸 IP（证书 SAN
+	// 只签给域名，裸 IP 天然过不了校验）或自签证书设备。其余类型忽略此字段。
+	SkipTLSVerify bool `gorm:"not null;default:false" json:"skip_tls_verify"`
+	// AddressFamily：域名 target 的解析地址族——auto（跟随系统解析偏好，与历史行为
+	// 一致）/ v4 / v6 / both（v4+v6 各探测一次，Agent 端结果以 " (v4)"/" (v6)" 后缀
+	// 区分两条序列）。字面 IP target 天然携带自身地址族，不受此字段影响；
+	// meshping/meshmtr 的目标由 Server 解析成字面 IP，同样不受影响。
+	AddressFamily string    `gorm:"type:varchar(10);not null;default:'auto'" json:"address_family"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func (AgentTask) TableName() string { return "agent_tasks" }

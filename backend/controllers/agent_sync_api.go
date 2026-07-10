@@ -28,6 +28,11 @@ type taskPayload struct {
 	IntervalSeconds int             `json:"interval_seconds"`
 	Targets         []string        `json:"targets"`
 	SNMP            *snmpTaskParams `json:"snmp,omitempty"`
+	// SkipTLSVerify：仅 httpcheck 使用，其余类型 Agent 端忽略。
+	SkipTLSVerify bool `json:"skip_tls_verify,omitempty"`
+	// AddressFamily：域名 target 的解析地址族（v4/v6/both）；auto 时省略，
+	// Agent 端把缺省视为 auto（跟随系统解析偏好），旧版 Agent 忽略此字段。
+	AddressFamily string `json:"address_family,omitempty"`
 }
 
 // snmpTaskParams 是 snmp_poll 任务的参数块。凭证经 mTLS 信道以明文下发（静态
@@ -89,8 +94,13 @@ func GetAgentTasks(db *gorm.DB, snmpCfg SNMPConfig) gin.HandlerFunc {
 				// 自动枚举同组存活 Agent 的 IP，agent 侧负责具体的探测方式。
 				targets = resolveMeshPingTargets(db, agent, t)
 			}
+			fam := t.AddressFamily
+			if fam == "auto" {
+				fam = "" // 缺省即 auto，省流量且旧版 Agent 无感
+			}
 			payloads = append(payloads, taskPayload{
 				TaskID: t.ID, Type: t.Type, IntervalSeconds: t.IntervalSeconds, Targets: targets,
+				SkipTLSVerify: t.SkipTLSVerify, AddressFamily: fam,
 			})
 		}
 
