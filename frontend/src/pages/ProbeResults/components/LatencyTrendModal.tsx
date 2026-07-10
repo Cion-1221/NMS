@@ -12,11 +12,19 @@
  * 坐标系，与本功能最早上线时的实现一致，已验证稳定），仅通过分类色阶做视觉区分
  * （avg 主色加粗，min/max 同色变淡），避免复现错位问题。
  *
+ * ★ 重要：本组件通过 React.lazy 懒加载（见 TabGenericResults / TabMeshPingMatrix），
+ * 因此不能在这里调用 antd `theme.useToken()`——生产构建下该调用会把 antd 主题
+ * 内部模块（含其 forwardRef 组件树）强行拉进这个独立的懒加载 chunk，实测触发
+ * "Cannot read properties of undefined (reading 'forwardRef')" 的 chunk 加载顺序
+ * 崩溃（整个页面白屏）。DOM 层配色一律走 `var(--ant-color-*)` CSS 变量（不受
+ * chunk 拆分影响），图表内部 style（Canvas 渲染，CSS 变量在此不生效）用固定
+ * 十六进制色值，与本文件重设计前的做法一致。
+ *
  * 本文件 import 了 @ant-design/charts（G2，体积大）——调用方必须通过
  * React.lazy 引入本组件，首次打开弹窗才加载图表 chunk（与 Dashboard 同款策略）。
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Button, DatePicker, Modal, Segmented, Space, Spin, theme } from 'antd';
+import { Alert, Button, DatePicker, Modal, Segmented, Space, Spin } from 'antd';
 import { DownloadOutlined } from '@ant-design/icons';
 import { Column, Line } from '@ant-design/charts';
 import dayjs, { Dayjs } from 'dayjs';
@@ -52,6 +60,14 @@ const PRESETS: { key: string; seconds: number }[] = [
 // 自行按数据密度抽样，否则几百个桶会把时间标签挤成一团无法辨认）
 const MAX_X_LABELS = 10;
 
+// 图表内部（Canvas 渲染）用的固定色值——CSS 变量在 Canvas fillStyle/strokeStyle
+// 里不生效，且不能在这个懒加载 chunk 里用 theme.useToken() 取（见文件头注释）。
+// 蓝色与 MainLayout 品牌色一致（#2563eb），丢包红与本功能重设计前的旧实现一致。
+const CHART_COLORS = {
+  light: { primary: '#2563eb', muted: '#cbd5e1', loss: '#dc2626' },
+  dark:  { primary: '#3b82f6', muted: '#475569', loss: '#f87171' },
+};
+
 // 粒度的紧凑展示（30s / 5m / 2h / 1d），中英通用
 const fmtBucket = (sec: number): string => {
   if (sec < 60) return `${sec}s`;
@@ -66,7 +82,7 @@ const fmtMs = (v: number | null | undefined): string =>
 const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, probeType, label }) => {
   const t = useT();
   const { resolvedTheme } = useAppContext();
-  const { token } = theme.useToken();
+  const c = resolvedTheme === 'dark' ? CHART_COLORS.dark : CHART_COLORS.light;
 
   const [preset, setPreset] = useState('1d');
   const [customRange, setCustomRange] = useState<[Dayjs, Dayjs] | null>(null);
@@ -189,13 +205,13 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
     scale: {
       color: {
         domain: [MIN_LABEL, MAX_LABEL, AVG_LABEL],
-        range: [token.colorBorderSecondary, token.colorBorderSecondary, token.colorPrimary],
+        range: [c.muted, c.muted, c.primary],
       },
       y: { nice: true },
     },
     axis: {
-      x: { labelFontFamily: FONT_MONO, labelFontSize: 10.5, labelFill: token.colorTextTertiary, labelFormatter: xLabelFormatter },
-      y: { labelFontFamily: FONT_MONO, labelFontSize: 10.5, labelFill: token.colorTextTertiary, gridLineDash: [3, 4], gridStroke: token.colorBorderSecondary, title: false },
+      x: { labelFontFamily: FONT_MONO, labelFontSize: 10.5, labelFormatter: xLabelFormatter },
+      y: { labelFontFamily: FONT_MONO, labelFontSize: 10.5, gridLineDash: [3, 4], title: false },
     },
     // 不覆盖 tooltip：多序列（colorField）折线图的默认 tooltip 已按 metric 分组
     // 逐行展示，与本功能最早上线时的实现一致、已验证稳定，自定义 items 反而
@@ -210,10 +226,10 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
     height: 88,
     animate: false,
     theme: g2Theme,
-    style: { fill: token.colorError, radiusTopLeft: 1.5, radiusTopRight: 1.5 },
+    style: { fill: c.loss, radiusTopLeft: 1.5, radiusTopRight: 1.5 },
     axis: {
       x: false,
-      y: { labelFontFamily: FONT_MONO, labelFontSize: 10.5, labelFill: token.colorTextTertiary, title: false, tickCount: 2 },
+      y: { labelFontFamily: FONT_MONO, labelFontSize: 10.5, title: false, tickCount: 2 },
     },
     tooltip: {
       title: 'time',
@@ -223,14 +239,14 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
 
   const s = data?.summary;
   const lossColor =
-    s == null ? token.colorText
-    : s.loss_pct < 0.5 ? token.colorSuccess
-    : s.loss_pct < 2 ? token.colorWarning
-    : token.colorError;
+    s == null ? 'var(--ant-color-text)'
+    : s.loss_pct < 0.5 ? 'var(--ant-color-success)'
+    : s.loss_pct < 2 ? 'var(--ant-color-warning)'
+    : 'var(--ant-color-error)';
 
   // 顶部统计条（6 格，等宽网格 + 分隔线）
   const stats: { label: string; value: string; color?: string }[] = [
-    { label: t('trend.avg'), value: fmtMs(s?.avg_ms), color: token.colorPrimary },
+    { label: t('trend.avg'), value: fmtMs(s?.avg_ms), color: 'var(--ant-color-primary)' },
     { label: t('trend.min'), value: fmtMs(s?.min_ms) },
     { label: t('trend.max'), value: fmtMs(s?.max_ms) },
     { label: t('trend.loss'), value: s ? `${s.loss_pct.toFixed(2)}%` : '—', color: lossColor },
@@ -238,7 +254,7 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
     {
       label: t('trend.granularity'),
       value: data ? `${fmtBucket(data.source_bucket_seconds)} · ${data.source === 'raw' ? t('trend.sourceRaw') : t('trend.sourceRollup')}` : '—',
-      color: token.colorTextSecondary,
+      color: 'var(--ant-color-text-secondary)',
     },
   ];
 
@@ -250,13 +266,13 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
             <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: '-.01em' }}>{t('trend.title')}</span>
             <span style={{
               padding: '3px 10px', borderRadius: 999, fontSize: 11.5, fontWeight: 600,
-              color: token.colorPrimary, background: token.colorPrimaryBg,
+              color: 'var(--ant-color-primary)', background: 'var(--ant-color-primary-bg)',
             }}>
               {probeType.toUpperCase()}
             </span>
           </Space>
           <div style={{
-            fontSize: 12.5, fontWeight: 400, color: token.colorTextSecondary,
+            fontSize: 12.5, fontWeight: 400, color: 'var(--ant-color-text-secondary)',
             fontFamily: FONT_MONO, marginTop: 5,
           }}>
             {label}
@@ -301,17 +317,17 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
       {/* 统计条 */}
       <div style={{
         display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', marginTop: 18,
-        background: token.colorFillQuaternary, border: `1px solid ${token.colorBorder}`,
-        borderRadius: token.borderRadius, padding: '13px 0',
+        background: 'var(--ant-color-fill-quaternary)', border: '1px solid var(--ant-color-border)',
+        borderRadius: 8, padding: '13px 0',
       }}>
         {stats.map((st, i) => (
-          <div key={st.label} style={{ padding: '0 18px', minWidth: 0, borderLeft: i ? `1px solid ${token.colorBorder}` : 'none' }}>
-            <div style={{ fontSize: 11, color: token.colorTextTertiary, fontWeight: 600, marginBottom: 4, whiteSpace: 'nowrap' }}>
+          <div key={st.label} style={{ padding: '0 18px', minWidth: 0, borderLeft: i ? '1px solid var(--ant-color-border)' : 'none' }}>
+            <div style={{ fontSize: 11, color: 'var(--ant-color-text-tertiary)', fontWeight: 600, marginBottom: 4, whiteSpace: 'nowrap' }}>
               {st.label}
             </div>
             <div style={{
               fontSize: 15.5, fontWeight: 700, fontFamily: FONT_MONO, whiteSpace: 'nowrap',
-              overflow: 'hidden', textOverflow: 'ellipsis', color: st.color ?? token.colorText,
+              overflow: 'hidden', textOverflow: 'ellipsis', color: st.color ?? 'var(--ant-color-text)',
             }}>
               {st.value}
             </div>
@@ -329,12 +345,12 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
             {/* 图例 */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 18, alignItems: 'center', padding: '14px 0 8px' }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-                <span style={{ width: 14, height: 2.5, borderRadius: 2, background: token.colorPrimary }} />
-                <span style={{ fontSize: 12, color: token.colorTextSecondary }}>{t('trend.avg')}</span>
+                <span style={{ width: 14, height: 2.5, borderRadius: 2, background: c.primary }} />
+                <span style={{ fontSize: 12, color: 'var(--ant-color-text-secondary)' }}>{t('trend.avg')}</span>
               </span>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-                <span style={{ width: 14, height: 2, borderRadius: 2, background: token.colorBorderSecondary }} />
-                <span style={{ fontSize: 12, color: token.colorTextSecondary }}>{t('trend.min')} / {t('trend.max')}</span>
+                <span style={{ width: 14, height: 2, borderRadius: 2, background: c.muted }} />
+                <span style={{ fontSize: 12, color: 'var(--ant-color-text-secondary)' }}>{t('trend.min')} / {t('trend.max')}</span>
               </span>
             </div>
 
@@ -345,8 +361,8 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
               margin: '14px 0 4px',
             }}>
-              <span style={{ fontSize: 12, color: token.colorTextSecondary, fontWeight: 600 }}>{t('trend.packetLoss')}</span>
-              <span style={{ fontSize: 11, color: token.colorTextTertiary, fontFamily: FONT_MONO }}>
+              <span style={{ fontSize: 12, color: 'var(--ant-color-text-secondary)', fontWeight: 600 }}>{t('trend.packetLoss')}</span>
+              <span style={{ fontSize: 11, color: 'var(--ant-color-text-tertiary)', fontFamily: FONT_MONO }}>
                 max {lossData.length ? Math.max(...lossData.map((d) => d.loss)).toFixed(1) : '0.0'}%
               </span>
             </div>
