@@ -1,4 +1,4 @@
-import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Dropdown, Input, Modal, Select, Space, Spin, Table, theme, Tooltip, message } from 'antd';
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
@@ -8,9 +8,7 @@ import { apiErrMsg, useT } from '../../../i18n';
 import { useDebounced } from '../../../utils/useDebounced';
 import { FONT_MONO } from '../../../theme/theme';
 import LatencySpark from '../../../components/LatencySpark';
-
-// 延迟趋势弹窗内含 @ant-design/charts（G2，体积大）——懒加载，首次打开才拉取 chunk
-const LatencyTrendModal = React.lazy(() => import('./LatencyTrendModal'));
+import LatencyTrendModal from './LatencyTrendModal';
 
 type AgentRow = MeshPingMatrixResp['agents'][number];
 
@@ -386,18 +384,16 @@ const TabMeshPingMatrix: React.FC = () => {
         )}
       </Modal>
 
-      {/* 延迟趋势 Modal（懒加载：首次打开才拉取图表 chunk） */}
+      {/* 延迟趋势 Modal */}
       {trend && (
-        <Suspense fallback={null}>
-          <LatencyTrendModal
-            open
-            onClose={() => setTrend(null)}
-            agentId={trend.agentId}
-            target={trend.target}
-            probeType="meshping"
-            label={trend.label}
-          />
-        </Suspense>
+        <LatencyTrendModal
+          open
+          onClose={() => setTrend(null)}
+          agentId={trend.agentId}
+          target={trend.target}
+          probeType="meshping"
+          label={trend.label}
+        />
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-﻿import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tooltip, message } from 'antd';
 import { DeleteOutlined, LineChartOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
@@ -11,13 +11,11 @@ import StatusTag from '../../../components/StatusTag';
 import RelativeTime from '../../../components/RelativeTime';
 import LatencySpark from '../../../components/LatencySpark';
 import { FONT_MONO } from '../../../theme/theme';
+import LatencyTrendModal from './LatencyTrendModal';
 
 const mono = (v: React.ReactNode) => (
   <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span>
 );
-
-// 延迟趋势弹窗内含 @ant-design/charts（G2，体积大）——懒加载，首次打开才拉取 chunk
-const LatencyTrendModal = React.lazy(() => import('./LatencyTrendModal'));
 
 // 路径类结果无标量延迟趋势价值（且不参与归档），不提供趋势图入口
 const PATH_TYPES: string[] = ['mtr', 'meshmtr', 'traceroute'];
@@ -272,18 +270,16 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
         />
       </Modal>
 
-      {/* 延迟趋势 Modal（懒加载：首次打开才拉取图表 chunk） */}
+      {/* 延迟趋势 Modal */}
       {trend && (
-        <Suspense fallback={null}>
-          <LatencyTrendModal
-            open
-            onClose={() => setTrend(null)}
-            agentId={trend.agentId}
-            target={trend.target}
-            probeType={trend.probeType}
-            label={trend.label}
-          />
-        </Suspense>
+        <LatencyTrendModal
+          open
+          onClose={() => setTrend(null)}
+          agentId={trend.agentId}
+          target={trend.target}
+          probeType={trend.probeType}
+          label={trend.label}
+        />
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, Button, Col, Descriptions, Divider, Drawer, Form, Input, InputNumber,
   Modal, Row, Segmented, Select, Skeleton, Space, Switch, Table, Tooltip, message,
@@ -7,6 +7,7 @@ import {
   ExclamationCircleFilled, LineChartOutlined, PlusOutlined, ReloadOutlined,
   SearchOutlined, ThunderboltOutlined,
 } from '@ant-design/icons';
+import { Line } from '@ant-design/charts';
 import type { ColumnsType } from 'antd/es/table';
 import {
   getDevices, createDevice, updateDevice, deleteDevice,
@@ -28,11 +29,6 @@ import RelativeTime from '../../../components/RelativeTime';
 import { FONT_MONO } from '../../../theme/theme';
 
 const { confirm } = Modal;
-
-// 趋势图懒加载：@ant-design/charts 很重，Devices 路由不应因 Drawer 里的可选
-// 功能拖慢首屏——只有真正打开趋势 Modal 时才拉取图表代码块。
-const LazyLine = React.lazy(() =>
-  import('@ant-design/charts').then(m => ({ default: m.Line })));
 
 // IPs / IDs render in the mono stack against a dimmed colour (Direction A).
 const mono = (v: React.ReactNode) => (
@@ -1511,16 +1507,14 @@ const TabDeviceList: React.FC = () => {
         {trendLoading && !trendData ? (
           <Skeleton active paragraph={{ rows: 5 }} />
         ) : trendData && trendData.points.length > 0 ? (
-          <Suspense fallback={<Skeleton active paragraph={{ rows: 5 }} />}>
-            <LazyLine {...({
-              data: trendData.points.map(p => ({ ts: trendLabel(p.ts), v: p.avg })),
-              xField: 'ts',
-              yField: 'v',
-              height: 280,
-              smooth: true,
-              axis: { y: { title: trendUnit || undefined } },
-            } as any)} />
-          </Suspense>
+          <Line {...({
+            data: trendData.points.map(p => ({ ts: trendLabel(p.ts), v: p.avg })),
+            xField: 'ts',
+            yField: 'v',
+            height: 280,
+            smooth: true,
+            axis: { y: { title: trendUnit || undefined } },
+          } as any)} />
         ) : (
           <div style={{ padding: 32, textAlign: 'center', color: 'var(--ant-color-text-tertiary)' }}>
             {t('device.oid.trendEmpty')}

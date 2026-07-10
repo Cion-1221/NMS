@@ -12,16 +12,21 @@
  * 坐标系，与本功能最早上线时的实现一致，已验证稳定），仅通过分类色阶做视觉区分
  * （avg 主色加粗，min/max 同色变淡），避免复现错位问题。
  *
- * ★ 重要：本组件通过 React.lazy 懒加载（见 TabGenericResults / TabMeshPingMatrix），
- * 因此不能在这里调用 antd `theme.useToken()`——生产构建下该调用会把 antd 主题
- * 内部模块（含其 forwardRef 组件树）强行拉进这个独立的懒加载 chunk，实测触发
- * "Cannot read properties of undefined (reading 'forwardRef')" 的 chunk 加载顺序
- * 崩溃（整个页面白屏）。DOM 层配色一律走 `var(--ant-color-*)` CSS 变量（不受
- * chunk 拆分影响），图表内部 style（Canvas 渲染，CSS 变量在此不生效）用固定
- * 十六进制色值，与本文件重设计前的做法一致。
+ * ★ 重要：本组件曾通过 React.lazy 懒加载（首次打开弹窗才拉取 @ant-design/charts
+ * chunk），但和 App.tsx 里 Dashboard 路由自身的 React.lazy、以及 TabDeviceList.tsx
+ * 里 OID 趋势图的 React.lazy 三处懒加载边界都共享同一个重量级依赖
+ * （@ant-design/charts/@antv/g2），Rollup 默认的自动分包会把这份共享依赖拆到一个
+ * 由多个懒加载入口共同引用的 chunk 里，实测触发 "Cannot read properties of
+ * undefined (reading 'forwardRef')" 的 chunk 加载顺序崩溃（整个页面白屏）——这不是
+ * 某一次具体改动引入的逻辑 bug，是三处独立懒加载边界互相打架导致的构建层问题。
+ * 现已改回本文件的静态 import（TabGenericResults / TabMeshPingMatrix 直接
+ * `import LatencyTrendModal from './LatencyTrendModal'`，不再 lazy），并把
+ * TabDeviceList.tsx 的 OID 趋势图也改回静态 import，减少懒加载边界数量、避免
+ * 复现这个 chunk 顺序问题。DOM 层配色一律走 `var(--ant-color-*)` CSS 变量，
+ * 图表内部 style（Canvas 渲染，CSS 变量在此不生效）用固定十六进制色值。
  *
- * 本文件 import 了 @ant-design/charts（G2，体积大）——调用方必须通过
- * React.lazy 引入本组件，首次打开弹窗才加载图表 chunk（与 Dashboard 同款策略）。
+ * 本文件 import 了 @ant-design/charts（G2，体积大）——不再懒加载，作为
+ * ProbeResults 主 bundle 的一部分随页面一起加载。
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Button, DatePicker, Modal, Segmented, Space, Spin } from 'antd';
