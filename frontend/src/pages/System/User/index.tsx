@@ -6,8 +6,9 @@ import { ExclamationCircleFilled, PlusOutlined, ThunderboltOutlined } from '@ant
 import type { ColumnsType } from 'antd/es/table';
 import {
   listUsers, createUser, updateUser, deleteUser, forceLogoutUser, listGroups,
+  listUserSessions, revokeUserSession,
 } from '../../../api/system';
-import { SysUser, SysGroup } from '../../../types/system';
+import { SysUser, SysGroup, UserSession } from '../../../types/system';
 import { useAuth } from '../../../contexts/AuthContext';
 import { apiErrMsg, useT } from '../../../i18n';
 import { genPassword, groupIsAdmin } from '../../../utils/perms';
@@ -34,6 +35,11 @@ const SystemUserPage: React.FC = () => {
   const [editTarget, setEditTarget] = useState<SysUser | null>(null);
   const [editForm] = Form.useForm();
   const [editing, setEditing] = useState(false);
+
+  // 会话列表 Modal（点击"会话数"打开，可单个吊销）
+  const [sessTarget, setSessTarget]   = useState<SysUser | null>(null);
+  const [sessions, setSessions]       = useState<UserSession[]>([]);
+  const [sessLoading, setSessLoading] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -135,6 +141,39 @@ const SystemUserPage: React.FC = () => {
     });
   };
 
+  // 会话列表：点击"会话数"打开，展示每个会话的 IP / UA / 签发与到期时间
+  const openSessions = async (r: SysUser) => {
+    setSessTarget(r);
+    setSessions([]);
+    setSessLoading(true);
+    try {
+      const res = await listUserSessions(r.id);
+      setSessions(res.data.items);
+    } catch (err) { message.error(apiErrMsg(err)); }
+    finally { setSessLoading(false); }
+  };
+
+  // 吊销单个会话：该会话无法续期（存量 Access Token 到期前仍可用，同 force-logout 取舍）
+  const handleRevokeSession = (s: UserSession) => {
+    confirm({
+      title:   t('sys.user.sessRevokeTitle'),
+      icon:    <ExclamationCircleFilled style={{ color: '#faad14' }} />,
+      content: t('sys.user.sessRevokeBody'),
+      okText:  t('sys.user.sessRevoke'),
+      okType:  'danger',
+      cancelText: t('common.cancel'),
+      onOk: async () => {
+        if (!sessTarget) return;
+        try {
+          await revokeUserSession(sessTarget.id, s.id);
+          message.success(t('sys.user.sessRevokeOk'));
+          setSessions((prev) => prev.filter((x) => x.id !== s.id));
+          fetchData(); // 刷新列表里的会话计数
+        } catch (err: any) { message.error(apiErrMsg(err)); }
+      },
+    });
+  };
+
   // 强制下线：吊销全部 Refresh Token（存量 Access Token 到期后即无法续期）
   const handleForceLogout = (r: SysUser) => {
     confirm({
@@ -203,7 +242,10 @@ const SystemUserPage: React.FC = () => {
       key:       'sessions',
       width:     90,
       align:     'center' as const,
-      render:    (v: number) => <span style={{ fontFamily: FONT_MONO, fontWeight: v > 0 ? 700 : 400 }}>{v}</span>,
+      // 有活跃会话时可点击 → 会话列表 Modal（逐会话查看/吊销）
+      render:    (v: number, r) => v > 0
+        ? <Button size="small" type="link" style={{ fontFamily: FONT_MONO, fontWeight: 700, padding: 0 }} onClick={() => { void openSessions(r); }}>{v}</Button>
+        : <span style={{ fontFamily: FONT_MONO }}>{v}</span>,
     },
     {
       title:     t('sys.user.lastLogin'),
@@ -315,6 +357,55 @@ const SystemUserPage: React.FC = () => {
         {editTarget?.id === me?.id && (
           <Text type="secondary" style={{ fontSize: 12 }}>{t('sys.user.noSelfGrp')}</Text>
         )}
+      </Modal>
+
+      {/* Sessions（活跃会话列表 + 单个吊销） */}
+      <Modal
+        title={t('sys.user.sessTitle', { name: sessTarget?.username ?? '' })}
+        open={!!sessTarget}
+        onCancel={() => setSessTarget(null)}
+        footer={null}
+        width={720}
+      >
+        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
+          {t('sys.user.sessRevokeBody')}
+        </Text>
+        <Table<UserSession>
+          size="small"
+          rowKey="id"
+          dataSource={sessions}
+          loading={sessLoading}
+          pagination={false}
+          locale={{ emptyText: t('sys.user.sessEmpty') }}
+          columns={[
+            {
+              title: t('sys.user.sessIP'), dataIndex: 'created_ip', key: 'ip', width: 140,
+              render: (v: string) => <span style={{ fontFamily: FONT_MONO, fontSize: 12.5 }}>{v || '—'}</span>,
+            },
+            {
+              title: t('sys.user.sessUA'), dataIndex: 'user_agent', key: 'ua', ellipsis: true,
+              render: (v: string) => (
+                <Tooltip title={v}><span style={{ fontSize: 12.5 }}>{v || '—'}</span></Tooltip>
+              ),
+            },
+            {
+              title: t('sys.user.sessIssued'), dataIndex: 'created_at', key: 'created', width: 130,
+              render: (v: string) => <RelativeTime value={v} />,
+            },
+            {
+              title: t('sys.user.sessExpires'), dataIndex: 'expires_at', key: 'expires', width: 130,
+              render: (v: string) => <RelativeTime value={v} />,
+            },
+            {
+              title: t('common.actions'), key: 'action', width: 80,
+              render: (_, s) => (
+                <Button size="small" type="text" danger onClick={() => handleRevokeSession(s)}>
+                  {t('sys.user.sessRevoke')}
+                </Button>
+              ),
+            },
+          ]}
+        />
       </Modal>
     </div>
   );

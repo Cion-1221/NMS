@@ -1,14 +1,15 @@
 /**
  * Dashboard — post-login home (NOC Operations Overview). Direction A "Clarity".
  *
- * Data strategy (frontend-only re-skin): compose from EXISTING APIs with graceful
- * degradation rather than requiring a new backend aggregate:
- *   • KPIs            ← GET /agents/summary  (+ device list status facets)
- *   • Device status   ← GET /devices?status=… page_size:1  (per-status totals)
- *   • Top mesh links  ← GET /probe-results/meshping-matrix  (slowest successful cells)
- *   • Active alerts   ← failed mesh cells + offline agents (derived)
- *   • Group health    ← GET /agent-groups + GET /agents     (online ratio per group)
- *   • Probe volume    ← SAMPLE series (no hourly endpoint yet — see suggestions /overview)
+ * Data strategy: everything KPI-shaped comes from the single /overview aggregate
+ * (accessible to ANY logged-in user — the previous per-module composition hit
+ * admin-only /agents* endpoints and left non-admin users with empty cards):
+ *   • KPIs + sparklines  ← GET /overview  (devices, agents, probes, delta)
+ *   • Device status      ← GET /overview  (status + SNMP oper facets)
+ *   • Group health       ← GET /overview  (region_health)
+ *   • Probe volume       ← GET /overview  (server-side time buckets)
+ *   • Top mesh links     ← GET /probe-results/meshping-matrix  (login-only, kept)
+ *   • Active alerts      ← derived: oper facets + failed mesh cells + offline agents
  *
  * Out-of-order responses are dropped via the same reqSeq guard the list pages use,
  * and the whole view polls every 30s.
@@ -25,27 +26,13 @@ import StatusTag from '../components/StatusTag';
 import { FONT_MONO, palette } from '../theme/theme';
 import { useAppContext } from '../contexts/AppContext';
 import { useT } from '../i18n';
-import {
-  getAgentSummary, getMeshPingMatrix, getAgentGroups, getAgents,
-} from '../api/agent';
-import { getDevices } from '../api/device';
+import { getMeshPingMatrix } from '../api/agent';
 import { getOverview } from '../api/overview';
-import type { AgentSummary } from '../types/agent';
 import type { OverviewResp } from '../types/overview';
 
 // ── Derived shapes ─────────────────────────────────────────────────────────────
-interface DeviceCounts { total: number; active: number; offline: number; maintenance: number; planned: number }
 interface MeshLink { from: string; to: string; ms: number }
 interface Alert { sev: 'critical' | 'warning' | 'info'; title: string; meta: string }
-interface GroupHealth { name: string; online: number; total: number; pct: number }
-
-// Sample 24-bar series for the probe-volume chart. There is no hourly aggregate
-// endpoint yet; this is clearly labelled as a sample until /overview lands.
-const SAMPLE_PROBE = Array.from({ length: 24 }, (_, h) => ({
-  hour: `${String(h).padStart(2, '0')}:00`,
-  runs: 2400 + Math.round(Math.sin(h / 3) * 900 + h * 30),
-  fails: h % 5 === 0 ? 60 : h % 3 === 0 ? 28 : 9,
-}));
 
 // Short x-axis label for a probe-series bucket, by selected range.
 function bucketLabel(ts: string, range: string | number): string {
@@ -76,38 +63,20 @@ const Dashboard: React.FC = () => {
   const p = palette[resolvedTheme];
 
   const [range, setRange] = useState<string | number>('24H');
-  const [summary, setSummary] = useState<AgentSummary | null>(null);
-  const [devices, setDevices] = useState<DeviceCounts | null>(null);
   const [topMesh, setTopMesh] = useState<MeshLink[]>([]);
   const [meshAlerts, setMeshAlerts] = useState<Alert[]>([]);
-  const [groupHealth, setGroupHealth] = useState<GroupHealth[]>([]);
   const [overview, setOverview] = useState<OverviewResp | null>(null);
+  const [overviewFailed, setOverviewFailed] = useState(false);
 
   const reqSeq = useRef(0);
 
   const load = useCallback(async () => {
     const seq = ++reqSeq.current;
 
-    // ── Overview aggregate (real hourly probe series + KPI sparklines) ──
-    getOverview(String(range).toLowerCase()).then(r => { if (seq === reqSeq.current) setOverview(r.data); }).catch(() => {});
-
-    // ── Agents summary (KPIs) ──
-    getAgentSummary().then(r => { if (seq === reqSeq.current) setSummary(r.data); }).catch(() => {});
-
-    // ── Device counts (total + per-status facets) ──
-    Promise.all([
-      getDevices({ page: 1, page_size: 1 }),
-      getDevices({ page: 1, page_size: 1, status: 'active' }),
-      getDevices({ page: 1, page_size: 1, status: 'offline' }),
-      getDevices({ page: 1, page_size: 1, status: 'maintenance' }),
-      getDevices({ page: 1, page_size: 1, status: 'planned' }),
-    ]).then(([all, act, off, mnt, pln]) => {
-      if (seq !== reqSeq.current) return;
-      setDevices({
-        total: all.data.total, active: act.data.total, offline: off.data.total,
-        maintenance: mnt.data.total, planned: pln.data.total,
-      });
-    }).catch(() => {});
+    // ── Overview aggregate (KPIs, sparklines, device facets, group health, series) ──
+    getOverview(String(range).toLowerCase())
+      .then(r => { if (seq === reqSeq.current) { setOverview(r.data); setOverviewFailed(false); } })
+      .catch(() => { if (seq === reqSeq.current) setOverviewFailed(true); });
 
     // ── Mesh matrix → top latency + failed-cell alerts ──
     getMeshPingMatrix({}).then(r => {
@@ -136,28 +105,8 @@ const Dashboard: React.FC = () => {
       const slow: Alert[] = links.filter(l => l.ms > 180).slice(0, 3)
         .map(l => ({ sev: 'info' as const, title: `High mesh latency ${l.from} → ${l.to}`, meta: `${l.ms.toFixed(0)} ms` }));
       // Recomputed fresh on every poll → no stale alerts accumulate. The offline-agents
-      // alert is folded in at render time from the (separately fetched) summary.
+      // alert is folded in at render time from the overview aggregate.
       setMeshAlerts([...failed.slice(0, 4), ...slow]);
-    }).catch(() => {});
-
-    // ── Group health (online ratio per agent group) ──
-    Promise.all([getAgentGroups(), getAgents({ page: 1, page_size: 500 })]).then(([gr, ar]) => {
-      if (seq !== reqSeq.current) return;
-      const byGroup = new Map<string, { online: number; total: number }>();
-      for (const a of ar.data.items) {
-        const key = a.group?.name ?? 'Ungrouped';
-        const e = byGroup.get(key) ?? { online: 0, total: 0 };
-        e.total++;
-        if (a.status === 'online' && !a.revoked) e.online++;
-        byGroup.set(key, e);
-      }
-      // ensure empty groups still surface
-      for (const g of gr.data) if (!byGroup.has(g.name)) byGroup.set(g.name, { online: 0, total: 0 });
-      const gh: GroupHealth[] = [...byGroup.entries()]
-        .map(([name, v]) => ({ name, online: v.online, total: v.total, pct: v.total ? (v.online / v.total) * 100 : 0 }))
-        .sort((a, b) => b.total - a.total)
-        .slice(0, 6);
-      setGroupHealth(gh);
     }).catch(() => {});
   }, [range]);
 
@@ -168,10 +117,17 @@ const Dashboard: React.FC = () => {
   }, [load]);
 
   // ── Derived display values ──
-  const dev = devices;
+  const dev = overview?.devices ?? null;
+  const agents = overview?.agents ?? null;
+  const probes = overview?.probes ?? null;
   const activePct = dev && dev.total ? (dev.active / dev.total) * 100 : 0;
-  // SNMP 运行状态分面（仅统计开启采集的设备）；后端未升级时字段缺失 → 整块隐藏
-  const oper = overview?.devices.oper;
+  // SNMP 运行状态分面（仅统计开启采集的设备）
+  const oper = dev?.oper;
+
+  // Group health straight from the aggregate (Top 6, server-sorted by size).
+  const groupHealth = (overview?.region_health ?? []).map(r => ({
+    name: r.region, online: r.online, total: r.total, pct: r.uptime_pct,
+  }));
 
   // Active alerts = SNMP device-down facets + mesh-derived (failed cells + high
   // latency) + an offline-agents summary alert, recomputed each render from fresh
@@ -184,8 +140,8 @@ const Dashboard: React.FC = () => {
     if (oper && oper.proxy_down > 0) {
       devOper.push({ sev: 'warning', title: `${oper.proxy_down} device${oper.proxy_down > 1 ? 's' : ''} proxy down`, meta: 'assigned agent unreachable' });
     }
-    const offline: Alert[] = summary && summary.offline_agents > 0
-      ? [{ sev: 'warning', title: `${summary.offline_agents} agent${summary.offline_agents > 1 ? 's' : ''} offline`, meta: `${summary.online_agents}/${summary.total_agents} online` }]
+    const offline: Alert[] = agents && agents.offline > 0
+      ? [{ sev: 'warning', title: `${agents.offline} agent${agents.offline > 1 ? 's' : ''} offline`, meta: `${agents.online}/${agents.total} online` }]
       : [];
     const order = { critical: 0, warning: 1, info: 2 } as const;
     return [...devOper, ...meshAlerts, ...offline].sort((a, b) => order[a.sev] - order[b.sev]).slice(0, 6);
@@ -198,10 +154,11 @@ const Dashboard: React.FC = () => {
     ...(dev.planned ? [{ type: 'Planned', value: dev.planned }] : []),
   ] : [];
 
-  // Probe volume bars: real hourly buckets from /overview, or the labelled sample.
+  // Probe volume bars: real server-side time buckets from /overview only — no
+  // sample fallback; a failed/pending fetch shows an honest empty/loading state.
   const seriesBuckets = overview
     ? overview.probe_series.map(b => ({ label: bucketLabel(b.ts, range), runs: b.runs, failed: b.failed }))
-    : SAMPLE_PROBE.map(d => ({ label: d.hour, runs: d.runs, failed: d.fails }));
+    : [];
   const sparkProbes = overview?.sparklines.probes ?? [];
   const sparkFailure = overview?.sparklines.failure ?? [];
 
@@ -246,23 +203,23 @@ const Dashboard: React.FC = () => {
         <Col xs={24} sm={12} xl={6}>
           <MetricCard icon={<CloudServerOutlined />} iconBg={token.colorSuccessBg} iconColor={token.colorSuccess}
             label={t('kpi.agentsOnline')}
-            value={summary ? <>{summary.online_agents}<span style={{ fontSize: 17, color: token.colorTextTertiary }}>/{summary.total_agents}</span></> : '—'}
-            sub={summary ? `${summary.offline_agents} offline · ${summary.revoked_agents} revoked` : ' '}
+            value={agents ? <>{agents.online}<span style={{ fontSize: 17, color: token.colorTextTertiary }}>/{agents.total}</span></> : '—'}
+            sub={agents ? `${agents.offline} offline · ${agents.revoked} revoked` : ' '}
             series={[]} lineColor={p.success} />
         </Col>
         <Col xs={24} sm={12} xl={6}>
           <MetricCard icon={<ThunderboltOutlined />} iconBg="rgba(13,148,136,.12)" iconColor="#0d9488"
-            label={t('kpi.probesPerHour')}
-            value={summary ? summary.recent_probes_1h.toLocaleString() : '—'}
-            sub={summary ? `${summary.recent_failed_1h.toLocaleString()} failed` : ' '}
+            label={t('kpi.probeRuns')}
+            value={probes ? probes.window_runs.toLocaleString() : '—'}
+            sub={probes ? `${probes.window_failed.toLocaleString()} failed · last ${String(range)}` : ' '}
             series={sparkProbes} lineColor="#0d9488" />
         </Col>
         <Col xs={24} sm={12} xl={6}>
           <MetricCard icon={<WarningOutlined />} iconBg={token.colorWarningBg} iconColor={token.colorWarning}
             label={t('kpi.failureRate')}
-            value={summary ? `${summary.recent_failure_rate_pct.toFixed(2)}%` : '—'}
-            sub={summary ? `${summary.recent_failed_1h.toLocaleString()} failed / 1h` : ' '}
-            subColor={summary && summary.recent_failure_rate_pct > 10 ? token.colorError : undefined}
+            value={probes ? `${probes.failure_rate_pct.toFixed(2)}%` : '—'}
+            sub={probes ? `${probes.window_failed.toLocaleString()} failed · last ${String(range)}` : ' '}
+            subColor={probes && probes.failure_rate_pct > 10 ? token.colorError : undefined}
             series={sparkFailure} lineColor={p.warning} />
         </Col>
       </Row>
@@ -272,11 +229,15 @@ const Dashboard: React.FC = () => {
         <Col xs={24} lg={15}>
           <Card
             title={t('dashboard.probeVolume')}
-            extra={<span style={{ fontSize: 12, color: token.colorTextTertiary }}>{overview ? `Last ${String(range)} · UTC` : t('dashboard.sampleNote')}</span>}
+            extra={<span style={{ fontSize: 12, color: token.colorTextTertiary }}>{`Last ${String(range)} · UTC`}</span>}
             style={{ marginBottom: 20 }}
           >
-            {/* charts config cast to any — @ant-design/charts v2 prop types may differ; tune at runtime */}
-            <Column {...(probeConfig as any)} />
+            {overview
+              /* charts config cast to any — @ant-design/charts v2 prop types may differ; tune at runtime */
+              ? <Column {...(probeConfig as any)} />
+              : overviewFailed
+                ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('common.noData')} style={{ padding: 40 }} />
+                : <Skeleton active paragraph={{ rows: 4 }} />}
           </Card>
           <Row gutter={[20, 20]}>
             <Col xs={24} md={12}>
@@ -335,17 +296,21 @@ const Dashboard: React.FC = () => {
             ))}
           </Card>
           <Card title={t('dashboard.regionHealth')}>
-            {groupHealth.length === 0 ? <Skeleton active paragraph={{ rows: 3 }} /> : groupHealth.map(r => (
-              <div key={r.name} style={{ marginBottom: 14 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-                  <span style={{ fontSize: 12.5, fontWeight: 600 }}>{r.name}</span>
-                  <span style={{ fontSize: 12, color: token.colorTextSecondary, fontFamily: FONT_MONO }}>{r.online}/{r.total} online</span>
+            {groupHealth.length === 0
+              ? (overview
+                ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('common.noData')} />
+                : <Skeleton active paragraph={{ rows: 3 }} />)
+              : groupHealth.map(r => (
+                <div key={r.name} style={{ marginBottom: 14 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 600 }}>{r.name}</span>
+                    <span style={{ fontSize: 12, color: token.colorTextSecondary, fontFamily: FONT_MONO }}>{r.online}/{r.total} online</span>
+                  </div>
+                  <div style={{ height: 6, borderRadius: 4, background: token.colorFillTertiary }}>
+                    <div style={{ height: '100%', width: `${r.pct}%`, borderRadius: 4, background: r.pct >= 95 ? token.colorSuccess : r.pct >= 80 ? token.colorWarning : token.colorError }} />
+                  </div>
                 </div>
-                <div style={{ height: 6, borderRadius: 4, background: token.colorFillTertiary }}>
-                  <div style={{ height: '100%', width: `${r.pct}%`, borderRadius: 4, background: r.pct >= 95 ? token.colorSuccess : r.pct >= 80 ? token.colorWarning : token.colorError }} />
-                </div>
-              </div>
-            ))}
+              ))}
           </Card>
         </Col>
       </Row>

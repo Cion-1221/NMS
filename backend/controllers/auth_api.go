@@ -93,15 +93,22 @@ func buildUserInfo(user *models.SysUser, isAdmin bool) gin.H {
 	}
 }
 
-// issueRefreshToken 在 DB 中创建新的 Refresh Token 记录并返回 rawToken
-func issueRefreshToken(db *gorm.DB, userID uint, days int) (string, error) {
+// issueRefreshToken 在 DB 中创建新的 Refresh Token 记录并返回 rawToken。
+// 顺带记录本次签发的客户端 IP / User-Agent，供管理端会话列表展示与单会话吊销。
+func issueRefreshToken(db *gorm.DB, userID uint, days int, c *gin.Context) (string, error) {
 	raw, hashed, err := generateRefreshToken()
 	if err != nil {
 		return "", err
 	}
+	ua := c.Request.UserAgent()
+	if len(ua) > 255 {
+		ua = ua[:255]
+	}
 	rt := models.SysRefreshToken{
 		UserID:    userID,
 		TokenHash: hashed,
+		CreatedIP: c.ClientIP(),
+		UserAgent: ua,
 		ExpiresAt: time.Now().Add(time.Duration(days) * 24 * time.Hour),
 	}
 	if err := db.Create(&rt).Error; err != nil {
@@ -177,7 +184,7 @@ func Login(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			return
 		}
 
-		refreshToken, err := issueRefreshToken(db, user.ID, cfg.RefreshTokenDays)
+		refreshToken, err := issueRefreshToken(db, user.ID, cfg.RefreshTokenDays, c)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Refresh Token 生成失败", "code": "server_error"})
 			return
@@ -234,7 +241,7 @@ func Refresh(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			return
 		}
 
-		newRefreshToken, err := issueRefreshToken(db, user.ID, cfg.RefreshTokenDays)
+		newRefreshToken, err := issueRefreshToken(db, user.ID, cfg.RefreshTokenDays, c)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Refresh Token 签发失败", "code": "server_error"})
 			return
@@ -320,7 +327,7 @@ func ChangePassword(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			return
 		}
 
-		newRefreshToken, err := issueRefreshToken(db, user.ID, cfg.RefreshTokenDays)
+		newRefreshToken, err := issueRefreshToken(db, user.ID, cfg.RefreshTokenDays, c)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Refresh Token 签发失败", "code": "server_error"})
 			return
@@ -429,8 +436,10 @@ func RegisterAuthRoutes(r *gin.Engine, db *gorm.DB, cfg AuthConfig) {
 	auth := r.Group("/api/v1/auth")
 
 	// ── 无需 JWT ──────────────────────────────────────────────────
-	auth.POST("/login", Login(db, cfg))
-	auth.POST("/refresh", Refresh(db, cfg))
+	// 按 IP 限速是防爆破锁定之外的粗粒度外层护栏：锁定按"用户名+IP"计失败次数，
+	// 挡不住同一 IP 喷洒大量不同用户名；refresh 无锁定机制，全靠这里兜底
+	auth.POST("/login", middleware.RateLimit(30, time.Minute), Login(db, cfg))
+	auth.POST("/refresh", middleware.RateLimit(60, time.Minute), Refresh(db, cfg))
 
 	// ── 需要 JWT（change-password 在 must_change_password 状态下也被放行）──
 	auth.Use(authMW)

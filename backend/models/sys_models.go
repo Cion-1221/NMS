@@ -97,10 +97,15 @@ type SysSetting struct {
 
 func (SysSetting) TableName() string { return "sys_settings" }
 
+// SysRefreshToken 一行即一个"活跃会话"。Refresh 旋转会删旧行建新行，因此
+// CreatedAt/CreatedIP/UserAgent 反映的是该会话最近一次签发（登录或续期）时的
+// 客户端信息——对管理端的会话列表而言，这正是"最近活跃"语义。
 type SysRefreshToken struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
 	UserID    uint      `gorm:"not null;index" json:"user_id"`
 	TokenHash string    `gorm:"type:varchar(64);uniqueIndex;not null" json:"-"`
+	CreatedIP string    `gorm:"type:varchar(100)" json:"created_ip"`
+	UserAgent string    `gorm:"type:varchar(255)" json:"user_agent"`
 	ExpiresAt time.Time `gorm:"not null;index" json:"expires_at"`
 	CreatedAt time.Time `json:"created_at"`
 }

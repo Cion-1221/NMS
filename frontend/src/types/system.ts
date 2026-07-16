@@ -21,6 +21,22 @@ export interface SysUser {
   updated_at: string;
 }
 
+/** 单个活跃会话（= 一行未过期 Refresh Token）— 对应 GET /system/users/:id/sessions。
+ *  Token 旋转会重建行，created_* 反映会话最近一次登录/续期时的客户端信息。 */
+export interface UserSession {
+  id: number;
+  user_id: number;
+  created_ip: string;
+  user_agent: string;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface UserSessionListResp {
+  username: string;
+  items: UserSession[];
+}
+
 export interface CreateUserReq {
   username: string;
   password: string;

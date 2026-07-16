@@ -5,6 +5,7 @@ import {
   CreateGroupReq, UpdateGroupReq,
   SecuritySettings, LockoutListResp,
   SessionPolicy, SysAuditLogListResp,
+  UserSessionListResp,
 } from '../types/system';
 
 // ── 用户管理 ──────────────────────────────────────────────────────────────────
@@ -23,6 +24,14 @@ export const deleteUser = (id: number) =>
 // 吊销用户全部 Refresh Token（会话在当前 Access Token 到期后无法续期）
 export const forceLogoutUser = (id: number) =>
   client.post<{ revoked: number }>(`/system/users/${id}/force-logout`);
+
+// 目标用户的活跃会话列表（IP / UA / 签发与到期时间）
+export const listUserSessions = (id: number) =>
+  client.get<UserSessionListResp>(`/system/users/${id}/sessions`);
+
+// 吊销单个会话（该会话无法续期；存量 Access Token 到期前仍可用）
+export const revokeUserSession = (id: number, sessionId: number) =>
+  client.delete(`/system/users/${id}/sessions/${sessionId}`);
 
 // ── 用户组管理 ─────────────────────────────────────────────────────────────────
 export const listGroups = () =>

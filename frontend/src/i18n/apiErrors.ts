@@ -17,6 +17,7 @@ const apiErrors: Record<string, Record<Lang, string>> = {
   'server_error':      { en: 'Internal server error, please try again later', zh: '服务器内部错误，请稍后重试' },
   'not_found':         { en: 'Resource not found (it may have been deleted)', zh: '资源不存在（可能已被删除）' },
   'common.name_taken': { en: 'Name already exists, please choose another', zh: '名称已存在，请使用其他名称' },
+  'common.rate_limited': { en: 'Too many requests — please wait a moment and retry', zh: '请求过于频繁，请稍后再试' },
 
   // ── 认证 / 授权 ───────────────────────────────────────────────────────────
   'auth.invalid_credentials':  { en: 'Invalid username or password', zh: '用户名或密码错误' },

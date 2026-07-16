@@ -372,6 +372,64 @@ func ForceLogoutUser(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// ─── 会话管理（按 Refresh Token 粒度）─────────────────────────────────────────
+
+// ListUserSessions GET /api/v1/system/users/:id/sessions
+// 列出目标用户当前未过期的全部会话（= Refresh Token 行）。Token 旋转会重建行，
+// 因此 created_at/created_ip/user_agent 反映各会话最近一次登录或续期时的客户端信息。
+func ListUserSessions(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		targetID, ok := parseUserID(c)
+		if !ok {
+			return
+		}
+		var user models.SysUser
+		if err := db.First(&user, targetID).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在", "code": "not_found"})
+			return
+		}
+		var sessions []models.SysRefreshToken
+		db.Where("user_id = ? AND expires_at > ?", targetID, time.Now()).
+			Order("created_at desc").Find(&sessions)
+		c.JSON(http.StatusOK, gin.H{"username": user.Username, "items": sessions})
+	}
+}
+
+// RevokeUserSession DELETE /api/v1/system/users/:id/sessions/:sid
+// 吊销单个会话：删除对应 Refresh Token 行，该会话无法再续期。与 force-logout 的
+// 全量吊销同款取舍：存量 Access Token 在其有效期内仍然可用，不可提前作废。
+func RevokeUserSession(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		targetID, ok := parseUserID(c)
+		if !ok {
+			return
+		}
+		sid, err := strconv.ParseUint(c.Param("sid"), 10, 64)
+		if err != nil || sid == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的会话 ID", "code": "bad_request"})
+			return
+		}
+		var user models.SysUser
+		if err := db.First(&user, targetID).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在", "code": "not_found"})
+			return
+		}
+		// user_id 同时入条件：防止拿 A 用户的路由删 B 用户的会话
+		result := db.Where("id = ? AND user_id = ?", sid, targetID).Delete(&models.SysRefreshToken{})
+		if result.Error != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "操作失败", "code": "server_error"})
+			return
+		}
+		if result.RowsAffected == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "会话不存在（可能已过期或已被吊销）", "code": "not_found"})
+			return
+		}
+		writeSysAudit(db, getUsername(c), "revoke_session", "user", user.Username,
+			fmt.Sprintf("Revoked session #%d of user %q", sid, user.Username))
+		c.JSON(http.StatusOK, gin.H{"message": "success"})
+	}
+}
+
 // ─── 用户组管理 ───────────────────────────────────────────────────────────────
 
 // ListGroups GET /api/v1/system/groups
@@ -578,6 +636,8 @@ func RegisterSystemRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc) {
 		sys.PUT("/users/:id", UpdateUser(db))
 		sys.DELETE("/users/:id", DeleteUser(db))
 		sys.POST("/users/:id/force-logout", ForceLogoutUser(db))
+		sys.GET("/users/:id/sessions", ListUserSessions(db))
+		sys.DELETE("/users/:id/sessions/:sid", RevokeUserSession(db))
 
 		sys.GET("/groups", ListGroups(db))
 		sys.POST("/groups", CreateGroup(db))

@@ -430,8 +430,9 @@ func main() {
 		r.Use(slogGinMiddleware())
 	}
 
-	// 健康检查（无需认证）：探测数据库连通性，供 LB / 监控发现 DB 故障
-	r.GET("/api/health", func(c *gin.Context) {
+	// 健康检查（无需认证）：探测数据库连通性，供 LB / 监控发现 DB 故障。
+	// 限速防匿名端点被高频轰击放大 DB 压力——120 次/分钟/IP 足够覆盖 1s 间隔的探活
+	r.GET("/api/health", middleware.RateLimit(120, time.Minute), func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 		defer cancel()
 		if err := sqlDB.PingContext(ctx); err != nil {
