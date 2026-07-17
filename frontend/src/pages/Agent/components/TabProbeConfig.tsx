@@ -258,8 +258,13 @@ const TabProbeConfig: React.FC = () => {
               <Switch />
             </Form.Item>
           )}
-          <Form.Item label={t('agent.task.interval')} name="interval_seconds" rules={[{ required: true }]}>
-            <InputNumber min={1} addonAfter="s" style={{ width: '100%' }} />
+          {/* 10–86400s 与后端校验一致：无下限的 1s 任务会以每秒一行/目标的速度
+              写热表（meshping 下还要乘 N），上限一天已覆盖所有巡检场景 */}
+          <Form.Item
+            label={t('agent.task.interval')} name="interval_seconds"
+            rules={[{ required: true }, { type: 'number', min: 10, max: 86400 }]}
+          >
+            <InputNumber min={10} max={86400} addonAfter="s" style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item label={t('agent.task.scope')} name="scope" rules={[{ required: true }]}>
             <Select options={[

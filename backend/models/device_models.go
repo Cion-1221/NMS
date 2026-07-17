@@ -147,9 +147,13 @@ type DeviceSNMPState struct {
 	LatencyMs     *float64   `json:"latency_ms"`   // 最近一次成功采集的 SNMP 请求耗时
 	LastPollAt    *time.Time `gorm:"index" json:"last_poll_at"`
 	LastSuccessAt *time.Time `json:"last_success_at"`
-	LastError     string     `gorm:"type:varchar(500)" json:"last_error"`
-	SourceAgentID *string    `gorm:"column:source_agent_id;type:varchar(64)" json:"source_agent_id"` // agent 模式的采集来源，direct 为 NULL
-	UpdatedAt     time.Time  `json:"updated_at"`
+	// LastCollectedAt 已处理结论的采集时刻（applySNMPResult 的单调性依据）：Agent 上报
+	// 重试会把整批快照延迟几分钟重放，采集时刻不晚于此值的结论直接丢弃，防状态机倒退。
+	// 与 LastPollAt 语义不同——后者是"最近拿到结论的入库时刻"（watchdog 依据），不受重放影响。
+	LastCollectedAt *time.Time `json:"last_collected_at"`
+	LastError       string     `gorm:"type:varchar(500)" json:"last_error"`
+	SourceAgentID   *string    `gorm:"column:source_agent_id;type:varchar(64)" json:"source_agent_id"` // agent 模式的采集来源，direct 为 NULL
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 func (DeviceSNMPState) TableName() string { return "device_snmp_states" }

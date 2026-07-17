@@ -122,9 +122,19 @@ func (t *AgentTask) Targets() []string {
 //     DeleteProbeResultPair 的 (type, agent_id, target) 精确删除同样命中前缀。
 //   - reported_at 单列索引：overview 看板的时间窗聚合（WHERE reported_at >= ?，不带
 //     type 条件）与保留策略清理（reported_at < cutoff）使用。
+//   - idx_probe_dedup (agent_id, task_id, target, reported_at) 唯一索引：Agent 上报
+//     重试的幂等性依据——响应丢失时整批原样重发，靠它 + INSERT..ON DUPLICATE KEY
+//     静默跳过重复行。不写在 gorm tag 里：存量库可能已有完全重复的历史行，
+//     AutoMigrate 建唯一索引失败是致命错误；改由 EnsureProbeDedupIndex（启动后台）
+//     创建，失败自动清理重复行重试，最终失败仅告警降级（去重依赖索引，缺失时行为
+//     与旧版一致）。task_id 为 NULL 的行不受唯一约束（MySQL 语义），可接受。
 //   - Target 不再单独建索引（模糊搜索 LIKE '%..%' 本就用不上索引，精确匹配已由
 //     idx_probe_latest 覆盖）；AutoMigrate 不会删除既有索引，旧部署可手动
 //     `DROP INDEX idx_probe_results_target ON probe_results` 回收写放大。
+//
+// ReportedAt 是样本时间基准：新版 Agent 上报采集时刻 collected_at（unix 秒），
+// 缺失（旧版 Agent）时回退为入库时刻；明显异常（时钟漂移/超长积压）的样本被
+// 显式丢弃并计数返回，不落库——见 PostAgentResults / resolveCollectedAt。
 type ProbeResult struct {
 	ID         uint      `gorm:"primaryKey" json:"id"`
 	AgentID    string    `gorm:"type:varchar(64);not null;index;index:idx_probe_latest,priority:2" json:"agent_id"`

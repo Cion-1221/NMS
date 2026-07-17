@@ -192,7 +192,10 @@ type snmpObservation struct {
 //     不触碰 devices.updated_at（该字段语义保留给"用户配置修改时间"），也避免每个
 //     采集周期都产生一次无效 UPDATE。polling_mode='none' 守卫防御停用后迟到的结果
 //     把状态写回去（幽灵状态）。
-func applySNMPResult(db *gorm.DB, deviceID uint, sourceAgentID *string, obs snmpObservation) {
+//
+// 返回值 stale=true 表示结论被单调性守卫丢弃（乱序/重放，未做任何处理），供
+// Agent 上报端点单独计数；写库失败等内部错误不算 stale（已尝试处理，错误落日志）。
+func applySNMPResult(db *gorm.DB, deviceID uint, sourceAgentID *string, obs snmpObservation) (stale bool) {
 	now := time.Now()
 	// 采集时刻（速率换算/时序时间轴的基准）；缺失或明显异常（未来 5 分钟以上、
 	// 过去 1 小时以上——Agent 时钟漂移或积压陈旧数据）时回退为入库时刻
@@ -201,15 +204,30 @@ func applySNMPResult(db *gorm.DB, deviceID uint, sourceAgentID *string, obs snmp
 		at = now
 	}
 
-	// 重启检测需要旧值，必须在 upsert 之前读
-	var prev struct{ UptimeTicks *int64 }
+	// 重启检测需要旧 uptime，单调性守卫需要旧采集时刻，都必须在 upsert 之前读
+	var prev struct {
+		UptimeTicks     *int64
+		LastCollectedAt *time.Time
+	}
 	prevErr := db.Model(&models.DeviceSNMPState{}).
-		Select("uptime_ticks").Where("device_id = ?", deviceID).Take(&prev).Error
+		Select("uptime_ticks, last_collected_at").Where("device_id = ?", deviceID).Take(&prev).Error
 
-	state := models.DeviceSNMPState{DeviceID: deviceID, LastPollAt: &now, UpdatedAt: now}
+	// 单调性守卫（仅对携带采集时刻的上报生效，direct poller 的 CollectedAt 为零值
+	// 天然跳过）：Agent 上报重试会把整批快照延迟几分钟原样重放，期间可能已有更新的
+	// 结论落库——采集时刻不晚于已处理值的结论直接丢弃，防止状态机/快照倒退。
+	// 相等即丢弃（重复重放的典型特征）；被钳制的 at=now 单调递增，不会误伤。
+	if !obs.CollectedAt.IsZero() && prevErr == nil &&
+		prev.LastCollectedAt != nil && !at.After(*prev.LastCollectedAt) {
+		slog.Debug("丢弃乱序/重放的 SNMP 结论", "device_id", deviceID,
+			"collected_at", at, "last_collected_at", *prev.LastCollectedAt)
+		return true
+	}
+
+	state := models.DeviceSNMPState{DeviceID: deviceID, LastPollAt: &now, LastCollectedAt: &at, UpdatedAt: now}
 	assign := map[string]interface{}{
-		"last_poll_at": now,
-		"updated_at":   now,
+		"last_poll_at":      now,
+		"last_collected_at": at,
+		"updated_at":        now,
 	}
 	if sourceAgentID != nil {
 		state.SourceAgentID = sourceAgentID
@@ -390,6 +408,7 @@ func applySNMPResult(db *gorm.DB, deviceID uint, sourceAgentID *string, obs snmp
 		Where("id = ? AND polling_mode <> 'none' AND (oper_status <> ? OR oper_reason <> ?)",
 			deviceID, newStatus, newReason).
 		UpdateColumns(map[string]interface{}{"oper_status": newStatus, "oper_reason": newReason})
+	return false
 }
 
 // classifySNMPError 把 gosnmp 错误文本归类为 oper_reason。

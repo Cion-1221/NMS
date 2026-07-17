@@ -530,8 +530,8 @@ Let's Encrypt 证书与 Agent PKI 的内置 CA 是两套完全独立的体系，
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/v1/agent-sync/tasks` | 拉取任务（即心跳）；含 source_ip 绑定、OTA update、合成的 snmp_poll |
-| POST | `/api/v1/agent-sync/results` | 批量上报探测结果 |
-| POST | `/api/v1/agent-sync/snmp-results` | 批量回传 SNMP 采集结论（校验设备归属） |
+| POST | `/api/v1/agent-sync/results` | 批量上报探测结果。样本时间取 Agent 采集时刻 `collected_at`（unix 秒；旧版 Agent 缺失时回退入库时刻）；超窗样本（未来 5 分钟以上 / 过去 1 小时以上，时钟漂移或超长积压）显式丢弃并以 `dropped` 计数返回；按唯一键 `(agent_id, task_id, target, reported_at)` 幂等去重（`deduped` 计数）——上报重试重放整批是安全的 |
+| POST | `/api/v1/agent-sync/snmp-results` | 批量回传 SNMP 采集结论（校验设备归属）；按设备级采集时刻做单调性检查，重试重放的乱序旧快照直接丢弃，状态机不会倒退 |
 | POST | `/api/v1/agent-sync/renew-cert` | 证书自助续期 |
 | GET | `/api/v1/agent-sync/my-ip` | 返回 Server 所见来源 IP（tcp4/tcp6 各调一次做双栈探测） |
 | GET | `/api/v1/agent-sync/binary/:id` | 流式下载 Agent 二进制 |

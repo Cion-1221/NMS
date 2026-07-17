@@ -442,7 +442,7 @@ func CreateAgentTasks(db *gorm.DB) gin.HandlerFunc {
 			Name            string   `json:"name" binding:"required"`
 			Types           []string `json:"types" binding:"required,min=1"`
 			TargetsRaw      string   `json:"targets_raw"`
-			IntervalSeconds int      `json:"interval_seconds" binding:"required,min=1"`
+			IntervalSeconds int      `json:"interval_seconds" binding:"required,min=10,max=86400"`
 			Scope           string   `json:"scope" binding:"required"`
 			GroupID         *uint    `json:"group_id"`
 			AgentID         *string  `json:"agent_id"`
@@ -514,7 +514,7 @@ func UpdateAgentTask(db *gorm.DB) gin.HandlerFunc {
 			Name            string  `json:"name" binding:"required"`
 			Type            string  `json:"type" binding:"required"`
 			TargetsRaw      string  `json:"targets_raw"`
-			IntervalSeconds int     `json:"interval_seconds" binding:"required,min=1"`
+			IntervalSeconds int     `json:"interval_seconds" binding:"required,min=10,max=86400"`
 			Scope           string  `json:"scope" binding:"required"`
 			GroupID         *uint   `json:"group_id"`
 			AgentID         *string `json:"agent_id"`

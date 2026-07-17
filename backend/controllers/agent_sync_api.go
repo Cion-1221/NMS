@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // onlineThreshold：超过该时长未通过 mTLS 调用刷新心跳的 Agent 不再视为"存活"，
@@ -300,9 +301,38 @@ type probeResultIn struct {
 	Success   bool     `json:"success"`
 	LatencyMs *float64 `json:"latency_ms"`
 	Detail    string   `json:"detail"`
+	// CollectedAt（unix 秒）Agent 侧的探测执行时刻。旧版 Agent 不发（解析为 0），
+	// 回退用入库时刻——与 snmpResultIn.CollectedAt 同一约定。
+	CollectedAt int64 `json:"collected_at"`
+}
+
+// resolveCollectedAt 把 Agent 上报的采集时刻转换为样本时间基准：
+//   - 0（旧版 Agent 不发）→ 回退入库时刻，ok=true（旧版无重试机制，不影响去重）；
+//   - 超窗（未来 5 分钟以上 / 过去 1 小时以上——时钟漂移或超长积压回填）→ ok=false，
+//     调用方显式丢弃该样本并计数。不能钳制到入库时刻：同批同序列的多个超窗样本会
+//     共享同一时刻撞去重唯一键静默丢行，且重试重放时键值每次不同、去重彻底失效；
+//     显式丢弃 + 返回 dropped 计数更诚实——它本身就是"该节点时钟/积压需要排查"的
+//     诊断信号。时间窗口与 applySNMPResult 对 SNMP 结论的钳制规则一致（SNMP 通道
+//     是快照语义，钳制不丢真相，故保持钳制不丢弃）。
+func resolveCollectedAt(sec int64, now time.Time) (time.Time, bool) {
+	if sec <= 0 {
+		return now, true
+	}
+	at := time.Unix(sec, 0)
+	if at.After(now.Add(5*time.Minute)) || at.Before(now.Add(-time.Hour)) {
+		return time.Time{}, false
+	}
+	return at, true
 }
 
 // PostAgentResults POST /api/v1/agent-sync/results —— 批量写入探测结果。
+//
+// 幂等性：Agent 端有上报重试——服务端已成功入库但响应未送达（超时/断连）时，
+// 整批会被原样重发。INSERT .. ON DUPLICATE KEY UPDATE id=id（gorm OnConflict
+// DoNothing 在 MySQL 上的展开）配合唯一索引 idx_probe_dedup
+// (agent_id, task_id, target, reported_at) 静默跳过重复行；reported_at 取自
+// Agent 的 collected_at，重放批次的键值逐行相同，天然命中去重。
+// 索引缺失时（见 EnsureProbeDedupIndex 的降级路径）该子句无害，行为退回旧版。
 func PostAgentResults(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		agent := middleware.GetAgent(c)
@@ -320,20 +350,81 @@ func PostAgentResults(db *gorm.DB) gin.HandlerFunc {
 
 		now := time.Now()
 		rows := make([]models.ProbeResult, 0, len(req.Results))
+		var dropped int64
 		for _, r := range req.Results {
+			at, ok := resolveCollectedAt(r.CollectedAt, now)
+			if !ok {
+				dropped++
+				continue
+			}
 			rows = append(rows, models.ProbeResult{
 				AgentID: agent.AgentID, TaskID: r.TaskID, Type: r.Type, Target: r.Target,
-				Success: r.Success, LatencyMs: r.LatencyMs, Detail: r.Detail, ReportedAt: now,
+				Success: r.Success, LatencyMs: r.LatencyMs, Detail: r.Detail,
+				ReportedAt: at,
 			})
 		}
+		if dropped > 0 {
+			slog.Warn("探测结果丢弃超窗样本（节点时钟漂移或积压超过 1 小时，请排查该 Agent）",
+				"agent_id", agent.AgentID, "dropped", dropped, "received", len(req.Results))
+		}
+		var deduped int64
 		if len(rows) > 0 {
-			if err := db.Create(&rows).Error; err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "写入结果失败: " + err.Error()})
+			result := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows)
+			if result.Error != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "写入结果失败: " + result.Error.Error()})
 				return
 			}
+			// RowsAffected = 实际插入行数（重复行计 0）；差值即被去重的重放行
+			if deduped = int64(len(rows)) - result.RowsAffected; deduped > 0 {
+				slog.Info("探测结果去重（重试重放）", "agent_id", agent.AgentID,
+					"received", len(req.Results), "deduped", deduped)
+			}
 		}
-		c.JSON(http.StatusOK, gin.H{"received": len(rows)})
+		c.JSON(http.StatusOK, gin.H{"received": len(req.Results), "deduped": deduped, "dropped": dropped})
 	}
+}
+
+// EnsureProbeDedupIndex 确保 probe_results 上存在幂等去重唯一索引 idx_probe_dedup
+// （详见 PostAgentResults）。不通过模型 tag 交给 AutoMigrate：存量库可能已有完全
+// 重复的历史行（旧版同批结果共享同一入库时刻，重复 Target 行会撞键），AutoMigrate
+// 建索引失败是致命错误；这里失败时先清理重复行再重试一次，最终失败仅告警降级——
+// 去重能力依赖该索引，缺失时入库行为与旧版一致（可能出现偶发重复点）。
+// 大表建索引/清重可能耗时数分钟，调用方应放到后台 goroutine，不阻塞启动。
+func EnsureProbeDedupIndex(db *gorm.DB) {
+	var n int64
+	db.Raw(`SELECT COUNT(*) FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'probe_results' AND INDEX_NAME = 'idx_probe_dedup'`).
+		Scan(&n)
+	if n > 0 {
+		return
+	}
+	const create = "CREATE UNIQUE INDEX idx_probe_dedup ON probe_results (agent_id, task_id, target, reported_at)"
+	if err := db.Exec(create).Error; err == nil {
+		slog.Info("probe_results 幂等去重索引已创建", "index", "idx_probe_dedup")
+		return
+	}
+	// 建索引失败最常见原因：历史数据存在完全重复的行。只删除键值完全相同的多余行
+	//（保留 id 最小的一条）；task_id 为 NULL 的行不受唯一约束，不清理。
+	slog.Warn("创建 idx_probe_dedup 失败，尝试清理历史重复行后重试（大表可能耗时较长）")
+	del := db.Exec(`DELETE t1 FROM probe_results t1 JOIN probe_results t2
+		ON t1.agent_id = t2.agent_id AND t1.task_id = t2.task_id
+		AND t1.target = t2.target AND t1.reported_at = t2.reported_at
+		AND t1.id > t2.id
+		WHERE t1.task_id IS NOT NULL`)
+	if del.Error != nil {
+		slog.Warn("清理 probe_results 历史重复行失败，去重索引未启用（入库降级为可能出现偶发重复点）",
+			"err", del.Error)
+		return
+	}
+	if del.RowsAffected > 0 {
+		slog.Info("已清理 probe_results 历史重复行", "deleted", del.RowsAffected)
+	}
+	if err := db.Exec(create).Error; err != nil {
+		slog.Warn("重试创建 idx_probe_dedup 仍失败，去重索引未启用（入库降级为可能出现偶发重复点）",
+			"err", err)
+		return
+	}
+	slog.Info("probe_results 幂等去重索引已创建", "index", "idx_probe_dedup")
 }
 
 // ── SNMP 采集结果上报 ────────────────────────────────────────────────────────
@@ -381,7 +472,7 @@ func PostAgentSNMPResults(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		accepted, rejected := 0, 0
+		accepted, rejected, stale := 0, 0, 0
 		for _, r := range req.Results {
 			var device models.Device
 			err := db.Select("id").
@@ -410,14 +501,22 @@ func PostAgentSNMPResults(db *gorm.DB) gin.HandlerFunc {
 			if r.CollectedAt > 0 {
 				obs.CollectedAt = time.Unix(r.CollectedAt, 0)
 			}
-			applySNMPResult(db, r.DeviceID, &agent.AgentID, obs)
-			accepted++
+			// 被单调性守卫丢弃的乱序/重放结论单独计数（stale），与 accepted 区分
+			if applySNMPResult(db, r.DeviceID, &agent.AgentID, obs) {
+				stale++
+			} else {
+				accepted++
+			}
 		}
 		if rejected > 0 {
 			slog.Warn("SNMP 结果部分被拒（设备未指派给该 Agent 或配置已变更）",
 				"agent_id", agent.AgentID, "accepted", accepted, "rejected", rejected)
 		}
-		c.JSON(http.StatusOK, gin.H{"received": accepted, "rejected": rejected})
+		if stale > 0 {
+			slog.Info("SNMP 结果丢弃乱序/重放的旧快照", "agent_id", agent.AgentID,
+				"accepted", accepted, "stale", stale)
+		}
+		c.JSON(http.StatusOK, gin.H{"received": accepted, "rejected": rejected, "stale": stale})
 	}
 }
 

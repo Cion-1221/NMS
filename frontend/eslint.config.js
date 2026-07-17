@@ -1,5 +1,7 @@
-// ESLint 9 flat config：TypeScript 推荐规则 + React Hooks 检查。
+// ESLint flat config：TypeScript 推荐规则 + React Hooks 检查。
 // 运行：npm run lint（CI 不阻塞构建；本地提交前自查用）。
+// 版本在 package.json 中精确钉死（本机不跑 npm install / 无 lockfile 更新，
+// 构建统一走 GitHub Actions——精确版本保证 CI 每次解析结果一致）。
 import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
 

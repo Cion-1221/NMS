@@ -315,6 +315,11 @@ func main() {
 	// 写入初始化种子数据（幂等）
 	controllers.SeedDatabase(db)
 
+	// probe_results 幂等去重唯一索引（Agent 上报重试的去重依据）。后台执行：
+	// 大表建索引/清理历史重复行可能耗时数分钟，不阻塞启动；索引就绪前入库
+	// 行为与旧版一致（详见 EnsureProbeDedupIndex）。
+	go controllers.EnsureProbeDedupIndex(db)
+
 	// 确保 Agent 二进制存储目录存在
 	releasesDir := filepath.Clean(cfg.AgentPKI.ReleasesDir)
 	if err := os.MkdirAll(releasesDir, 0755); err != nil {
