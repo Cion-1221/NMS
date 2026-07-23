@@ -325,13 +325,20 @@ func resolveCollectedAt(sec int64, now time.Time) (time.Time, bool) {
 	return at, true
 }
 
+// probeResultInsertChunk：单次 INSERT 语句携带的最大行数。一次性把上千行（尤其
+// mtr/meshmtr 的 Detail 是整段 hop 列表 JSON，单行可到数 KB）拼进一条 SQL，很容易
+// 超过 MariaDB/MySQL 的 max_allowed_packet（常见默认 4M~16M），服务端会整条拒绝且
+// 从不重试；对 Agent 而言这与请求失败无异，会无限重发同一批却永远无法写入——分片
+// 后单条语句体积可控，且各分片独立提交，即使某个分片仍然超限，其余分片也不受影响。
+const probeResultInsertChunk = 200
+
 // PostAgentResults POST /api/v1/agent-sync/results —— 批量写入探测结果。
 //
-// 幂等性：Agent 端有上报重试——服务端已成功入库但响应未送达（超时/断连）时，
-// 整批会被原样重发。INSERT .. ON DUPLICATE KEY UPDATE id=id（gorm OnConflict
-// DoNothing 在 MySQL 上的展开）配合唯一索引 idx_probe_dedup
-// (agent_id, task_id, target, reported_at) 静默跳过重复行；reported_at 取自
-// Agent 的 collected_at，重放批次的键值逐行相同，天然命中去重。
+// 幂等性：Agent 端有上报重试——服务端已成功入库但响应未送达（超时/断连），或本次
+// 请求部分分片失败导致最终仍返回 500 时，整批会被原样重发。INSERT .. ON DUPLICATE
+// KEY UPDATE id=id（gorm OnConflict DoNothing 在 MySQL 上的展开）配合唯一索引
+// idx_probe_dedup (agent_id, task_id, target, reported_at) 静默跳过重复行；
+// reported_at 取自 Agent 的 collected_at，重放批次的键值逐行相同，天然命中去重。
 // 索引缺失时（见 EnsureProbeDedupIndex 的降级路径）该子句无害，行为退回旧版。
 func PostAgentResults(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -367,18 +374,39 @@ func PostAgentResults(db *gorm.DB) gin.HandlerFunc {
 			slog.Warn("探测结果丢弃超窗样本（节点时钟漂移或积压超过 1 小时，请排查该 Agent）",
 				"agent_id", agent.AgentID, "dropped", dropped, "received", len(req.Results))
 		}
+
+		// 分片写入：单个分片失败不阻断其余分片，最大化本次请求能落库的数据量；
+		// 只要有任一分片失败，最终仍对 Agent 返回 500——已成功的分片凭幂等索引
+		// 保证重放安全，不会被下次重试重复插入。
 		var deduped int64
-		if len(rows) > 0 {
-			result := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows)
+		var insertErr error
+		for i := 0; i < len(rows); i += probeResultInsertChunk {
+			end := i + probeResultInsertChunk
+			if end > len(rows) {
+				end = len(rows)
+			}
+			chunk := rows[i:end]
+			result := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&chunk)
 			if result.Error != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "写入结果失败: " + result.Error.Error()})
-				return
+				// 之前这里只把报错塞进了返回给 Agent 的响应体——Agent 的 reporter
+				// 只看状态码、从不读取响应体，真实报错文本因此从未落到任何日志里。
+				slog.Error("探测结果写入失败", "agent_id", agent.AgentID,
+					"chunk_offset", i, "chunk_size", len(chunk), "err", result.Error)
+				insertErr = result.Error
+				continue
 			}
 			// RowsAffected = 实际插入行数（重复行计 0）；差值即被去重的重放行
-			if deduped = int64(len(rows)) - result.RowsAffected; deduped > 0 {
-				slog.Info("探测结果去重（重试重放）", "agent_id", agent.AgentID,
-					"received", len(req.Results), "deduped", deduped)
+			if d := int64(len(chunk)) - result.RowsAffected; d > 0 {
+				deduped += d
 			}
+		}
+		if insertErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "写入结果失败: " + insertErr.Error()})
+			return
+		}
+		if deduped > 0 {
+			slog.Info("探测结果去重（重试重放）", "agent_id", agent.AgentID,
+				"received", len(req.Results), "deduped", deduped)
 		}
 		c.JSON(http.StatusOK, gin.H{"received": len(req.Results), "deduped": deduped, "dropped": dropped})
 	}

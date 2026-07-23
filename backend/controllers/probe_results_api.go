@@ -247,6 +247,47 @@ func DeleteProbeResultPair(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// probeResultsPurgeChunk：单次 DELETE 语句最多删除的行数。probe_results 是持续
+// 高频写入的热表，一条不设上限的 DELETE 在千万级表上要跑几十秒甚至更久，期间
+// 持有的行锁/gap 锁会跟并发的 Agent 上报 INSERT 互相等待，轻则把整个请求拖到
+// 客户端超时（前端显示"请求失败"，其实后端仍在正常执行），重则直接死锁
+// （MySQL/MariaDB 错误 1213）。分片删除让每个事务尽量短，分片之间主动让出一小段
+// 时间片给并发事务insert，大幅降低这两种情况的概率。
+const probeResultsPurgeChunk = 5000
+
+// deleteProbeResultsChunked 按 probeResultsPurgeChunk 分片删除 probe_results，
+// 命中死锁（MySQL/MariaDB 1213，官方文档就是建议应用层捕获后重试）时退避重试
+// 几次；其余错误直接返回，不做无意义重试。cond 为空字符串表示删除全表（仍走
+// 分片，不需要 AllowGlobalUpdate）。
+func deleteProbeResultsChunked(db *gorm.DB, cond string, args ...interface{}) (int64, error) {
+	const maxRetries = 5
+	var total int64
+	for {
+		q := db
+		if cond != "" {
+			q = q.Where(cond, args...)
+		}
+		var result *gorm.DB
+		var lastErr error
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			result = q.Limit(probeResultsPurgeChunk).Delete(&models.ProbeResult{})
+			lastErr = result.Error
+			if lastErr == nil || !strings.Contains(lastErr.Error(), "Deadlock found") {
+				break
+			}
+			time.Sleep(time.Duration(200*(attempt+1)) * time.Millisecond)
+		}
+		if lastErr != nil {
+			return total, lastErr
+		}
+		total += result.RowsAffected
+		if result.RowsAffected < probeResultsPurgeChunk {
+			return total, nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // PurgeProbeResults DELETE /api/v1/probe-results?days=N —— 手动清理探测结果（管理员专用）。
 // days=0 清空全部；days>0 清理 N 天前的数据。与 PurgeAuditLogs / PurgeDeviceAuditLogs 同款语义。
 func PurgeProbeResults(db *gorm.DB) gin.HandlerFunc {
@@ -257,20 +298,21 @@ func PurgeProbeResults(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 days 参数（0 = 全部清空，正整数 = 清理 N 天前的数据）", "code": "bad_request"})
 			return
 		}
-		var result *gorm.DB
+		var deleted int64
+		var delErr error
 		if days == 0 {
-			result = db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.ProbeResult{})
+			deleted, delErr = deleteProbeResultsChunked(db, "")
 		} else {
 			cutoff := time.Now().AddDate(0, 0, -days)
-			result = db.Where("reported_at < ?", cutoff).Delete(&models.ProbeResult{})
+			deleted, delErr = deleteProbeResultsChunked(db, "reported_at < ?", cutoff)
 		}
-		if result.Error != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "清理失败: " + result.Error.Error(), "code": "server_error"})
+		if delErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "清理失败: " + delErr.Error(), "code": "server_error"})
 			return
 		}
 		writeAgentAudit(db, getUsername(c), "purge_probe_results", "probe_results", "",
-			fmt.Sprintf("Purged probe results (days=%d, deleted=%d rows)", days, result.RowsAffected))
-		c.JSON(http.StatusOK, gin.H{"deleted": result.RowsAffected})
+			fmt.Sprintf("Purged probe results (days=%d, deleted=%d rows)", days, deleted))
+		c.JSON(http.StatusOK, gin.H{"deleted": deleted})
 	}
 }
 

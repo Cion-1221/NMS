@@ -74,6 +74,15 @@ type Config struct {
 			BucketMinutes int `mapstructure:"bucket_minutes"`
 			MaxAgeDays    int `mapstructure:"max_age_days"`
 		} `mapstructure:"probe_rollups"`
+		// 磁盘空间兜底：默认关闭——生产环境磁盘通常远大于测试/小型部署，常规每日
+		// 一次的保留任务已经够用。磁盘较小的部署（如 2026-07-23 事故里 9.2G 的
+		// 小型 VPS，几小时内就被 probe_results 打满导致 MariaDB 崩溃）建议开启：
+		// 高频检查可用空间，跌破阈值立即对 probe_results 做一次紧急清理。
+		ProbeDiskGuard struct {
+			Enabled              bool `mapstructure:"enabled"`
+			CheckIntervalMinutes int  `mapstructure:"check_interval_minutes"`
+			CriticalFreeMB       int  `mapstructure:"critical_free_mb"`
+		} `mapstructure:"probe_disk_guard"`
 	} `mapstructure:"audit"`
 	// ASN 查询：基于 CAIDA RouteViews + RIPE 数据的 IP→ASN 前缀匹配
 	ASNDB struct {
@@ -141,6 +150,12 @@ func loadConfig() (*Config, error) {
 	viper.SetDefault("audit.max_age_days", 180)
 	viper.SetDefault("audit.probe_results_max_age_days", 30)
 	viper.SetDefault("audit.path_results_max_age_days", 0)
+
+	// 磁盘空间兜底缺省值：默认关闭；开启后每 10 分钟检查一次，可用空间跌破
+	// 500MB 触发紧急清理
+	viper.SetDefault("audit.probe_disk_guard.enabled", false)
+	viper.SetDefault("audit.probe_disk_guard.check_interval_minutes", 10)
+	viper.SetDefault("audit.probe_disk_guard.critical_free_mb", 500)
 
 	// ASN DB 缺省值：功能默认关闭，开启后使用标准路径
 	viper.SetDefault("asndb.enabled", false)
@@ -354,6 +369,14 @@ func main() {
 	controllers.StartAuditRetention(db, retention)
 	// 探测结果降采样归档（Cacti RRA 风格，未配置归档层时不启动）
 	controllers.StartProbeRollups(db, retention)
+	// 磁盘空间兜底（默认关闭，见 audit.probe_disk_guard 注释）：常规保留任务 24
+	// 小时一次太慢，磁盘几小时内就能被打满（2026-07-23 事故），开启后高频检查、
+	// 跌破阈值立即紧急清理
+	controllers.StartDiskSpaceGuard(db, retention, controllers.DiskGuardConfig{
+		Enabled:              cfg.Audit.ProbeDiskGuard.Enabled,
+		CheckIntervalMinutes: cfg.Audit.ProbeDiskGuard.CheckIntervalMinutes,
+		CriticalFreeMB:       cfg.Audit.ProbeDiskGuard.CriticalFreeMB,
+	})
 
 	// SNMP 凭证静态加密（snmp.credentials_key 配置后启用；previous 供密钥轮换过渡）
 	secretBox, err := core.NewSecretBox(cfg.SNMP.CredentialsKey, cfg.SNMP.CredentialsKeyPrevious)

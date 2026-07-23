@@ -448,6 +448,7 @@ Let's Encrypt 证书与 Agent PKI 的内置 CA 是两套完全独立的体系，
 | | `probe_results_max_age_days` | 30 | 原始探测点保留；启用归档后建议缩至 14 |
 | | `path_results_max_age_days` | 0 | 路径类大 JSON 独立保留；0 = 跟随上项 |
 | | `probe_rollups` | 不启用 | 降采样归档层：推荐 5min/6月 + 30min/12月 + 2h/3年 + 1d/10年 |
+| | `probe_disk_guard.enabled` | false | 磁盘空间兜底：常规保留任务 24 小时一次太慢——2026-07-23 事故里 `probe_results` 几小时内就把小盘（9.2G）打满、MariaDB 因无法分配 InnoDB 临时表空间而崩溃。开启后按 `check_interval_minutes`（默认 10）高频检查可用磁盘空间，跌破 `critical_free_mb`（默认 500）立即对 `probe_results` 做一次比正常配置更激进（对半砍，但不低于归档层要求的最小天数）的紧急清理。生产环境磁盘通常远大于此量级，默认关闭；测试机/小型 VPS 建议开启 |
 | `snmp` | `enabled` | true | SNMP 总开关：关闭后不启动轮询器/看门狗、不下发 snmp_poll 任务 |
 | | `default_interval_seconds` | 60 | 快轮询默认间隔；设备表单可逐台覆盖（10–86400） |
 | | `inventory_every_n` | 10 | 每 N 次快轮询附带一次完整 system 组 |

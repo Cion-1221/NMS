@@ -82,6 +82,17 @@ audit:
   #   - bucket_minutes: 1440     # 1 天均值
   #     max_age_days: 3660       #   保留 10 年
 
+  # 磁盘空间兜底（整个块可省略，默认关闭）：常规保留任务 24 小时才跑一次，磁盘
+  # 较小的部署可能来不及反应（2026-07-23 事故：9.2G 小盘几小时内被 probe_results
+  # 打满，MariaDB 因无法分配 InnoDB 临时表空间而崩溃）。生产环境磁盘通常远大于
+  # 这个量级，默认不开启；测试机/小型 VPS 建议开启。
+  probe_disk_guard:
+    enabled: false
+    check_interval_minutes: 10   # 检查可用磁盘空间的频率
+    critical_free_mb: 500        # 可用空间低于此值（MB）触发对 probe_results 的紧急清理
+                                  # （比 probe_results_max_age_days 更激进，但不会砍破
+                                  # probe_rollups 归档层要求的最小原始点天数）
+
 # SNMP 设备采集（整个 snmp 块可省略，省略时使用下列默认值）
 # 设备在 Devices 页逐台开启：采集模式 Direct（Server 直连）或 Agent Proxy（探针代理）。
 # 采集内容为 RFC 1213 system 组（sysUpTime/sysName/sysDescr/sysLocation/sysContact），

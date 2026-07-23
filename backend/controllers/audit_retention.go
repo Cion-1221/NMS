@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"time"
 
+	"nms-backend/core"
 	"nms-backend/models"
 
 	"gorm.io/gorm"
@@ -87,22 +88,20 @@ func purgeExpiredProbeResults(db *gorm.DB, rc RetentionConfig) {
 		var scalarDeleted, pathDeleted int64
 		if probeDays > 0 {
 			cutoff := time.Now().AddDate(0, 0, -probeDays)
-			res := db.Where("reported_at < ? AND type NOT IN ?", cutoff, pathProbeTypes).
-				Delete(&models.ProbeResult{})
-			if res.Error != nil {
-				slog.Error("探测结果自动清理失败（标量类）", "err", res.Error)
+			deleted, err := deleteProbeResultsChunked(db, "reported_at < ? AND type NOT IN ?", cutoff, pathProbeTypes)
+			if err != nil {
+				slog.Error("探测结果自动清理失败（标量类）", "err", err)
 				return
 			}
-			scalarDeleted = res.RowsAffected
+			scalarDeleted = deleted
 		}
 		pathCutoff := time.Now().AddDate(0, 0, -pathDays)
-		res := db.Where("reported_at < ? AND type IN ?", pathCutoff, pathProbeTypes).
-			Delete(&models.ProbeResult{})
-		if res.Error != nil {
-			slog.Error("探测结果自动清理失败（路径类）", "err", res.Error)
+		deleted, err := deleteProbeResultsChunked(db, "reported_at < ? AND type IN ?", pathCutoff, pathProbeTypes)
+		if err != nil {
+			slog.Error("探测结果自动清理失败（路径类）", "err", err)
 			return
 		}
-		pathDeleted = res.RowsAffected
+		pathDeleted = deleted
 		if scalarDeleted > 0 || pathDeleted > 0 {
 			slog.Info("探测结果自动清理完成",
 				"max_age_days", probeDays, "path_max_age_days", pathDays,
@@ -115,12 +114,92 @@ func purgeExpiredProbeResults(db *gorm.DB, rc RetentionConfig) {
 		return
 	}
 	cutoff := time.Now().AddDate(0, 0, -probeDays)
-	result := db.Where("reported_at < ?", cutoff).Delete(&models.ProbeResult{})
-	if result.Error != nil {
-		slog.Error("探测结果自动清理失败", "err", result.Error)
+	deleted, err := deleteProbeResultsChunked(db, "reported_at < ?", cutoff)
+	if err != nil {
+		slog.Error("探测结果自动清理失败", "err", err)
 		return
 	}
-	if result.RowsAffected > 0 {
-		slog.Info("探测结果自动清理完成", "max_age_days", probeDays, "deleted", result.RowsAffected)
+	if deleted > 0 {
+		slog.Info("探测结果自动清理完成", "max_age_days", probeDays, "deleted", deleted)
 	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 磁盘空间兜底（默认关闭，audit.probe_disk_guard.enabled 开启）：2026-07-23
+// 事故复盘——常规保留任务 24 小时才跑一次，那次事故里 probe_results 从有余量到
+// 把磁盘（9.2G 小盘）打满、MariaDB 因无法分配 InnoDB 临时表空间而崩溃，只花了
+// 几个小时，24 小时的检查周期完全来不及反应。这里加一个更高频、更激进的独立
+// 兜底：定期查可用磁盘空间，跌破阈值时立即对 probe_results 做一次比正常配置
+// 狠得多的紧急清理，不等下一次常规周期。生产环境磁盘通常远大于本例，默认关闭；
+// 磁盘较小的部署（测试机/小型 VPS）建议开启。
+// ─────────────────────────────────────────────────────────────────────────────
+
+// diskSpaceCheckPath：磁盘检查的探针路径，用进程当前工作目录。多数部署（包括
+// 2026-07-23 事故所在的单分区小盘）里这与 MariaDB 数据目录同一分区；如果你的
+// 部署把数据库放在独立挂载点，这个检查覆盖不到那个分区，需要另行监控。
+const diskSpaceCheckPath = "."
+
+// DiskGuardConfig 对应 config.yaml 的 audit.probe_disk_guard 块。
+type DiskGuardConfig struct {
+	Enabled              bool
+	CheckIntervalMinutes int
+	CriticalFreeMB       int
+}
+
+// StartDiskSpaceGuard 启动磁盘空间守护 goroutine（dg.Enabled=false 时直接跳过，
+// 不启动 goroutine）：立即检查一次，之后每 dg.CheckIntervalMinutes 检查一次；
+// 可用空间跌破 dg.CriticalFreeMB 时对 probe_results 执行一次紧急清理。紧急清理
+// 比 rc.ProbeResultsMaxAgeDays 更激进（对半砍），但不会砍破归档层要求的最小
+// 原始点保留天数（否则会破坏 rollup 聚合前原始点必须存在的前提，见
+// ValidateRetentionConfig）。当前平台不支持磁盘查询时（FreeDiskBytes 返回
+// ok=false）静默跳过，不影响其他功能。
+func StartDiskSpaceGuard(db *gorm.DB, rc RetentionConfig, dg DiskGuardConfig) {
+	if !dg.Enabled {
+		slog.Info("磁盘空间兜底未启用 (audit.probe_disk_guard.enabled = false)")
+		return
+	}
+	criticalBytes := uint64(dg.CriticalFreeMB) * 1024 * 1024
+	interval := time.Duration(dg.CheckIntervalMinutes) * time.Minute
+	slog.Info("磁盘空间兜底已启用", "check_interval_minutes", dg.CheckIntervalMinutes, "critical_free_mb", dg.CriticalFreeMB)
+
+	check := func() {
+		free, ok := core.FreeDiskBytes(diskSpaceCheckPath)
+		if !ok || free >= criticalBytes {
+			return
+		}
+		days := emergencyPurgeCutoffDays(rc)
+		slog.Error("磁盘可用空间严重不足，触发探测结果紧急清理",
+			"free_bytes", free, "threshold_bytes", criticalBytes, "cutoff_days", days)
+		deleted, err := deleteProbeResultsChunked(db, "reported_at < ?", time.Now().AddDate(0, 0, -days))
+		if err != nil {
+			slog.Error("磁盘紧急清理失败", "err", err)
+			return
+		}
+		slog.Warn("磁盘紧急清理完成", "cutoff_days", days, "deleted", deleted)
+	}
+	go func() {
+		check()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			check()
+		}
+	}()
+}
+
+// emergencyPurgeCutoffDays 计算紧急清理的保留天数：正常配置的一半，但不低于
+// 归档层要求的最小原始点保留天数（未配置归档层时最低 1 天）。
+func emergencyPurgeCutoffDays(rc RetentionConfig) int {
+	floor := 1
+	if len(rc.Rollups) > 0 {
+		maxBucket := rc.Rollups[len(rc.Rollups)-1].BucketMinutes
+		if need := maxBucket/1440*2 + 2; need > floor {
+			floor = need
+		}
+	}
+	half := rc.ProbeResultsMaxAgeDays / 2
+	if half < floor {
+		return floor
+	}
+	return half
 }
