@@ -65,8 +65,17 @@ const PRESETS: { key: string; seconds: number }[] = [
 // 自行按数据密度抽样，否则几百个桶会把时间标签挤成一团无法辨认）
 const MAX_X_LABELS = 10;
 
-// 图表内部（Canvas 渲染）用的固定色值——CSS 变量在 Canvas fillStyle/strokeStyle
-// 里不生效，且不能在这个懒加载 chunk 里用 theme.useToken() 取（见文件头注释）。
+// 主图与丢包图共用的左右内边距。两张图的 y 轴标签宽度天然不同（延迟是 2–4 位
+// 数的 ms，丢包固定是 0/50/100），若都交给 G2 auto 计算，两个绘图区的左右边缘
+// 会差出几个像素——即使 x 轴 domain 完全一致，同一个桶在上下两图里的像素位置
+// 仍然对不齐。显式钉死同一组 padding 消除这个固定偏移（G2 会把这块空间留给轴
+// 组件，不会裁剪标签）；两图必须同时设置，只设一边另一边仍是 auto。
+const PAD_L = 48;
+const PAD_R = 16;
+
+// 图表内部（Canvas 渲染）用的固定色值——G2 把颜色直接交给 Canvas 的
+// fillStyle/strokeStyle，`var(--ant-color-*)` 这类 CSS 变量在这里不会被解析，
+// 必须给字面色值。DOM 层（标题/统计条/图例文字）仍一律用 CSS 变量。
 // 蓝色与 MainLayout 品牌色一致（#2563eb），丢包红与本功能重设计前的旧实现一致。
 const CHART_COLORS = {
   light: { primary: '#2563eb', muted: '#cbd5e1', loss: '#dc2626' },
@@ -138,14 +147,23 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
 
   // 主图数据：avg/min/max 三条同色阶序列，长表结构（一行一个 metric），
   // 共享同一张图表实例、同一套坐标系——避免"多图叠加对齐"的脆弱方案。
+  //
+  // ★ 全部失败的桶（avg/min/max 皆为 null）必须保留整行、值填 null，不能整行跳过：
+  // G2 的 line mark 底层用 d3-shape 的 .defined() 判定，null/undefined/NaN 会让它
+  // 另起一段子路径 → 渲染成断线，正确表达"这段时间没有数据"；而整行跳过时 G2 只
+  // 看得到缺口前后两个有效点，会直接连成一条横跨故障区的假直线（看起来像那段时间
+  // 延迟稳定）。断线是默认行为（对应 style.connect 默认 false），无需额外配置——
+  // 注意 G2 v5 并没有 connectNulls 这个配置键，不要去设它。多序列下按 series 分组
+  // 各自断开，Min/Max/Avg 三条线互不影响。
   const chartData = useMemo(() => {
     if (!data) return [];
-    const rows: { time: string; ms: number; metric: string }[] = [];
+    const round2 = (n: number | null) => (n == null ? null : Number(n.toFixed(2)));
+    const rows: { time: string; ms: number | null; metric: string }[] = [];
     for (const p of data.points) {
       const time = dayjs(p.ts * 1000).format(timeFmt);
-      if (p.min_ms != null) rows.push({ time, ms: Number(p.min_ms.toFixed(2)), metric: MIN_LABEL });
-      if (p.max_ms != null) rows.push({ time, ms: Number(p.max_ms.toFixed(2)), metric: MAX_LABEL });
-      if (p.avg_ms != null) rows.push({ time, ms: Number(p.avg_ms.toFixed(2)), metric: AVG_LABEL });
+      rows.push({ time, ms: round2(p.min_ms), metric: MIN_LABEL });
+      rows.push({ time, ms: round2(p.max_ms), metric: MAX_LABEL });
+      rows.push({ time, ms: round2(p.avg_ms), metric: AVG_LABEL });
     }
     return rows;
   }, [data, timeFmt, AVG_LABEL, MIN_LABEL, MAX_LABEL]);
@@ -159,19 +177,29 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
     }));
   }, [data, timeFmt]);
 
+  // 全部桶的时间标签——主图与丢包图显式共用这一份分类轴 domain。
+  // 曾经的 bug：延迟序列跳过"全部失败"的桶、丢包序列逐桶都有，两张独立图表各自
+  // 按自身数据推断分类轴 → 分类数不同 → 同一 x 像素对应不同时刻，表现为"100%
+  // 丢包处上方却仍有延迟曲线"（实为延迟线末端被拉伸到了最右侧）。现在 chartData
+  // 保留了 null 行、两边分类数天然一致，这里仍显式钉死 domain 作为不变量保险：
+  // 日后若有人改回过滤式构造，对齐关系不会再次悄悄失效。
+  const xDomain = useMemo(() => {
+    if (!data) return [];
+    return data.points.map((p) => dayjs(p.ts * 1000).format(timeFmt));
+  }, [data, timeFmt]);
+
   // x 轴标签抽样：按桶数量等间隔挑选 ≤MAX_X_LABELS 个标签展示，其余位置的
   // 刻度仍然存在（保持每个点的横坐标准确），只是 label 留空——用固定的
   // labelFormatter 抽样代替 G2 的自动防重叠（该功能在 point/band 分类轴上
   // 不生效，且已知版本存在 labelAutoRotate/Ellipsis 相关 bug，故不依赖它）。
   const xKeepLabels = useMemo(() => {
     const keep = new Set<string>();
-    if (!data || data.points.length === 0) return keep;
-    const labels = data.points.map((p) => dayjs(p.ts * 1000).format(timeFmt));
-    const step = Math.max(1, Math.ceil(labels.length / MAX_X_LABELS));
-    for (let i = 0; i < labels.length; i += step) keep.add(labels[i]);
-    keep.add(labels[labels.length - 1]);
+    if (xDomain.length === 0) return keep;
+    const step = Math.max(1, Math.ceil(xDomain.length / MAX_X_LABELS));
+    for (let i = 0; i < xDomain.length; i += step) keep.add(xDomain[i]);
+    keep.add(xDomain[xDomain.length - 1]);
     return keep;
-  }, [data, timeFmt]);
+  }, [xDomain]);
 
   const xLabelFormatter = useCallback((v: unknown) => {
     const s = typeof v === 'string' ? v : String(v);
@@ -207,7 +235,14 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
     height: 300,
     animate: false,
     theme: g2Theme,
+    // 关掉 G2 内置图例：colorField 会让它自动渲染一份，与弹窗右上角那份手写的
+    // 设计稿图例重复（页面上会出现两组 Avg / Min / Max）。
+    legend: false,
+    paddingLeft: PAD_L,
+    paddingRight: PAD_R,
     scale: {
+      // x domain 与丢包图共用，保证两图逐桶对齐（见 xDomain 注释）
+      x: { domain: xDomain },
       color: {
         domain: [MIN_LABEL, MAX_LABEL, AVG_LABEL],
         range: [c.muted, c.muted, c.primary],
@@ -231,6 +266,10 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
     height: 88,
     animate: false,
     theme: g2Theme,
+    paddingLeft: PAD_L,
+    paddingRight: PAD_R,
+    // 与主图共用同一份 x domain，保证两图逐桶对齐（见 xDomain 注释）
+    scale: { x: { domain: xDomain } },
     style: { fill: c.loss, radiusTopLeft: 1.5, radiusTopRight: 1.5 },
     axis: {
       x: false,
@@ -347,8 +386,8 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
           <Alert type="info" showIcon message={t('trend.noData')} style={{ marginTop: 14 }} />
         ) : (
           <>
-            {/* 图例 */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 18, alignItems: 'center', padding: '14px 0 8px' }}>
+            {/* 图例（右缘与绘图区右缘对齐，故用与图表相同的 PAD_R） */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 18, alignItems: 'center', padding: `14px ${PAD_R}px 8px 0` }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
                 <span style={{ width: 14, height: 2.5, borderRadius: 2, background: c.primary }} />
                 <span style={{ fontSize: 12, color: 'var(--ant-color-text-secondary)' }}>{t('trend.avg')}</span>
@@ -362,9 +401,10 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
             <Line {...chartConfig} />
 
             {/* 丢包率 */}
+            {/* 标题行左右缘与两张图的绘图区对齐（同一组 PAD_L / PAD_R） */}
             <div style={{
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              margin: '14px 0 4px',
+              margin: `14px ${PAD_R}px 4px ${PAD_L}px`,
             }}>
               <span style={{ fontSize: 12, color: 'var(--ant-color-text-secondary)', fontWeight: 600 }}>{t('trend.packetLoss')}</span>
               <span style={{ fontSize: 11, color: 'var(--ant-color-text-tertiary)', fontFamily: FONT_MONO }}>
