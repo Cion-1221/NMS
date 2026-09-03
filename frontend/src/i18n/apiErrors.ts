@@ -115,6 +115,9 @@ const apiErrors: Record<string, Record<Lang, string>> = {
   'agent.token_not_unused':     { en: 'Only unused tokens can be revoked', zh: '仅可作废未使用的 Token' },
   'agent.release_file_missing': { en: 'Binary file is required (form field "file")', zh: '缺少二进制文件（字段名 file）' },
   'agent.ca_no_pending':        { en: 'No pending CA rotation to finalize', zh: '当前没有待终结的轮换' },
+
+  // ── Probe Results 维护任务 ─────────────────────────────────────────────────
+  'probe.job_running':          { en: 'Another purge / delete job is already running — showing its progress instead', zh: '已有清理/删除任务正在运行，已切换到该任务的进度' },
 };
 
 /**

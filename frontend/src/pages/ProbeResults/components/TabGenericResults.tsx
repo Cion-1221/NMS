@@ -15,6 +15,7 @@ import RelativeTime from '../../../components/RelativeTime';
 import LatencySpark from '../../../components/LatencySpark';
 import { FONT_MONO } from '../../../theme/theme';
 import LatencyTrendModal from './LatencyTrendModal';
+import ProbeJobProgressModal from './ProbeJobProgressModal';
 
 const mono = (v: React.ReactNode) => (
   <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span>
@@ -65,6 +66,8 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
   // 因此同时保留选中行本身以便组装请求
   const [selectedKeys, setSelectedKeys]   = useState<React.Key[]>([]);
   const [selectedRows, setSelectedRows]   = useState<ProbeResult[]>([]);
+  // 批量删除的后台任务 id：非 null 时显示进度框
+  const [bulkJob, setBulkJob]             = useState<string | null>(null);
   const [page, setPage]         = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal]       = useState(0);
@@ -130,7 +133,8 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
     }
   };
 
-  // 批量删除：把选中行映射成 (agent_id, target) 组合，一次请求交给后端串行删除
+  // 批量删除：把选中行映射成 (agent_id, target) 组合，一次请求交给后端在后台
+  // 串行删除；拿到 job_id 后由进度框轮询，终态时再刷新列表
   const handleBulkDelete = () => {
     const pairs = selectedRows.map(r => ({ agent_id: r.agent_id, target: r.target }));
     if (pairs.length === 0) return;
@@ -144,11 +148,16 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
       onOk: async () => {
         try {
           const r = await deleteProbeResultPairs(type, pairs);
-          message.success(t('proberesults.purgeOk', { n: r.data.deleted }));
-          void loadData();
-          void loadTargets();
+          setBulkJob(r.data.job_id);
         } catch (err: any) {
-          message.error(apiErrMsg(err));
+          // 409：已有清理/删除任务在跑，后端附带了它的 job_id——直接挂到那个任务的进度上
+          const running = err?.response?.data?.job_id as string | undefined;
+          if (running) {
+            setBulkJob(running);
+            message.warning(apiErrMsg(err));
+          } else {
+            message.error(apiErrMsg(err));
+          }
         }
       },
     });
@@ -354,6 +363,19 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
           ]}
         />
       </Modal>
+
+      {/* 批量删除后台任务进度：每秒轮询；终态时提示并刷新列表与 Target 候选 */}
+      <ProbeJobProgressModal
+        jobId={bulkJob}
+        kind="bulk_delete"
+        onFinished={(j) => {
+          if (j.status === 'done') message.success(t('proberesults.job.done', { n: j.deleted_rows.toLocaleString() }));
+          else message.error(t('proberesults.job.failed', { error: j.error ?? '' }));
+          void loadData();
+          void loadTargets();
+        }}
+        onClose={() => setBulkJob(null)}
+      />
 
       {/* 延迟趋势 Modal */}
       {trend && (

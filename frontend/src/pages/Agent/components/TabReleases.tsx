@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Button, Form, Input, Modal, Space, Spin, Table, Tag, Tooltip, Upload, message } from 'antd';
+import { Alert, Button, Form, Input, Modal, Progress, Space, Spin, Table, Tag, Tooltip, Typography, Upload, message } from 'antd';
 import { CheckCircleFilled, ExclamationCircleFilled, InboxOutlined, PlusOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { RcFile } from 'antd/es/upload';
@@ -34,6 +34,9 @@ const TabReleases: React.FC = () => {
   const [loading, setLoading]       = useState(false);
   const [addOpen, setAddOpen]       = useState(false);
   const [uploading, setUploading]   = useState(false);
+  // 上传百分比（浏览器 → NMS 传输进度）；null = 未在上传。100 之后服务端还要落盘 +
+  // 校验 SHA256（流式同步完成，通常不到一秒），此时文案切换为"服务端处理中"
+  const [uploadPct, setUploadPct]   = useState<number | null>(null);
   const [selectedFile, setSelectedFile] = useState<RcFile | null>(null);
   const [form] = Form.useForm();
 
@@ -113,6 +116,7 @@ const TabReleases: React.FC = () => {
     const values = await form.validateFields();
     if (!selectedFile) { message.error(t('agent.release.uploadFile') + ' is required'); return; }
     setUploading(true);
+    setUploadPct(0);
     try {
       const fd = new FormData();
       fd.append('version', values.version.trim());
@@ -120,7 +124,7 @@ const TabReleases: React.FC = () => {
       fd.append('arch', values.arch.trim());
       fd.append('notes', values.notes?.trim() ?? '');
       fd.append('file', selectedFile);
-      await createAgentRelease(fd);
+      await createAgentRelease(fd, setUploadPct);
       message.success(t('common.success'));
       handleCloseAdd();
       void loadData();
@@ -128,6 +132,7 @@ const TabReleases: React.FC = () => {
       message.error(apiErrMsg(err));
     } finally {
       setUploading(false);
+      setUploadPct(null);
     }
   };
 
@@ -265,6 +270,10 @@ const TabReleases: React.FC = () => {
         okText={t('common.save')}
         cancelText={t('common.cancel')}
         confirmLoading={uploading}
+        // 上传中禁止关闭：关掉窗口会中断传输，几十 MB 白传
+        closable={!uploading}
+        maskClosable={false}
+        cancelButtonProps={{ disabled: uploading }}
         destroyOnClose
       >
         <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
@@ -292,6 +301,16 @@ const TabReleases: React.FC = () => {
               <p className="ant-upload-hint" style={{ fontSize: 12 }}>{t('agent.release.uploadNote')}</p>
             </Dragger>
           </Form.Item>
+          {uploadPct !== null && (
+            <div>
+              <Progress percent={uploadPct} status={uploadPct < 100 ? 'active' : 'success'} />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {uploadPct < 100
+                  ? t('agent.release.uploading', { percent: uploadPct })
+                  : t('agent.release.processing')}
+              </Typography.Text>
+            </div>
+          )}
         </Form>
       </Modal>
 

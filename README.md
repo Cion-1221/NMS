@@ -167,11 +167,11 @@ IPAM 域操作留痕；清理仅管理员。
 
 ### 📈 监控 › 探测结果（Probe Results · `/probe-results`）
 
-所有登录用户可见（只读）；清理操作仅管理员（页头「清理」按钮：按天数全量清理）。
+所有登录用户可见（只读）；清理操作仅管理员（页头「清理」按钮：按天数全量清理）。清理与批量删除都在**后端异步分片执行**：请求立即返回任务 ID，前端进度框每秒轮询（行数 / 组合数百分比、耗时），可「后台运行」关窗，重新打开页面自动找回进行中的任务；同一时刻只允许一个维护任务。
 
 #### Tab 1–4 · Ping / TCPing / HTTPCheck / MTR
 
-- 每类型独立 Tab：**最新快照**（每 (Agent, Target) 一行）与**历史分页**双视图，支持 agent/关键字/成败/时间区间过滤
+- 每类型独立 Tab：**最新快照**（每 (Agent, Target) 一行）与**历史分页**双视图，支持 agent/Target 下拉/关键字/成败/时间区间过滤；管理员可多选（表头复选框 = 全选当前页）批量删除
 - 路径类结果（mtr）行内可展开**逐跳详情**（丢包/延迟/ASN 标注）
 - 每行提供**延迟趋势**入口（LatencyTrendModal）：1 小时～1 年/自定义区间，avg/min/max/丢包；数据源在**原始点与归档层间自动选择**（能覆盖起点的最细数据源），聚合到 ≤500 个显示点
 
@@ -413,6 +413,12 @@ server {
         proxy_set_header   X-Real-IP         $remote_addr;
         proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto $scheme;
+        # 上传 Agent 二进制（几十 MB）也走这里：放宽体积上限与读写超时，否则
+        # Nginx 默认 1m 直接 413、慢链路 60s 即断开。（清理探测结果 / 批量删除
+        # 已是后端异步任务，不再依赖长超时。）
+        client_max_body_size 256m;
+        proxy_read_timeout   600s;
+        proxy_send_timeout   600s;
     }
 }
 EOF
@@ -556,7 +562,11 @@ Let's Encrypt 证书与 Agent PKI 的内置 CA 是两套完全独立的体系，
 | GET | `/latest` | 快照：每 (Agent, Target) 最新一条 |
 | GET | `/meshping-matrix` | NxN 透视矩阵（`?group_id=&q=`） |
 | GET | `/latency-series` | 延迟趋势（原始点/归档层自动选源，≤500 显示点） |
-| DELETE | `/` · `/pair` | 按天数全量清理 / 按 (agent, target, type) 精确删除 |
+| GET | `/targets?type=&agent_id=` | Target 下拉候选（去重，不受分页影响） |
+| DELETE | `/` | 按天数全量清理——**异步**：立即返回 `202 {job_id}`，进度见 `/jobs/:id` |
+| DELETE | `/pair` | 按 (agent, target, type) 精确删除（同步） |
+| POST | `/pairs/bulk-delete` | 批量删除 `{type, pairs:[{agent_id,target}]}`（≤200 组合，异步同上） |
+| GET | `/jobs/:id` | 清理 / 批量删除任务进度；`:id=current` 返回正在运行的任务。同一时刻只允许一个维护任务，再发起返回 `409 probe.job_running` + 运行中的 `job_id` |
 
 ### 其他
 

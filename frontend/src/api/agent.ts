@@ -6,7 +6,7 @@ import type {
   AgentTokenListResp, CreateAgentTokenReq, CreateAgentTokenResp,
   AgentRelease, AgentReleaseProgress,
   ProbeResultListParams, ProbeResultListResp, MeshPingMatrixResp, MeshPingMatrixParams,
-  LatencySeriesResp,
+  LatencySeriesResp, ProbeJob,
 } from '../types/agent';
 
 // ── Agent 管理 ────────────────────────────────────────────────────────────────
@@ -83,11 +83,16 @@ export const revokeAgentToken = (id: number) =>
 export const getAgentReleases = () =>
   client.get<AgentRelease[]>('/agent-releases');
 
-export const createAgentRelease = (data: FormData) =>
+// onProgress 收到 0–100 的上传百分比（浏览器 → NMS 的传输进度）。服务端是流式
+// 落盘 + 同步算 SHA256，传输一结束就基本完成，不需要再做异步任务。
+export const createAgentRelease = (data: FormData, onProgress?: (percent: number) => void) =>
   client.post<AgentRelease>('/agent-releases', data, {
     headers: { 'Content-Type': 'multipart/form-data' },
     // Agent 二进制动辄几十 MB，不能吃全局 10s 超时；0 = 不限时，交给网络层约束
     timeout: 0,
+    onUploadProgress: (e) => {
+      if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100));
+    },
   });
 
 export const deleteAgentRelease = (id: number) =>
@@ -113,14 +118,19 @@ export const getMeshPingMatrix = (params: MeshPingMatrixParams) =>
 export const deleteProbeResultPair = (agentId: string, target: string, type: string) =>
   client.delete('/probe-results/pair', { params: { agent_id: agentId, target, type } });
 
-// 批量删除多个 (agent_id, target) 组合的全部历史（管理员）；后端串行分片删除，
-// 单次最多 200 个组合（与列表单页上限一致）
+// 批量删除多个 (agent_id, target) 组合的全部历史（管理员），单次最多 200 个组合。
+// 后端立即返回 job_id，删除在后台串行分片执行，进度用 getProbeJob 轮询；
+// 已有任务在跑时返回 409 probe.job_running + 该任务的 job_id
 export const deleteProbeResultPairs = (type: string, pairs: { agent_id: string; target: string }[]) =>
-  client.post<{ deleted: number; pairs: number }>('/probe-results/pairs/bulk-delete', { type, pairs }, {
-    // 逐对分片删除，历史越长耗时越久，不能吃全局 10s 超时；确认框的 OK 按钮
-    // 会一直转圈直到后端返回。0 = 不限时，交给网络层（反向代理）约束
-    timeout: 0,
-  });
+  client.post<{ job_id: string }>('/probe-results/pairs/bulk-delete', { type, pairs });
+
+// 维护任务（清理 / 批量删除）进度快照；任务过期或后端重启后返回 404
+export const getProbeJob = (id: string) =>
+  client.get<ProbeJob>(`/probe-results/jobs/${id}`);
+
+// 正在运行的维护任务（无则 job 为 null）：页面刷新后据此重新挂上进度框
+export const getCurrentProbeJob = () =>
+  client.get<{ job: ProbeJob | null }>('/probe-results/jobs/current');
 
 // Target 下拉候选：该类型（可再限定 Agent）下去重后的 target，服务端聚合
 export const getProbeResultTargets = (type: string, agentId?: string) =>
@@ -131,8 +141,10 @@ export const getLatencySeries = (params: {
   agent_id: string; target: string; type: string; start: string; end: string;
 }) => client.get<LatencySeriesResp>('/probe-results/latency-series', { params });
 
+// 清理历史数据：后端立即返回 job_id，分片删除在后台执行（千万级表可能跑数分钟），
+// 进度用 getProbeJob 轮询；已有任务在跑时返回 409 probe.job_running + job_id
 export const purgeProbeResults = (days: number) =>
-  client.delete<{ deleted: number }>('/probe-results', { params: { days } });
+  client.delete<{ job_id: string }>('/probe-results', { params: { days } });
 
 // ── ASN Lookup ────────────────────────────────────────────────────────────────
 export const lookupASN = (ips: string[]) =>

@@ -279,6 +279,7 @@ const probeResultPairsMax = 200
 // 顺序逐对删除而不是让前端并发打单条接口：并发 DELETE 同一张热表会互相等锁甚至
 // 死锁（见 deleteProbeResultsChunked 的说明），串行 + 分片对上报写入最友好。
 // 单对失败不中断其余组合，最后汇总 deleted / failed。
+// 异步执行（同 PurgeProbeResults）：立即返回 202 {job_id}，进度按组合数计。
 func DeleteProbeResultPairs(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
@@ -300,34 +301,43 @@ func DeleteProbeResultPairs(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		var deleted int64
-		failed := 0
-		var firstErr error
-		for _, p := range req.Pairs {
-			n, err := deleteProbeResultsChunked(db,
-				"agent_id = ? AND target = ? AND type = ?", p.AgentID, p.Target, req.Type)
-			deleted += n
-			if err != nil {
-				failed++
-				if firstErr == nil {
-					firstErr = err
+		user := getUsername(c) // gin.Context 不能带进 goroutine，先取出来
+		pairs := req.Pairs
+		typeFilter := req.Type
+
+		job, started := probeJobs.start("bulk_delete", user,
+			func(j *probeJob) { j.PairsTotal = len(pairs) },
+			func(update func(func(*probeJob))) error {
+				var deleted int64
+				failed := 0
+				var firstErr error
+				for _, p := range pairs {
+					n, err := deleteProbeResultsChunkedProgress(db, func(rows int64) {
+						update(func(j *probeJob) { j.DeletedRows += rows })
+					}, "agent_id = ? AND target = ? AND type = ?", p.AgentID, p.Target, typeFilter)
+					deleted += n
+					if err != nil {
+						failed++
+						if firstErr == nil {
+							firstErr = err
+						}
+					}
+					update(func(j *probeJob) { j.PairsDone++ })
 				}
-			}
-		}
-		// 与单条删除同口径：管理员删数据必须留审计痕迹
-		writeAgentAudit(db, getUsername(c), "delete_probe_pairs", "probe_results", "",
-			fmt.Sprintf("Bulk deleted probe results for %d pair(s) type=%s (%d rows, %d failed)",
-				len(req.Pairs), req.Type, deleted, failed))
-		if failed > 0 {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   fmt.Sprintf("%d 个组合删除失败: %s", failed, firstErr.Error()),
-				"code":    "server_error",
-				"deleted": deleted,
-				"failed":  failed,
+				// 与单条删除同口径：管理员删数据必须留审计痕迹
+				writeAgentAudit(db, user, "delete_probe_pairs", "probe_results", "",
+					fmt.Sprintf("Bulk deleted probe results for %d pair(s) type=%s (%d rows, %d failed)",
+						len(pairs), typeFilter, deleted, failed))
+				if failed > 0 {
+					return fmt.Errorf("%d 个组合删除失败: %s", failed, firstErr.Error())
+				}
+				return nil
 			})
+		if !started {
+			c.JSON(http.StatusConflict, gin.H{"error": "已有清理/删除任务正在运行", "code": "probe.job_running", "job_id": job.ID})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"deleted": deleted, "pairs": len(req.Pairs)})
+		c.JSON(http.StatusAccepted, gin.H{"job_id": job.ID})
 	}
 }
 
@@ -344,6 +354,12 @@ const probeResultsPurgeChunk = 5000
 // 几次；其余错误直接返回，不做无意义重试。cond 为空字符串表示删除全表（仍走
 // 分片，不需要 AllowGlobalUpdate）。
 func deleteProbeResultsChunked(db *gorm.DB, cond string, args ...interface{}) (int64, error) {
+	return deleteProbeResultsChunkedProgress(db, nil, cond, args...)
+}
+
+// deleteProbeResultsChunkedProgress 同 deleteProbeResultsChunked，每删完一片回调
+// 一次 progress(本片行数)，供异步维护任务（probe_jobs.go）上报进度；可传 nil。
+func deleteProbeResultsChunkedProgress(db *gorm.DB, progress func(rows int64), cond string, args ...interface{}) (int64, error) {
 	const maxRetries = 5
 	var total int64
 	for {
@@ -365,6 +381,9 @@ func deleteProbeResultsChunked(db *gorm.DB, cond string, args ...interface{}) (i
 			return total, lastErr
 		}
 		total += result.RowsAffected
+		if progress != nil && result.RowsAffected > 0 {
+			progress(result.RowsAffected)
+		}
 		if result.RowsAffected < probeResultsPurgeChunk {
 			return total, nil
 		}
@@ -374,6 +393,10 @@ func deleteProbeResultsChunked(db *gorm.DB, cond string, args ...interface{}) (i
 
 // PurgeProbeResults DELETE /api/v1/probe-results?days=N —— 手动清理探测结果（管理员专用）。
 // days=0 清空全部；days>0 清理 N 天前的数据。与 PurgeAuditLogs / PurgeDeviceAuditLogs 同款语义。
+//
+// 异步执行：立即返回 202 {job_id}，删除在后台分片进行，前端轮询
+// GET /probe-results/jobs/:id 展示进度（见 probe_jobs.go）。已有维护任务在跑时
+// 返回 409 probe.job_running 并附带该任务的 job_id，前端直接挂到它的进度上。
 func PurgeProbeResults(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		daysStr := c.DefaultQuery("days", "")
@@ -382,21 +405,43 @@ func PurgeProbeResults(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 days 参数（0 = 全部清空，正整数 = 清理 N 天前的数据）", "code": "bad_request"})
 			return
 		}
-		var deleted int64
-		var delErr error
-		if days == 0 {
-			deleted, delErr = deleteProbeResultsChunked(db, "")
-		} else {
-			cutoff := time.Now().AddDate(0, 0, -days)
-			deleted, delErr = deleteProbeResultsChunked(db, "reported_at < ?", cutoff)
+		// 条件在 goroutine 外定死：cond 为空 = 全表
+		cond, args := "", []interface{}{}
+		if days > 0 {
+			cond, args = "reported_at < ?", []interface{}{time.Now().AddDate(0, 0, -days)}
 		}
-		if delErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "清理失败: " + delErr.Error(), "code": "server_error"})
+		user := getUsername(c) // gin.Context 不能带进 goroutine，先取出来
+
+		job, started := probeJobs.start("purge", user,
+			func(j *probeJob) { j.Status = probeJobCounting },
+			func(update func(func(*probeJob))) error {
+				// 先统计待删行数用于进度百分比：按天走 reported_at 索引，全表则是 COUNT(*)
+				var total int64
+				cq := db.Model(&models.ProbeResult{})
+				if cond != "" {
+					cq = cq.Where(cond, args...)
+				}
+				cq.Count(&total)
+				update(func(j *probeJob) {
+					j.TotalRows = total
+					j.Status = probeJobRunning
+				})
+
+				deleted, delErr := deleteProbeResultsChunkedProgress(db, func(n int64) {
+					update(func(j *probeJob) { j.DeletedRows += n })
+				}, cond, args...)
+				detail := fmt.Sprintf("Purged probe results (days=%d, deleted=%d rows)", days, deleted)
+				if delErr != nil {
+					detail += " — FAILED: " + delErr.Error()
+				}
+				writeAgentAudit(db, user, "purge_probe_results", "probe_results", "", detail)
+				return delErr
+			})
+		if !started {
+			c.JSON(http.StatusConflict, gin.H{"error": "已有清理/删除任务正在运行", "code": "probe.job_running", "job_id": job.ID})
 			return
 		}
-		writeAgentAudit(db, getUsername(c), "purge_probe_results", "probe_results", "",
-			fmt.Sprintf("Purged probe results (days=%d, deleted=%d rows)", days, deleted))
-		c.JSON(http.StatusOK, gin.H{"deleted": deleted})
+		c.JSON(http.StatusAccepted, gin.H{"job_id": job.ID})
 	}
 }
 
@@ -616,5 +661,6 @@ func RegisterProbeResultsRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFu
 		prAdmin.DELETE("", PurgeProbeResults(db))
 		prAdmin.DELETE("/pair", DeleteProbeResultPair(db))
 		prAdmin.POST("/pairs/bulk-delete", DeleteProbeResultPairs(db))
+		prAdmin.GET("/jobs/:id", GetProbeJob) // :id = current 时返回正在运行的任务
 	}
 }

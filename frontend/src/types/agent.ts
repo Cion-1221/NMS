@@ -268,6 +268,25 @@ export interface ProbeResultListResp {
   page_size: number;
 }
 
+/**
+ * GET /probe-results/jobs/:id — 清理历史数据 / 批量删除的后台任务快照。
+ * purge 以行数计进度（total_rows 为启动时统计的待删行数）；bulk_delete 以组合数计
+ * （pairs_done / pairs_total），deleted_rows 仅作展示。counting = 清理任务正在统计行数。
+ */
+export interface ProbeJob {
+  id: string;
+  kind: 'purge' | 'bulk_delete';
+  status: 'counting' | 'running' | 'done' | 'failed';
+  total_rows: number;
+  deleted_rows: number;
+  pairs_total: number;
+  pairs_done: number;
+  error?: string;
+  created_by: string;
+  started_at: string;
+  finished_at?: string | null;
+}
+
 export interface MeshPingProto {
   success: boolean;
   latency_ms: number | null;
