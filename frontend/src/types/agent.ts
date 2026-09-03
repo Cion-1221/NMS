@@ -59,7 +59,17 @@ export interface AgentListParams {
   page_size: number;
   q?: string;
   group_id?: number;
+  /** online | offline | revoked：前两者只匹配未作废的 Agent（与汇总卡片口径一致） */
   status?: string;
+  version?: string;
+  os?: string;
+  arch?: string;
+}
+
+/** GET /agents/filter-options — Agent List 筛选栏下拉候选（全量去重，不受分页影响） */
+export interface AgentFilterOptions {
+  versions: string[];
+  profiles: { os: string; arch: string }[];
 }
 
 export interface AgentListResp {

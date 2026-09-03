@@ -116,15 +116,58 @@ func ListAgents(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 		if v := c.Query("status"); v != "" {
-			q = q.Where("status = ?", v)
+			// 口径与 GetAgentSummary 及列表展示一致：已作废的 Agent 在表格里显示为
+			// Revoked 而非 online/offline，因此 online/offline 只匹配未作废的记录。
+			switch v {
+			case "revoked":
+				q = q.Where("revoked = ?", true)
+			case "online":
+				q = q.Where("revoked = ? AND status = ?", false, "online")
+			case "offline":
+				q = q.Where("revoked = ? AND status <> ?", false, "online")
+			}
+		}
+		if v := c.Query("version"); v != "" {
+			q = q.Where("version = ?", v)
+		}
+		if v := c.Query("os"); v != "" {
+			q = q.Where("os = ?", v)
+		}
+		if v := c.Query("arch"); v != "" {
+			q = q.Where("arch = ?", v)
 		}
 
 		var total int64
 		q.Count(&total)
-		var agents []models.Agent
+		agents := make([]models.Agent, 0)
 		q.Preload("Group").Order("group_id asc, agent_id asc").
 			Offset((page - 1) * pageSize).Limit(pageSize).Find(&agents)
 		c.JSON(http.StatusOK, gin.H{"total": total, "items": agents, "page": page, "page_size": pageSize})
+	}
+}
+
+// GetAgentFilterOptions GET /api/v1/agents/filter-options —— Agent List 筛选栏
+// 下拉的候选值：存量 Agent 去重后的版本号与 OS/Arch 组合。列表是服务端分页，
+// 前端无法从当前页推导全集，故由后端一次给出。Group 候选走 /agent-groups。
+func GetAgentFilterOptions(db *gorm.DB) gin.HandlerFunc {
+	type profileRow struct {
+		OS   string `json:"os"`
+		Arch string `json:"arch"`
+	}
+	return func(c *gin.Context) {
+		// 显式初始化为空切片：Scan 零行时不触碰目标，nil 会序列化为 JSON null
+		versions := make([]string, 0)
+		db.Model(&models.Agent{}).
+			Where("version <> ''").
+			Distinct().Order("version ASC").
+			Pluck("version", &versions)
+		profiles := make([]profileRow, 0)
+		db.Model(&models.Agent{}).
+			Select("os, arch").
+			Where("os <> '' OR arch <> ''").
+			Group("os, arch").Order("os ASC, arch ASC").
+			Scan(&profiles)
+		c.JSON(http.StatusOK, gin.H{"versions": versions, "profiles": profiles})
 	}
 }
 
@@ -961,6 +1004,7 @@ func RegisterAgentAdminRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc
 	{
 		agents.GET("", ListAgents(db))
 		agents.GET("/summary", GetAgentSummary(db))
+		agents.GET("/filter-options", GetAgentFilterOptions(db))
 		agents.PUT("/:agent_id", UpdateAgent(db))
 		agents.DELETE("/:agent_id", DeleteAgent(db))
 		agents.POST("/:agent_id/revoke", RevokeAgent(db))

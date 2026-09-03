@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Col, Form, Input, Modal, Row, Select, Space, Table, theme, Tooltip, message } from 'antd';
 import { ExclamationCircleFilled, ReloadOutlined, SearchOutlined, StopOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { getAgents, getAgentSummary, updateAgent, deleteAgent, revokeAgent, getAgentGroups } from '../../../api/agent';
-import type { Agent, AgentGroup, AgentSummary } from '../../../types/agent';
+import {
+  getAgents, getAgentSummary, getAgentFilterOptions, updateAgent, deleteAgent, revokeAgent, getAgentGroups,
+} from '../../../api/agent';
+import type { Agent, AgentFilterOptions, AgentGroup, AgentSummary } from '../../../types/agent';
 import { apiErrMsg, useT } from '../../../i18n';
 import type { TranslationKey } from '../../../i18n/translations';
 import { useDebounced } from '../../../utils/useDebounced';
@@ -17,6 +19,12 @@ const { confirm } = Modal;
 const mono = (v: React.ReactNode) => (
   <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span>
 );
+
+// System Profile 的统一展示格式（表格列与筛选下拉共用）："Linux / amd64"
+function profileLabel(os: string | undefined, arch: string | undefined): string {
+  const osLabel = os ? os.charAt(0).toUpperCase() + os.slice(1) : '?';
+  return `${osLabel} / ${arch || '?'}`;
+}
 
 function splitSourceIP(raw: string | null | undefined): { ipv4: string; ipv6: string } {
   const parts = (raw ?? '').split('/').map(s => s.trim()).filter(Boolean);
@@ -40,6 +48,12 @@ const TabAgentList: React.FC = () => {
   const [summary, setSummary]       = useState<AgentSummary | null>(null);
   const [loading, setLoading]       = useState(false);
   const [search, setSearch]         = useState('');
+  // ── 筛选栏下拉（与 IPAM 子网树的筛选方式一致：allowClear 的 Select，服务端过滤）──
+  const [filterGroupId, setFilterGroupId] = useState<number | undefined>();
+  const [filterVersion, setFilterVersion] = useState<string | undefined>();
+  const [filterProfile, setFilterProfile] = useState<string | undefined>(); // 编码为 "os/arch"
+  const [filterStatus,  setFilterStatus]  = useState<string | undefined>();
+  const [filterOpts, setFilterOpts] = useState<AgentFilterOptions>({ versions: [], profiles: [] });
   const [page, setPage]             = useState(1);
   const [pageSize, setPageSize]     = useState(20);
   const [total, setTotal]           = useState(0);
@@ -58,13 +72,32 @@ const TabAgentList: React.FC = () => {
     catch { /* 汇总卡片非关键路径，静默失败即可，主列表仍可用 */ }
   }, []);
 
+  // 下拉候选（Version / System Profile）：非关键路径，失败时保留上次的值
+  const loadFilterOptions = useCallback(async () => {
+    try {
+      const r = await getAgentFilterOptions();
+      setFilterOpts({ versions: r.data.versions ?? [], profiles: r.data.profiles ?? [] });
+    } catch { /* 静默 */ }
+  }, []);
+
   const loadData = useCallback(async () => {
     const seq = ++reqSeq.current;
     setLoading(true);
     try {
-      const r = await getAgents({ page, page_size: pageSize, q: debSearch || undefined });
+      // System Profile 下拉的值是 "os/arch"，拆成两个独立的服务端过滤参数
+      const [os, arch] = filterProfile ? filterProfile.split('/') : [undefined, undefined];
+      const r = await getAgents({
+        page,
+        page_size: pageSize,
+        q:        debSearch || undefined,
+        group_id: filterGroupId,
+        status:   filterStatus,
+        version:  filterVersion,
+        os:       os || undefined,
+        arch:     arch || undefined,
+      });
       if (seq !== reqSeq.current) return;
-      setAgents(r.data.items);
+      setAgents(r.data.items ?? []);
       setTotal(r.data.total);
       setSelectedKeys([]);
     } catch (err: any) {
@@ -72,11 +105,13 @@ const TabAgentList: React.FC = () => {
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
-  }, [page, pageSize, debSearch]);
+  }, [page, pageSize, debSearch, filterGroupId, filterStatus, filterVersion, filterProfile]);
 
-  useEffect(() => { setPage(1); }, [debSearch]);
+  // 搜索词 / 任一筛选条件变化时回到第一页（loadData 依赖变化会自动触发重新查询）
+  useEffect(() => { setPage(1); }, [debSearch, filterGroupId, filterStatus, filterVersion, filterProfile]);
   useEffect(() => { void loadData(); void loadSummary(); }, [loadData, loadSummary]);
-  useEffect(() => { getAgentGroups().then(r => setGroups(r.data)).catch(() => {}); }, []);
+  useEffect(() => { getAgentGroups().then(r => setGroups(r.data ?? [])).catch(() => {}); }, []);
+  useEffect(() => { void loadFilterOptions(); }, [loadFilterOptions]);
 
   const openEdit = (r: Agent) => {
     setEditing(r);
@@ -204,8 +239,7 @@ const TabAgentList: React.FC = () => {
       title: t('agent.list.systemProfile'), key: 'system_profile', width: 150,
       render: (_: unknown, r: Agent) => {
         if (!r.os && !r.arch) return '—';
-        const osLabel = r.os ? r.os.charAt(0).toUpperCase() + r.os.slice(1) : '?';
-        return <StatusTag status="info" tone="neutral" label={`${osLabel} / ${r.arch || '?'}`} />;
+        return <StatusTag status="info" tone="neutral" label={profileLabel(r.os, r.arch)} />;
       },
     },
     {
@@ -236,6 +270,20 @@ const TabAgentList: React.FC = () => {
     },
   ];
 
+  // ── 筛选栏下拉选项 ──────────────────────────────────────────────────────────
+  const groupOptions   = groups.map(g => ({ value: g.id, label: g.name }));
+  const versionOptions = filterOpts.versions.map(v => ({ value: v, label: v }));
+  const profileOptions = filterOpts.profiles.map(p => ({
+    value: `${p.os}/${p.arch}`,
+    label: profileLabel(p.os, p.arch),
+  }));
+  // 状态口径与顶部汇总卡片一致：已作废单独一类，online/offline 只含未作废的 Agent
+  const statusOptions = [
+    { value: 'online',  label: t('agent.summary.online') },
+    { value: 'offline', label: t('agent.summary.offline') },
+    { value: 'revoked', label: t('agent.summary.revoked') },
+  ];
+
   return (
     <div>
       {summary && (
@@ -253,9 +301,43 @@ const TabAgentList: React.FC = () => {
         <Input
           prefix={<SearchOutlined />}
           placeholder={t('agent.list.search')}
-          value={search} onChange={e => setSearch(e.target.value)} allowClear style={{ width: 260 }}
+          value={search} onChange={e => setSearch(e.target.value)} allowClear style={{ width: 240 }}
         />
-        <Button icon={<ReloadOutlined />} onClick={() => { void loadData(); void loadSummary(); }} loading={loading}>{t('common.refresh')}</Button>
+        <Select
+          placeholder={t('agent.list.group')}
+          value={filterGroupId}
+          onChange={setFilterGroupId}
+          allowClear style={{ width: 140 }}
+          options={groupOptions}
+        />
+        <Select
+          placeholder={t('agent.list.version')}
+          value={filterVersion}
+          onChange={setFilterVersion}
+          allowClear style={{ width: 130 }}
+          options={versionOptions}
+        />
+        <Select
+          placeholder={t('agent.list.systemProfile')}
+          value={filterProfile}
+          onChange={setFilterProfile}
+          allowClear style={{ width: 160 }}
+          options={profileOptions}
+        />
+        <Select
+          placeholder={t('common.status')}
+          value={filterStatus}
+          onChange={setFilterStatus}
+          allowClear style={{ width: 120 }}
+          options={statusOptions}
+        />
+        <Button
+          icon={<ReloadOutlined />}
+          onClick={() => { void loadData(); void loadSummary(); void loadFilterOptions(); }}
+          loading={loading}
+        >
+          {t('common.refresh')}
+        </Button>
         <Button danger disabled={selectedKeys.length === 0} onClick={handleBulkDelete}>
           {t('agent.list.bulkDelete')}{selectedKeys.length > 0 ? ` (${selectedKeys.length})` : ''}
         </Button>

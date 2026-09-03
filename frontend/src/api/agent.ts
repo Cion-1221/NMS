@@ -1,7 +1,7 @@
 import client from './client';
 import type {
   Agent, AgentListParams, AgentListResp, UpdateAgentReq, AgentSummary, PKIStatus,
-  AgentGroup,
+  AgentFilterOptions, AgentGroup,
   AgentTask, CreateAgentTasksReq, UpdateAgentTaskReq,
   AgentTokenListResp, CreateAgentTokenReq, CreateAgentTokenResp,
   AgentRelease, AgentReleaseProgress,
@@ -16,6 +16,10 @@ export const getAgents = (params: AgentListParams) =>
 
 export const getAgentSummary = () =>
   client.get<AgentSummary>('/agents/summary');
+
+// 筛选栏 Version / System Profile 下拉的候选值（服务端去重，不受分页影响）
+export const getAgentFilterOptions = () =>
+  client.get<AgentFilterOptions>('/agents/filter-options');
 
 export const updateAgent = (agentId: string, data: UpdateAgentReq) =>
   client.put<Agent>(`/agents/${agentId}`, data);
