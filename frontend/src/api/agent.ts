@@ -113,6 +113,15 @@ export const getMeshPingMatrix = (params: MeshPingMatrixParams) =>
 export const deleteProbeResultPair = (agentId: string, target: string, type: string) =>
   client.delete('/probe-results/pair', { params: { agent_id: agentId, target, type } });
 
+// 批量删除多个 (agent_id, target) 组合的全部历史（管理员）；后端串行分片删除，
+// 单次最多 200 个组合（与列表单页上限一致）
+export const deleteProbeResultPairs = (type: string, pairs: { agent_id: string; target: string }[]) =>
+  client.post<{ deleted: number; pairs: number }>('/probe-results/pairs/bulk-delete', { type, pairs });
+
+// Target 下拉候选：该类型（可再限定 Agent）下去重后的 target，服务端聚合
+export const getProbeResultTargets = (type: string, agentId?: string) =>
+  client.get<{ targets: string[] }>('/probe-results/targets', { params: { type, agent_id: agentId || undefined } });
+
 // 延迟趋势序列：服务端自动选源（原始点/归档层）并聚合到 ≤500 个显示点
 export const getLatencySeries = (params: {
   agent_id: string; target: string; type: string; start: string; end: string;

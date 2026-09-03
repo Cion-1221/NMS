@@ -1,8 +1,11 @@
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, message } from 'antd';
-import { DeleteOutlined, LineChartOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
+import { DeleteOutlined, ExclamationCircleFilled, LineChartOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { getLatestProbeResults, getAgents, deleteProbeResultPair, lookupASN } from '../../../api/agent';
+import {
+  getLatestProbeResults, getAgents, getProbeResultTargets,
+  deleteProbeResultPair, deleteProbeResultPairs, lookupASN,
+} from '../../../api/agent';
 import type { Agent, MtrHop, ProbeResult, TaskType } from '../../../types/agent';
 import { apiErrMsg, useT } from '../../../i18n';
 import { PERM_ADMIN, useCan } from '../../../utils/perms';
@@ -55,6 +58,13 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
   const [search, setSearch]     = useState('');
   const [successFilter, setSuccessFilter] = useState<string | undefined>(undefined);
   const [agentFilter, setAgentFilter]     = useState<string | undefined>(undefined);
+  // Target 下拉：候选由服务端按 type（+ 当前 Agent 筛选）去重给出，选中后精确匹配
+  const [targetFilter, setTargetFilter]   = useState<string | undefined>(undefined);
+  const [targets, setTargets]             = useState<string[]>([]);
+  // 多选删除：rowKey 是最新一条结果的 id，但删除按 (agent_id, target) 组合，
+  // 因此同时保留选中行本身以便组装请求
+  const [selectedKeys, setSelectedKeys]   = useState<React.Key[]>([]);
+  const [selectedRows, setSelectedRows]   = useState<ProbeResult[]>([]);
   const [page, setPage]         = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal]       = useState(0);
@@ -79,31 +89,69 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
         page, page_size: pageSize, type,
         q: debSearch || undefined,
         agent_id: agentFilter || undefined,
+        target: targetFilter || undefined,
         success: successFilter === undefined ? undefined : successFilter === 'true',
       };
       const r = await getLatestProbeResults(params);
       if (seq !== reqSeq.current) return;
-      setData(r.data.items);
+      setData(r.data.items ?? []);
       setTotal(r.data.total);
+      // 数据集变了（翻页/筛选/删除后重载），旧的选中项不再有意义
+      setSelectedKeys([]);
+      setSelectedRows([]);
     } catch (err: any) {
       if (seq === reqSeq.current) message.error(apiErrMsg(err));
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
-  }, [page, pageSize, debSearch, successFilter, agentFilter, type]);
+  }, [page, pageSize, debSearch, successFilter, agentFilter, targetFilter, type]);
 
-  useEffect(() => { setPage(1); }, [debSearch, successFilter, agentFilter]);
+  // Target 候选非关键路径：失败时保留上次的值，主列表不受影响
+  const loadTargets = useCallback(async () => {
+    try {
+      const r = await getProbeResultTargets(type, agentFilter);
+      setTargets(r.data.targets ?? []);
+    } catch { /* 静默 */ }
+  }, [type, agentFilter]);
+
+  useEffect(() => { setPage(1); }, [debSearch, successFilter, agentFilter, targetFilter]);
   useEffect(() => { void loadData(); }, [loadData]);
-  useEffect(() => { getAgents({ page: 1, page_size: 200 }).then(r => setAgents(r.data.items)).catch(() => {}); }, []);
+  useEffect(() => { void loadTargets(); }, [loadTargets]);
+  useEffect(() => { getAgents({ page: 1, page_size: 200 }).then(r => setAgents(r.data.items ?? [])).catch(() => {}); }, []);
 
   const handleDelete = async (r: ProbeResult) => {
     try {
       await deleteProbeResultPair(r.agent_id, r.target, type);
       message.success(t('common.success'));
       void loadData();
+      void loadTargets();
     } catch (err: any) {
       message.error(apiErrMsg(err));
     }
+  };
+
+  // 批量删除：把选中行映射成 (agent_id, target) 组合，一次请求交给后端串行删除
+  const handleBulkDelete = () => {
+    const pairs = selectedRows.map(r => ({ agent_id: r.agent_id, target: r.target }));
+    if (pairs.length === 0) return;
+    Modal.confirm({
+      title: t('proberesults.bulkDelTitle', { n: pairs.length }),
+      icon: <ExclamationCircleFilled style={{ color: '#ff4d4f' }} />,
+      content: t('proberesults.bulkDelBody'),
+      okText: t('common.delete'),
+      okButtonProps: { danger: true },
+      cancelText: t('common.cancel'),
+      onOk: async () => {
+        try {
+          const r = await deleteProbeResultPairs(type, pairs);
+          message.success(t('proberesults.purgeOk', { n: r.data.deleted }));
+          void loadData();
+          void loadTargets();
+        } catch (err: any) {
+          message.error(apiErrMsg(err));
+        }
+      },
+    });
   };
 
   const openMtrDetail = useCallback(async (hops: MtrHop[]) => {
@@ -212,6 +260,12 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
           options={agents.map(a => ({ value: a.agent_id, label: agentMap.get(a.agent_id) ?? a.agent_id }))}
         />
         <Select
+          allowClear showSearch placeholder={t('proberesults.target')} style={{ width: 220 }}
+          value={targetFilter} onChange={setTargetFilter}
+          optionFilterProp="label"
+          options={targets.map(v => ({ value: v, label: v }))}
+        />
+        <Select
           allowClear placeholder={t('common.status')} style={{ width: 130 }}
           value={successFilter} onChange={setSuccessFilter}
           options={[
@@ -219,13 +273,23 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
             { value: 'false', label: t('proberesults.failed') },
           ]}
         />
-        <Button icon={<ReloadOutlined />} onClick={() => { void loadData(); }} loading={loading}>{t('common.refresh')}</Button>
+        <Button icon={<ReloadOutlined />} onClick={() => { void loadData(); void loadTargets(); }} loading={loading}>{t('common.refresh')}</Button>
+        {isAdminUser && (
+          <Button danger icon={<DeleteOutlined />} disabled={selectedKeys.length === 0} onClick={handleBulkDelete}>
+            {t('proberesults.bulkDelete')}{selectedKeys.length > 0 ? ` (${selectedKeys.length})` : ''}
+          </Button>
+        )}
       </Space>
       <Table
         columns={columns}
         dataSource={data}
         rowKey="id"
         loading={loading}
+        // 多选/全选（表头复选框 = 全选当前页）仅对管理员开放——删除是管理员操作
+        rowSelection={isAdminUser ? {
+          selectedRowKeys: selectedKeys,
+          onChange: (keys, rows) => { setSelectedKeys(keys); setSelectedRows(rows); },
+        } : undefined}
         pagination={{
           current: page, pageSize, total,
           pageSizeOptions: ['10', '20', '50', '100'], showSizeChanger: true, showQuickJumper: true,

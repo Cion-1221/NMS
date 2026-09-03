@@ -117,7 +117,8 @@ func GetLatestProbeResults(db *gorm.DB) gin.HandlerFunc {
 		var total int64
 		buildQuery().Count(&total)
 
-		var results []models.ProbeResult
+		// Scan 零行时不触碰目标：显式初始化，避免 items 序列化成 JSON null
+		results := make([]models.ProbeResult, 0)
 		buildQuery().Select("pr.*").Order("pr.agent_id asc, pr.reported_at desc").
 			Offset((page - 1) * pageSize).Limit(pageSize).Scan(&results)
 
@@ -244,6 +245,89 @@ func DeleteProbeResultPair(db *gorm.DB) gin.HandlerFunc {
 		writeAgentAudit(db, getUsername(c), "delete_probe_pair", "probe_results", "",
 			fmt.Sprintf("Deleted probe results for agent=%s target=%s type=%s (%d rows)", agentID, target, typeFilter, result.RowsAffected))
 		c.JSON(http.StatusOK, gin.H{"deleted": result.RowsAffected})
+	}
+}
+
+// GetProbeResultTargets GET /api/v1/probe-results/targets?type=X[&agent_id=Y]
+// 通用结果 Tab 的 Target 下拉候选：该类型（可再限定 Agent）下去重后的 target。
+// 列表是服务端分页，前端无法从当前页推导全集。查询走 idx_probe_latest
+// (type, agent_id, target, ...) 的松散索引扫描，不触碰数据行。
+func GetProbeResultTargets(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		typeFilter := c.Query("type")
+		if typeFilter == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 type 参数", "code": "bad_request"})
+			return
+		}
+		q := db.Model(&models.ProbeResult{}).Where("type = ?", typeFilter)
+		if v := c.Query("agent_id"); v != "" {
+			q = q.Where("agent_id = ?", v)
+		}
+		// 显式初始化为空切片，避免 nil 序列化成 JSON null
+		targets := make([]string, 0)
+		q.Distinct().Order("target ASC").Pluck("target", &targets)
+		c.JSON(http.StatusOK, gin.H{"targets": targets})
+	}
+}
+
+// probeResultPairsMax：一次批量删除最多接受的 (agent_id, target) 组合数，与列表
+// 单页上限（page_size ≤ 200）对齐——前端的多选/全选是页级的。
+const probeResultPairsMax = 200
+
+// DeleteProbeResultPairs POST /api/v1/probe-results/pairs/bulk-delete —— 批量版
+// DeleteProbeResultPair（管理员专用）。请求体 {type, pairs:[{agent_id,target}]}。
+// 顺序逐对删除而不是让前端并发打单条接口：并发 DELETE 同一张热表会互相等锁甚至
+// 死锁（见 deleteProbeResultsChunked 的说明），串行 + 分片对上报写入最友好。
+// 单对失败不中断其余组合，最后汇总 deleted / failed。
+func DeleteProbeResultPairs(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Type  string `json:"type" binding:"required"`
+			Pairs []struct {
+				AgentID string `json:"agent_id" binding:"required"`
+				Target  string `json:"target" binding:"required"`
+			} `json:"pairs" binding:"required,min=1,dive"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error(), "code": "bad_request"})
+			return
+		}
+		if len(req.Pairs) > probeResultPairsMax {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": fmt.Sprintf("单次最多删除 %d 个组合", probeResultPairsMax),
+				"code":  "bad_request",
+			})
+			return
+		}
+
+		var deleted int64
+		failed := 0
+		var firstErr error
+		for _, p := range req.Pairs {
+			n, err := deleteProbeResultsChunked(db,
+				"agent_id = ? AND target = ? AND type = ?", p.AgentID, p.Target, req.Type)
+			deleted += n
+			if err != nil {
+				failed++
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+		// 与单条删除同口径：管理员删数据必须留审计痕迹
+		writeAgentAudit(db, getUsername(c), "delete_probe_pairs", "probe_results", "",
+			fmt.Sprintf("Bulk deleted probe results for %d pair(s) type=%s (%d rows, %d failed)",
+				len(req.Pairs), req.Type, deleted, failed))
+		if failed > 0 {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   fmt.Sprintf("%d 个组合删除失败: %s", failed, firstErr.Error()),
+				"code":    "server_error",
+				"deleted": deleted,
+				"failed":  failed,
+			})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"deleted": deleted, "pairs": len(req.Pairs)})
 	}
 }
 
@@ -523,6 +607,7 @@ func RegisterProbeResultsRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFu
 		pr.GET("/latest", GetLatestProbeResults(db))
 		pr.GET("/meshping-matrix", GetMeshPingMatrix(db))
 		pr.GET("/latency-series", GetLatencySeries(db, rc))
+		pr.GET("/targets", GetProbeResultTargets(db))
 	}
 
 	prAdmin := r.Group("/api/v1/probe-results")
@@ -530,5 +615,6 @@ func RegisterProbeResultsRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFu
 	{
 		prAdmin.DELETE("", PurgeProbeResults(db))
 		prAdmin.DELETE("/pair", DeleteProbeResultPair(db))
+		prAdmin.POST("/pairs/bulk-delete", DeleteProbeResultPairs(db))
 	}
 }
