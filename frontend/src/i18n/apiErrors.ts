@@ -145,6 +145,14 @@ export function apiErrorMessage(err: unknown, lang: Lang, fallback?: string): st
       ? '网络请求失败，请检查连接后重试'
       : 'Network request failed — check your connection and retry';
   }
+  // 有响应但没有 JSON error 体的 404：业务接口一律返回带 code 的 JSON，裸 404 只会
+  // 来自 gin 路由本身——典型场景是前端已更新而后端二进制还是旧版本（缺少新接口）。
+  // 单独给出提示，避免和"请求失败"混在一起让人无从排查。
+  if ((resp as { status?: number }).status === 404) {
+    return lang === 'zh'
+      ? '接口不存在：后端可能仍在运行旧版本，请更新并重启 nms-server'
+      : 'API endpoint not found — the backend may be running an older version; update and restart nms-server';
+  }
   return lang === 'zh' ? '请求失败' : 'Request failed';
 }
 

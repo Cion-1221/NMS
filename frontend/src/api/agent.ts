@@ -116,7 +116,11 @@ export const deleteProbeResultPair = (agentId: string, target: string, type: str
 // 批量删除多个 (agent_id, target) 组合的全部历史（管理员）；后端串行分片删除，
 // 单次最多 200 个组合（与列表单页上限一致）
 export const deleteProbeResultPairs = (type: string, pairs: { agent_id: string; target: string }[]) =>
-  client.post<{ deleted: number; pairs: number }>('/probe-results/pairs/bulk-delete', { type, pairs });
+  client.post<{ deleted: number; pairs: number }>('/probe-results/pairs/bulk-delete', { type, pairs }, {
+    // 逐对分片删除，历史越长耗时越久，不能吃全局 10s 超时；确认框的 OK 按钮
+    // 会一直转圈直到后端返回。0 = 不限时，交给网络层（反向代理）约束
+    timeout: 0,
+  });
 
 // Target 下拉候选：该类型（可再限定 Agent）下去重后的 target，服务端聚合
 export const getProbeResultTargets = (type: string, agentId?: string) =>
