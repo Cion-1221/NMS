@@ -38,6 +38,7 @@ import type { LatencySeriesResp } from '../../../types/agent';
 import { apiErrMsg, useT } from '../../../i18n';
 import { useAppContext } from '../../../contexts/AppContext';
 import { FONT_MONO } from '../../../theme/theme';
+import { integerTicks, pickXLabels } from '../../../utils/chartTicks';
 
 const { RangePicker } = DatePicker;
 
@@ -62,8 +63,10 @@ const PRESETS: { key: string; seconds: number }[] = [
 ];
 
 // x 轴最多展示的标签个数（G2 5 的 point/band 分类轴不支持 tickCount，需要
-// 自行按数据密度抽样，否则几百个桶会把时间标签挤成一团无法辨认）
-const MAX_X_LABELS = 10;
+// 自行按数据密度抽样，否则几百个桶会把时间标签挤成一团无法辨认）。
+// 标签现在水平显示（Cacti 效果），最长的 "MM-DD HH:mm" 约 70px，8 个在
+// 940px 弹窗的绘图区内留有余量，不会互相重叠。
+const MAX_X_LABELS = 8;
 
 // 主图与丢包图共用的左右内边距。两张图的 y 轴标签宽度天然不同（延迟是 2–4 位
 // 数的 ms，丢包固定是 0/50/100），若都交给 G2 auto 计算，两个绘图区的左右边缘
@@ -188,23 +191,34 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
     return data.points.map((p) => dayjs(p.ts * 1000).format(timeFmt));
   }, [data, timeFmt]);
 
-  // x 轴标签抽样：按桶数量等间隔挑选 ≤MAX_X_LABELS 个标签展示，其余位置的
-  // 刻度仍然存在（保持每个点的横坐标准确），只是 label 留空——用固定的
-  // labelFormatter 抽样代替 G2 的自动防重叠（该功能在 point/band 分类轴上
-  // 不生效，且已知版本存在 labelAutoRotate/Ellipsis 相关 bug，故不依赖它）。
-  const xKeepLabels = useMemo(() => {
-    const keep = new Set<string>();
-    if (xDomain.length === 0) return keep;
-    const step = Math.max(1, Math.ceil(xDomain.length / MAX_X_LABELS));
-    for (let i = 0; i < xDomain.length; i += step) keep.add(xDomain[i]);
-    keep.add(xDomain[xDomain.length - 1]);
-    return keep;
-  }, [xDomain]);
+  // x 轴标签抽样：按桶数量等间隔挑选 ≤MAX_X_LABELS 个标签展示（见 pickXLabels），
+  // 用固定抽样代替 G2 的自动防重叠（该功能在 point/band 分类轴上不生效，且已知
+  // 版本存在 labelAutoRotate/Ellipsis 相关 bug，故不依赖它）。
+  const xKeepLabels = useMemo(() => pickXLabels(xDomain, MAX_X_LABELS), [xDomain]);
 
   const xLabelFormatter = useCallback((v: unknown) => {
     const s = typeof v === 'string' ? v : String(v);
     return xKeepLabels.has(s) ? s : '';
   }, [xKeepLabels]);
+
+  // 只在抽样保留的桶上画刻度线（Cacti 只有主刻度的效果），其余几百个桶不再各画
+  // 一根小竖线；labelFormatter 仍保留作为兜底
+  const xTickFilter = useCallback(
+    (v: unknown) => xKeepLabels.has(typeof v === 'string' ? v : String(v)),
+    [xKeepLabels],
+  );
+
+  // y 轴整数刻度（见 integerTicks）：主图按 avg/min/max 的最大值，丢包图按最大
+  // 丢包率（无丢包时 0–1，有丢包时按最大值取整数步长）
+  const yTicks = useMemo(() => {
+    let max = 0;
+    for (const r of chartData) if (r.ms != null && r.ms > max) max = r.ms;
+    return integerTicks(max, 5);
+  }, [chartData]);
+  const lossTicks = useMemo(
+    () => integerTicks(lossData.reduce((m, d) => Math.max(m, d.loss), 0), 2),
+    [lossData],
+  );
 
   // 导出当前显示的聚合序列为 CSV（BOM 头保证 Excel 正确识别 UTF-8）
   const exportCsv = () => {
@@ -247,10 +261,18 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
         domain: [MIN_LABEL, MAX_LABEL, AVG_LABEL],
         range: [c.muted, c.muted, c.primary],
       },
-      y: { nice: true },
+      // y 轴 Cacti 风格：从 0 起、整数刻度。domain 上界钉在最后一个刻度、关闭
+      // nice，刻度完全由 tickMethod 给出，G2 不再自行推出 34.5/34.6 这种小数刻度
+      y: { domain: [0, yTicks[yTicks.length - 1]], nice: false, tickMethod: () => yTicks },
     },
     axis: {
-      x: { labelFontFamily: FONT_MONO, labelFontSize: 10.5, labelFormatter: xLabelFormatter },
+      x: {
+        labelFontFamily: FONT_MONO, labelFontSize: 10.5,
+        // 时间标签水平显示（Cacti 效果）：关掉 G2 的自动旋转/隐藏/省略，标签密度
+        // 已由 tickFilter + labelFormatter 的抽样控制，不会重叠
+        labelAutoRotate: false, labelAutoHide: false, labelAutoEllipsis: false,
+        tickFilter: xTickFilter, labelFormatter: xLabelFormatter,
+      },
       y: { labelFontFamily: FONT_MONO, labelFontSize: 10.5, gridLineDash: [3, 4], title: false },
     },
     // 不覆盖 tooltip：多序列（colorField）折线图的默认 tooltip 已按 metric 分组
@@ -268,12 +290,16 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
     theme: g2Theme,
     paddingLeft: PAD_L,
     paddingRight: PAD_R,
-    // 与主图共用同一份 x domain，保证两图逐桶对齐（见 xDomain 注释）
-    scale: { x: { domain: xDomain } },
+    scale: {
+      // 与主图共用同一份 x domain，保证两图逐桶对齐（见 xDomain 注释）
+      x: { domain: xDomain },
+      // 同主图：整数刻度、从 0 起（原先 nice 推出的 0 / 0.5 / 1 也是小数刻度）
+      y: { domain: [0, lossTicks[lossTicks.length - 1]], nice: false, tickMethod: () => lossTicks },
+    },
     style: { fill: c.loss, radiusTopLeft: 1.5, radiusTopRight: 1.5 },
     axis: {
       x: false,
-      y: { labelFontFamily: FONT_MONO, labelFontSize: 10.5, title: false, tickCount: 2 },
+      y: { labelFontFamily: FONT_MONO, labelFontSize: 10.5, title: false },
     },
     tooltip: {
       title: 'time',
