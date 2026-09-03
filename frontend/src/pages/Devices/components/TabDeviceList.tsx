@@ -107,12 +107,14 @@ const TabDeviceList: React.FC = () => {
         vendor_id:   filterVendorId,
       });
       if (seq !== reqSeq.current) return; // 已有更新的请求发出，丢弃本次结果
+      // 后端 nil 切片会序列化为 null，统一按空数组处理
+      const items = r.data.items ?? [];
       // 删除当前页最后一条记录后该页可能为空 —— 自动回退一页重新加载
-      if (r.data.items.length === 0 && r.data.total > 0 && page > 1) {
+      if (items.length === 0 && r.data.total > 0 && page > 1) {
         setPage(p => Math.max(1, p - 1));
         return;
       }
-      setData(r.data.items);
+      setData(items);
       setTotal(r.data.total);
     } catch (err: unknown) {
       if (seq === reqSeq.current) {
@@ -134,11 +136,13 @@ const TabDeviceList: React.FC = () => {
         getDeviceVendors(),
         getDeviceAgentsLite(),
       ]);
-      setSites(s.data);
-      setAllPoPs(p.data);
-      setRoles(r.data);
-      setVendors(v.data);
-      setAgents(a.data);
+      // 字典表为空时后端可能返回 null（nil 切片），这里兜底为空数组，
+      // 否则筛选栏 / 表单的 .map 会让整页白屏
+      setSites(s.data ?? []);
+      setAllPoPs(p.data ?? []);
+      setRoles(r.data ?? []);
+      setVendors(v.data ?? []);
+      setAgents(a.data ?? []);
       setLookupsError(false); // Clear stale-data banner on successful reload
     } catch (err: unknown) {
       // Surface the error so operators know filter options may be stale,

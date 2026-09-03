@@ -38,7 +38,9 @@ func ListDeviceSites(db *gorm.DB) gin.HandlerFunc {
 		PopCount int64 `json:"pop_count"`
 	}
 	return func(c *gin.Context) {
-		var rows []siteRow
+		// 显式初始化为空切片：Scan 在零行时不会触碰目标，nil 切片会序列化为 JSON
+		// null，前端按数组消费（.map）会直接崩——全新部署站点表为空时即触发。
+		rows := make([]siteRow, 0)
 		db.Model(&models.DeviceSite{}).
 			Select("device_sites.*, COALESCE(COUNT(device_pops.id), 0) AS pop_count").
 			Joins("LEFT JOIN device_pops ON device_pops.site_id = device_sites.id").
@@ -158,7 +160,7 @@ func DeleteDeviceSite(db *gorm.DB) gin.HandlerFunc {
 
 func ListDevicePoPs(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var pops []models.DevicePoP
+		pops := make([]models.DevicePoP, 0)
 		q := db.Preload("Site").Order("name asc")
 		// Optional site_id filter — used when the frontend loads PoPs for a single site
 		if siteIDStr := c.Query("site_id"); siteIDStr != "" {
@@ -293,7 +295,7 @@ func DeleteDevicePoP(db *gorm.DB) gin.HandlerFunc {
 
 func ListDeviceRoles(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var roles []models.DeviceRole
+		roles := make([]models.DeviceRole, 0)
 		db.Order("name asc").Find(&roles)
 		c.JSON(http.StatusOK, roles)
 	}
@@ -386,7 +388,7 @@ func DeleteDeviceRole(db *gorm.DB) gin.HandlerFunc {
 
 func ListDeviceVendors(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var vendors []models.DeviceVendor
+		vendors := make([]models.DeviceVendor, 0)
 		db.Order("name asc").Find(&vendors)
 		c.JSON(http.StatusOK, vendors)
 	}
@@ -524,7 +526,7 @@ func ListDevices(db *gorm.DB) gin.HandlerFunc {
 		var total int64
 		query.Count(&total)
 
-		var devices []models.Device
+		devices := make([]models.Device, 0)
 		query.
 			Preload("Site").Preload("PoP").Preload("Role").Preload("Vendor").Preload("SNMP").
 			Order("(management_ip IS NULL AND management_ipv6 IS NULL) ASC").
@@ -1061,7 +1063,8 @@ func ListDeviceAgentsLite(db *gorm.DB) gin.HandlerFunc {
 		LastSeenAt *time.Time `json:"last_seen_at"`
 	}
 	return func(c *gin.Context) {
-		var rows []agentLite
+		// 同 ListDeviceSites：Scan 零行时保持 nil → JSON null，必须显式初始化
+		rows := make([]agentLite, 0)
 		db.Model(&models.Agent{}).
 			Select("agents.agent_id, agents.hostname, agents.status, COALESCE(agent_groups.name, '') AS group_name, agents.last_seen_at").
 			Joins("LEFT JOIN agent_groups ON agent_groups.id = agents.group_id").

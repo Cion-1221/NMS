@@ -44,7 +44,7 @@ const TabMIBs: React.FC = () => {
     setLoading(true);
     try {
       const r = await getDeviceMIBs();
-      setData(r.data);
+      setData(r.data ?? []);
     } catch (err: unknown) {
       message.error(apiErrMsg(err));
     } finally {

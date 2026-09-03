@@ -56,7 +56,7 @@ const TabSites: React.FC = () => {
     setLoading(true);
     try {
       const r = await getDeviceSites();
-      setData(r.data);
+      setData(r.data ?? []);
     } catch (err: unknown) {
       message.error(apiErrMsg(err));
     } finally {
@@ -82,7 +82,7 @@ const TabSites: React.FC = () => {
     setPopLoading(true);
     try {
       const r = await getDevicePoPs(siteId);
-      setPops(r.data);
+      setPops(r.data ?? []);
     } catch (err: unknown) {
       message.error(apiErrMsg(err));
     } finally {

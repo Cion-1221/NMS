@@ -22,7 +22,7 @@ const TabVendors: React.FC = () => {
 
   const loadData = async () => {
     setLoading(true);
-    try { const r = await getDeviceVendors(); setData(r.data); }
+    try { const r = await getDeviceVendors(); setData(r.data ?? []); }
     catch (err: unknown) { message.error(apiErrMsg(err)); }
     finally { setLoading(false); }
   };

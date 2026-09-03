@@ -233,7 +233,7 @@ func TranslateMIBOID(engine *MIBEngine) gin.HandlerFunc {
 // ListDeviceMIBs GET /api/v1/devices/mibs
 func ListDeviceMIBs(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var mibs []models.DeviceMIB
+		mibs := make([]models.DeviceMIB, 0)
 		db.Order("module_name asc").Find(&mibs)
 		c.JSON(http.StatusOK, mibs)
 	}
