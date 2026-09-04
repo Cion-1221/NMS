@@ -360,10 +360,14 @@ func Login(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			return
 		}
 
-		// 停用检查放在密码校验之后：凭错误密码探测不到账号的停用状态（防枚举），
-		// 持有正确凭据的本人则能得到明确提示
+		// 停用账号：对外与密码错误完全一致（OWASP：不存在 / 密码错 / 锁定 / 停用一律同一
+		// 条通用错误）。走到这里说明密码是对的——若单独提示"已停用"，等于确认口令有效，
+		// 停用的 admin 会变成最好撞的账号。同样计入锁定计数；真实原因只进审计日志，
+		// 管理员在用户列表 / 审计日志能看到。已登录会话（refresh / me）遇到停用仍给
+		// 明确提示，那些调用方本来就持有有效会话，不构成口令反馈。
 		if !user.Enabled {
-			c.JSON(http.StatusForbidden, gin.H{"error": "账号已被停用，请联系管理员", "code": "auth.account_disabled"})
+			recordLoginFailure(db, c, req.Username, "disabled")
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误", "code": "auth.invalid_credentials"})
 			return
 		}
 
