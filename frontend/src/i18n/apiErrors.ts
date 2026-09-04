@@ -18,6 +18,7 @@ const apiErrors: Record<string, Record<Lang, string>> = {
   'not_found':         { en: 'Resource not found (it may have been deleted)', zh: '资源不存在（可能已被删除）' },
   'common.name_taken': { en: 'Name already exists, please choose another', zh: '名称已存在，请使用其他名称' },
   'common.rate_limited': { en: 'Too many requests — please wait a moment and retry', zh: '请求过于频繁，请稍后再试' },
+  'common.duplicate':  { en: 'A record with the same unique value already exists', zh: '已存在重复记录（唯一字段冲突）' },
 
   // ── 认证 / 授权 ───────────────────────────────────────────────────────────
   'auth.invalid_credentials':  { en: 'Invalid username or password', zh: '用户名或密码错误' },
@@ -36,6 +37,13 @@ const apiErrors: Record<string, Record<Lang, string>> = {
   'auth.lifetime_over_cap':    { en: 'Exceeds the maximum session lifetime set by the administrator ({max} hours)', zh: '超出管理员限制的最大会话时长（{max} 小时）' },
   'auth.account_disabled':     { en: 'This account has been disabled — contact an administrator', zh: '账号已被停用，请联系管理员' },
   'auth.perm_required':        { en: 'Permission required for this operation: {perm}', zh: '权限不足，该操作需要权限：{perm}' },
+  'auth.refresh_reused':       { en: 'A revoked session token was reused — all sessions of this login were revoked. Please sign in again.', zh: '检测到已失效的会话令牌被重复使用，该登录的全部会话已吊销，请重新登录' },
+  'auth.pwd_too_long':         { en: 'Password must be at most 72 characters', zh: '密码最长 72 个字符' },
+  'auth.mfa_invalid':          { en: 'Verification session expired — please sign in again', zh: '验证会话已过期，请重新登录' },
+  'auth.totp_invalid':         { en: 'Invalid verification code', zh: '验证码错误' },
+  'auth.totp_not_enabled':     { en: 'Two-factor authentication is not enabled on this account', zh: '该账号未开启两步验证' },
+  'auth.totp_already_enabled': { en: 'Two-factor authentication is already enabled', zh: '两步验证已开启' },
+  'auth.totp_setup_required':  { en: 'Start the setup first to obtain a secret', zh: '请先开始设置以获取密钥' },
 
   // ── System（用户 / 用户组 / 安全设置）──────────────────────────────────────
   'sys.username_taken':          { en: 'Username already exists, please choose another', zh: '用户名已存在，请使用其他用户名' },
@@ -51,6 +59,7 @@ const apiErrors: Record<string, Record<Lang, string>> = {
   'sys.sec_max_attempts_range':  { en: 'Max failed attempts must be between 1 and 100', zh: '最大失败次数取值范围 1-100' },
   'sys.sec_window_range':        { en: 'Window must be between 1 and 1440 minutes', zh: '统计窗口取值范围 1-1440 分钟' },
   'sys.sec_lockout_range':       { en: 'Lockout duration must be between 1 and 1440 minutes', zh: '锁定时长取值范围 1-1440 分钟' },
+  'sys.sec_user_attempts_range': { en: 'Per-username failure cap must be 0 (off) or between 1 and 1000', zh: '按用户名的失败上限取值范围为 0（关闭）或 1-1000' },
   'sys.lockout_select_one':      { en: 'Select at least one lockout entry to unlock', zh: '请至少选择一条要解除的锁定' },
 
   // ── Devices ────────────────────────────────────────────────────────────────

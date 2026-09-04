@@ -6,7 +6,7 @@ import { ExclamationCircleFilled, PlusOutlined, ThunderboltOutlined } from '@ant
 import type { ColumnsType } from 'antd/es/table';
 import {
   listUsers, createUser, updateUser, deleteUser, forceLogoutUser, listGroups,
-  listUserSessions, revokeUserSession,
+  listUserSessions, revokeUserSession, resetUserTOTP,
 } from '../../../api/system';
 import { SysUser, SysGroup, UserSession } from '../../../types/system';
 import { useAuth } from '../../../contexts/AuthContext';
@@ -193,6 +193,25 @@ const SystemUserPage: React.FC = () => {
     });
   };
 
+  // 重置两步验证：用户验证器丢失时解锁；服务端同时吊销其全部会话
+  const handleResetTOTP = (r: SysUser) => {
+    confirm({
+      title:   t('sys.user.totpResetTitle', { name: r.username }),
+      icon:    <ExclamationCircleFilled style={{ color: '#faad14' }} />,
+      content: t('sys.user.totpResetBody'),
+      okText:  t('sys.user.totpReset'),
+      okType:  'danger',
+      cancelText: t('common.cancel'),
+      onOk: async () => {
+        try {
+          await resetUserTOTP(r.id);
+          message.success(t('sys.user.totpResetOk'));
+          fetchData();
+        } catch (err: any) { message.error(apiErrMsg(err)); }
+      },
+    });
+  };
+
   const columns: ColumnsType<SysUser> = [
     { title: t('common.id'), dataIndex: 'id', key: 'id', width: 60, render: (v: number) => <span style={{ fontFamily: FONT_MONO, color: 'var(--ant-color-text-secondary)' }}>{v}</span> },
     {
@@ -237,6 +256,15 @@ const SystemUserPage: React.FC = () => {
         : <Badge status="success" text={t('sys.user.pwdOk')} />,
     },
     {
+      title:     t('sys.user.totp'),
+      dataIndex: 'totp_enabled',
+      key:       'totp',
+      width:     90,
+      render:    (v: boolean) => v
+        ? <StatusTag status="active" label={t('sys.user.totpOn')} />
+        : <StatusTag status="unknown" tone="neutral" label={t('sys.user.totpOff')} />,
+    },
+    {
       title:     t('sys.user.sessions'),
       dataIndex: 'active_sessions',
       key:       'sessions',
@@ -264,7 +292,7 @@ const SystemUserPage: React.FC = () => {
     {
       title:  t('common.actions'),
       key:    'action',
-      width:  260,
+      width:  340,
       render: (_, r) => (
         <Space size={0}>
           <Button size="small" type="link" onClick={() => openEdit(r)}>{t('common.edit')}</Button>
@@ -276,6 +304,9 @@ const SystemUserPage: React.FC = () => {
               {t('sys.user.forceLogout')}
             </Button>
           </Tooltip>
+          {r.totp_enabled && (
+            <Button size="small" type="link" onClick={() => handleResetTOTP(r)}>{t('sys.user.totpReset')}</Button>
+          )}
           <Button size="small" type="text" danger disabled={r.id === me?.id} onClick={() => handleDelete(r)}>
             {t('common.delete')}
           </Button>

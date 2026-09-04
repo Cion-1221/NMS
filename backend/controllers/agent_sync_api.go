@@ -563,13 +563,13 @@ func RenewAgentCert(db *gorm.DB, pki *core.PKI, clientCertDays int) gin.HandlerF
 		}
 		issued, err := pki.IssueClientCert(agent.AgentID, clientCertDays)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "签发证书失败: " + err.Error()})
+			internalErr(c, http.StatusInternalServerError, "签发证书失败", err)
 			return
 		}
 		if err := db.Model(agent).Updates(map[string]interface{}{
 			"cert_serial": issued.Serial, "cert_expiry": issued.Expiry,
 		}).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新证书记录失败: " + err.Error()})
+			internalErr(c, http.StatusInternalServerError, "更新证书记录失败", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{

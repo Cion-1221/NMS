@@ -102,7 +102,7 @@ func CreateDeviceSNMPOID(db *gorm.DB, engine *MIBEngine) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "该设备已存在相同 OID", "code": "device.snmp_oid_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
+			dbErr(c, "创建", err)
 			return
 		}
 		writeDeviceAudit(db, getUsername(c), "add_snmp_oid", "device", &id,
@@ -165,7 +165,7 @@ func UpdateDeviceSNMPOID(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "该设备已存在相同 OID", "code": "device.snmp_oid_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + txErr.Error()})
+			dbErr(c, "更新", txErr)
 			return
 		}
 		db.First(&row, oidID)
@@ -203,7 +203,7 @@ func DeleteDeviceSNMPOID(db *gorm.DB) gin.HandlerFunc {
 			return tx.Delete(&row).Error
 		})
 		if txErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "删除失败: " + txErr.Error()})
+			dbErr(c, "删除", txErr)
 			return
 		}
 		writeDeviceAudit(db, getUsername(c), "delete_snmp_oid", "device", &id,

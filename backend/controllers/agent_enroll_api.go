@@ -152,13 +152,18 @@ func EnrollAgent(db *gorm.DB, pki *core.PKI, cfg AgentPKIConfig) gin.HandlerFunc
 			Hostname          string `json:"hostname" binding:"required"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
+			// 公网未认证端点：不回显绑定细节（结构字段名）
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "bad_request"})
+			return
+		}
+		if len(req.Hostname) > 255 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "hostname 过长（最多 255 字符）", "code": "bad_request"})
 			return
 		}
 
 		agentID, err := generateAgentID(db)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalErr(c, http.StatusInternalServerError, "分配 AgentID 失败", err)
 			return
 		}
 
@@ -214,7 +219,7 @@ func EnrollAgent(db *gorm.DB, pki *core.PKI, cfg AgentPKIConfig) gin.HandlerFunc
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "注册码无效、已被使用或已过期"})
 				return
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "注册失败: " + txErr.Error()})
+			internalErr(c, http.StatusInternalServerError, "注册失败", txErr)
 			return
 		}
 		enrollGuard.success(clientIP)

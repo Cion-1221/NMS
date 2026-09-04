@@ -238,7 +238,7 @@ func DeleteProbeResultPair(db *gorm.DB) gin.HandlerFunc {
 		result := db.Where("agent_id = ? AND target = ? AND type = ?", agentID, target, typeFilter).
 			Delete(&models.ProbeResult{})
 		if result.Error != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败: " + result.Error.Error(), "code": "server_error"})
+			internalErr(c, http.StatusInternalServerError, "删除失败", result.Error)
 			return
 		}
 		// 与 PurgeProbeResults 同口径：管理员删数据必须留审计痕迹

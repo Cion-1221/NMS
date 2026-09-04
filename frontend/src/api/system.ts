@@ -33,6 +33,10 @@ export const listUserSessions = (id: number) =>
 export const revokeUserSession = (id: number, sessionId: number) =>
   client.delete(`/system/users/${id}/sessions/${sessionId}`);
 
+// 管理员重置目标用户的两步验证（验证器丢失时解锁），同时吊销其全部会话
+export const resetUserTOTP = (id: number) =>
+  client.post<{ revoked: number }>(`/system/users/${id}/totp/reset`);
+
 // ── 用户组管理 ─────────────────────────────────────────────────────────────────
 export const listGroups = () =>
   client.get<SysGroup[]>('/system/groups');

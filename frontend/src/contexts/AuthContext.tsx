@@ -7,7 +7,7 @@ import React, {
   useState,
 } from 'react';
 import { AuthUser, TokenBundle } from '../types/auth';
-import { refreshToken as refreshTokenApi } from '../api/auth';
+import { logout as logoutApi, refreshToken as refreshTokenApi } from '../api/auth';
 import { SESSION_REFRESHED_EVENT, storageKeys } from '../api/client';
 
 // ─── 类型 ─────────────────────────────────────────────────────────────────────
@@ -18,7 +18,8 @@ interface AuthContextType {
   loading: boolean;
   /** 登录 / 密码修改成功后，存储完整 Token 包 */
   login: (bundle: TokenBundle) => void;
-  logout: () => void;
+  /** 服务端吊销本会话的 Refresh Token 后清本地（服务端不可达时也照常清本地） */
+  logout: () => Promise<void>;
   /** Refresh Token 换 Token 成功后更新 session（同 login，逻辑复用） */
   refreshSession: (bundle: TokenBundle) => void;
   /** 局部更新已登录用户的偏好（theme/language 等）并同步到 localStorage，
@@ -33,7 +34,7 @@ const AuthContext = createContext<AuthContextType>({
   token: null,
   loading: true,
   login: () => {},
-  logout: () => {},
+  logout: async () => {},
   refreshSession: () => {},
   updateStoredUser: () => {},
 });
@@ -172,10 +173,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     scheduleRefresh(bundle.access_token_expires_at);
   }, [scheduleRefresh]);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
     if (timerRef.current) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
+    }
+    // 先让服务端吊销本会话的 Refresh Token 家族，再清本地：只清本地的话令牌在服务端
+    // 仍然有效，被盗后照常续期。请求必须在清存储之前发出——拦截器从 localStorage
+    // 取 Bearer。网络不通或已失效都不阻止本机退出。
+    const storedRefresh = localStorage.getItem(storageKeys.refreshToken);
+    if (storedRefresh) {
+      try { await logoutApi(storedRefresh); } catch { /* 忽略：本地照常退出 */ }
     }
     clearStorage();
     setToken(null);

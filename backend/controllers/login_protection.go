@@ -28,27 +28,33 @@ const loginProtectionKey = "login_protection"
 // LoginProtectionSettings 登录安全配置，System 界面可调
 type LoginProtectionSettings struct {
 	Enabled        bool `json:"enabled"`         // 总开关
-	MaxAttempts    int  `json:"max_attempts"`    // 窗口内最大失败次数
+	MaxAttempts    int  `json:"max_attempts"`    // 窗口内最大失败次数（按 用户名+IP）
 	WindowMinutes  int  `json:"window_minutes"`  // 失败计数窗口（分钟）
 	LockoutMinutes int  `json:"lockout_minutes"` // 触发后的锁定时长（分钟）
+	// UserMaxAttempts 同一用户名跨全部 IP 的窗口内失败上限。按"用户名+IP"的锁定挡不
+	// 住轮换来源 IP 的分布式撞库，这一层按用户名兜底：达到上限即对所有 IP 锁定
+	// LockoutMinutes。0 = 关闭；默认 20（按 IP 阈值的 4 倍，正常用户几乎不可能误触）。
+	UserMaxAttempts int `json:"user_max_attempts"`
 }
 
 func defaultLoginProtectionSettings() LoginProtectionSettings {
 	return LoginProtectionSettings{
-		Enabled:        true,
-		MaxAttempts:    5,
-		WindowMinutes:  5,
-		LockoutMinutes: 15,
+		Enabled:         true,
+		MaxAttempts:     5,
+		WindowMinutes:   5,
+		LockoutMinutes:  15,
+		UserMaxAttempts: 20,
 	}
 }
 
-// getLoginProtectionSettings 读取配置；记录缺失或损坏时回退默认值，保证登录永不被配置问题阻塞
+// getLoginProtectionSettings 读取配置；记录缺失或损坏时回退默认值，保证登录永不被配置问题阻塞。
+// 先填默认值再反序列化：升级前保存的记录缺少新字段时沿用默认值，而不是被解析成 0（关闭）。
 func getLoginProtectionSettings(db *gorm.DB) LoginProtectionSettings {
 	var row models.SysSetting
 	if err := db.Where("setting_key = ?", loginProtectionKey).First(&row).Error; err != nil {
 		return defaultLoginProtectionSettings()
 	}
-	var s LoginProtectionSettings
+	s := defaultLoginProtectionSettings()
 	if err := json.Unmarshal([]byte(row.Value), &s); err != nil {
 		return defaultLoginProtectionSettings()
 	}
@@ -110,6 +116,11 @@ func loginGuardKey(username, ip string) string {
 	return strings.ToLower(strings.TrimSpace(username)) + "|" + ip
 }
 
+// loginGuardUserKey 跨 IP 的用户名级计数键；锁定列表里 IP 显示为 "*"
+func loginGuardUserKey(username string) string {
+	return loginGuardKey(username, "*")
+}
+
 // check 返回该 key 是否处于锁定状态及解锁时间
 func (t *loginTracker) check(key string) (locked bool, until time.Time) {
 	t.mu.Lock()
@@ -124,14 +135,22 @@ func (t *loginTracker) check(key string) (locked bool, until time.Time) {
 	return false, time.Time{}
 }
 
-// fail 记录一次失败；窗口内失败次数达到阈值时触发锁定并清空计数
+// fail 记录一次失败：按 用户名+IP 计数，并（启用时）按用户名跨 IP 再计一次
 func (t *loginTracker) fail(username, ip string, s LoginProtectionSettings) {
-	key := loginGuardKey(username, ip)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.recordLocked(loginGuardKey(username, ip), username, ip, s.MaxAttempts, s)
+	if s.UserMaxAttempts > 0 {
+		t.recordLocked(loginGuardUserKey(username), username, "*", s.UserMaxAttempts, s)
+	}
+}
+
+// recordLocked 在 key 上记一次失败；窗口内失败次数达到 maxAttempts 时触发锁定并清空计数
+// （调用方持锁）
+func (t *loginTracker) recordLocked(key, username, ip string, maxAttempts int, s LoginProtectionSettings) {
 	now := time.Now()
 	windowStart := now.Add(-time.Duration(s.WindowMinutes) * time.Minute)
 
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	rec, ok := t.records[key]
 	if !ok {
 		rec = &loginRecord{
@@ -148,7 +167,7 @@ func (t *loginTracker) fail(username, ip string, s LoginProtectionSettings) {
 		}
 	}
 	rec.failures = append(kept, now)
-	if len(rec.failures) >= s.MaxAttempts {
+	if len(rec.failures) >= maxAttempts {
 		rec.lockedAt = now
 		rec.lockedUntil = now.Add(time.Duration(s.LockoutMinutes) * time.Minute)
 		rec.failures = nil
@@ -192,11 +211,13 @@ func (t *loginTracker) unlock(keys []string) int {
 	return n
 }
 
-// success 登录成功后清除该 key 的全部状态
-func (t *loginTracker) success(key string) {
+// success 登录成功后清除各 key 的全部状态
+func (t *loginTracker) success(keys ...string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.records, key)
+	for _, key := range keys {
+		delete(t.records, key)
+	}
 }
 
 // sweep 移除已解锁且无近期失败的条目（近期 = 1 小时内，覆盖所有合理窗口配置）
@@ -221,9 +242,11 @@ func loginGuardCheck(db *gorm.DB, username, ip string) (msg string, minutes int)
 	if !s.Enabled {
 		return "", 0
 	}
-	if locked, until := loginGuard.check(loginGuardKey(username, ip)); locked {
-		mins := int(time.Until(until).Minutes()) + 1
-		return fmt.Sprintf("登录失败次数过多，账号已临时锁定，请 %d 分钟后重试", mins), mins
+	for _, key := range []string{loginGuardKey(username, ip), loginGuardUserKey(username)} {
+		if locked, until := loginGuard.check(key); locked {
+			mins := int(time.Until(until).Minutes()) + 1
+			return fmt.Sprintf("登录失败次数过多，账号已临时锁定，请 %d 分钟后重试", mins), mins
+		}
 	}
 	return "", 0
 }
@@ -237,9 +260,9 @@ func loginGuardFail(db *gorm.DB, username, ip string) {
 	loginGuard.fail(username, ip, s)
 }
 
-// loginGuardSuccess 在登录成功后调用
+// loginGuardSuccess 在登录（含二次验证）完全成功后调用，清除该用户名的两级计数
 func loginGuardSuccess(username, ip string) {
-	loginGuard.success(loginGuardKey(username, ip))
+	loginGuard.success(loginGuardKey(username, ip), loginGuardUserKey(username))
 }
 
 // ── 会话策略（管理员配置的全局会话时长上限）──────────────────────────────────────
@@ -303,7 +326,7 @@ func UpdateSessionPolicyAPI(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		if err := saveSessionPolicy(db, req); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error(), "code": "server_error"})
+			internalErr(c, http.StatusInternalServerError, "保存失败", err)
 			return
 		}
 		writeSysAudit(db, getUsername(c), "update_session_policy", "settings", sessionPolicyKey,
@@ -341,13 +364,17 @@ func UpdateSecuritySettings(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "锁定时长取值范围 1-1440 分钟", "code": "sys.sec_lockout_range"})
 			return
 		}
+		if req.UserMaxAttempts < 0 || req.UserMaxAttempts > 1000 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "按用户名的失败上限取值范围为 0（关闭）或 1-1000", "code": "sys.sec_user_attempts_range"})
+			return
+		}
 		if err := saveLoginProtectionSettings(db, req); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error(), "code": "server_error"})
+			internalErr(c, http.StatusInternalServerError, "保存失败", err)
 			return
 		}
 		writeSysAudit(db, getUsername(c), "update_security_settings", "settings", loginProtectionKey,
-			fmt.Sprintf("Login protection: enabled=%v, max_attempts=%d, window=%dm, lockout=%dm",
-				req.Enabled, req.MaxAttempts, req.WindowMinutes, req.LockoutMinutes))
+			fmt.Sprintf("Login protection: enabled=%v, max_attempts=%d, window=%dm, lockout=%dm, user_max_attempts=%d",
+				req.Enabled, req.MaxAttempts, req.WindowMinutes, req.LockoutMinutes, req.UserMaxAttempts))
 		c.JSON(http.StatusOK, req)
 	}
 }

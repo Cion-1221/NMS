@@ -38,8 +38,8 @@ func LookupASN(db *asndb.DB) gin.HandlerFunc {
 func ReloadASNDB(db *asndb.DB, v4, v6, names string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := db.Load(v4, v6, names); err != nil {
-			slog.Error("asndb: 手动重载失败", "err", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "code": "server_error"})
+			// 文件路径等细节只进日志
+			internalErr(c, http.StatusInternalServerError, "ASN 数据重载失败，请检查服务端日志", err)
 			return
 		}
 		slog.Info("asndb: 手动重载成功")

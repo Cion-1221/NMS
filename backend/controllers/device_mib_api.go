@@ -189,7 +189,7 @@ func UploadDeviceMIB(db *gorm.DB, mibDir string, engine *MIBEngine) gin.HandlerF
 				})
 				return
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建记录失败: " + err.Error()})
+			dbErr(c, "创建记录", err)
 			return
 		}
 
@@ -279,7 +279,7 @@ func DeleteDeviceMIB(db *gorm.DB, engine *MIBEngine) gin.HandlerFunc {
 			return
 		}
 		if err := db.Delete(&mib).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "删除失败: " + err.Error()})
+			dbErr(c, "删除", err)
 			return
 		}
 		if mib.FilePath != "" {

@@ -7,6 +7,8 @@ package controllers
 import (
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -16,6 +18,34 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-sql-driver/mysql"
 )
+
+// ── 内部错误统一出口 ─────────────────────────────────────────────────────────
+// 数据库 / 文件系统等内部错误的原文（表名、约束名、SQL 片段、路径）只写日志，客户端
+// 一律收到通用文案 + code——错误细节是攻击者最省事的侦察信息来源。
+// 业务错误（core.CodedError）仍原样透出，它们本来就是面向用户的文案。
+
+// internalErr 记录内部错误并以 status 返回通用文案（code = server_error）。
+func internalErr(c *gin.Context, status int, msg string, err error) {
+	slog.Error(msg, "err", err, "method", c.Request.Method, "path", c.Request.URL.Path,
+		"user", getUsername(c), "ip", c.ClientIP())
+	c.JSON(status, gin.H{"error": msg, "code": "server_error"})
+}
+
+// dbErr 数据库写操作失败的统一响应：CodedError → 400 原样（事务内的业务校验）；
+// 唯一键冲突 → 400 common.duplicate；其余 → 500 通用文案。action 为动作文案，如
+// "创建" / "更新" / "删除"。调用方若已有更精确的 friendly* 判断，应先用那个。
+func dbErr(c *gin.Context, action string, err error) {
+	var ce *core.CodedError
+	if errors.As(err, &ce) {
+		c.JSON(http.StatusBadRequest, codedErrJSON(err))
+		return
+	}
+	if isDuplicateErr(err) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": action + "失败：已存在重复记录", "code": "common.duplicate"})
+		return
+	}
+	internalErr(c, http.StatusInternalServerError, action+"失败", err)
+}
 
 // parseIDParam 解析并校验路径参数中的数字 ID（必须为正整数）。
 func parseIDParam(c *gin.Context, name string) (uint, error) {

@@ -34,8 +34,11 @@ const timeCell = (v: string) => {
 };
 
 const ACTION_COLOR: Record<string, string> = {
+  login_success: 'green', login_failed: 'red', logout: 'default', refresh_reused: 'magenta',
   create_user: 'green', update_user: 'blue', delete_user: 'red', force_logout: 'volcano',
-  change_password: 'blue',
+  change_password: 'blue', revoke_session: 'volcano',
+  totp_enabled: 'green', totp_disabled: 'orange', totp_recovery_used: 'gold',
+  totp_recovery_regenerated: 'blue', reset_totp: 'volcano',
   create_group: 'green', update_group: 'blue', delete_group: 'red',
   update_security_settings: 'blue', update_session_policy: 'blue',
   unlock_lockouts: 'cyan',
@@ -46,7 +49,7 @@ const ACTION_COLOR: Record<string, string> = {
 // above and it automatically appears in both the color renderer and the filter.
 const ACTION_OPTIONS = Object.keys(ACTION_COLOR).map(a => ({ value: a, label: a }));
 
-const RESOURCE_OPTIONS = ['user', 'group', 'settings', 'lockout', 'audit_log']
+const RESOURCE_OPTIONS = ['session', 'user', 'group', 'settings', 'lockout', 'audit_log']
   .map(r => ({ value: r, label: r }));
 
 const TabSysAuditLog: React.FC = () => {

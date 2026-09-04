@@ -113,6 +113,15 @@ const TabSecuritySettings: React.FC = () => {
             <InputNumber min={1} max={1440} style={{ width: 200 }} disabled={!enabled} />
           </Form.Item>
 
+          <Form.Item
+            label={t('sysset.userMaxAttempts')}
+            name="user_max_attempts"
+            rules={[{ required: true, type: 'number', min: 0, max: 1000 }]}
+            extra={t('sysset.userMaxAttemptsHint')}
+          >
+            <InputNumber min={0} max={1000} style={{ width: 200 }} disabled={!enabled} />
+          </Form.Item>
+
           <Space>
             <Button type="primary" loading={saving} onClick={handleSave}>
               {t('common.save')}

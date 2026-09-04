@@ -72,7 +72,7 @@ func CreateDeviceSite(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
+			dbErr(c, "创建", err)
 			return
 		}
 		writeDeviceAudit(db, getUsername(c), "create_site", "site", &site.ID,
@@ -111,7 +111,7 @@ func UpdateDeviceSite(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
+			dbErr(c, "更新", err)
 			return
 		}
 		// Re-fetch so the response always contains the values actually written to the
@@ -147,7 +147,7 @@ func DeleteDeviceSite(db *gorm.DB) gin.HandlerFunc {
 			return tx.Delete(&models.DeviceSite{}, id).Error
 		})
 		if txErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "删除失败: " + txErr.Error()})
+			dbErr(c, "删除", txErr)
 			return
 		}
 		writeDeviceAudit(db, getUsername(c), "delete_site", "site", &id,
@@ -197,7 +197,7 @@ func CreateDevicePoP(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "该站点下已存在同名的 PoP 节点，请使用其他名称", "code": "device.pop_name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
+			dbErr(c, "创建", err)
 			return
 		}
 		db.Preload("Site").First(&pop, pop.ID)
@@ -259,7 +259,7 @@ func UpdateDevicePoP(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "该站点下已存在同名的 PoP 节点，请使用其他名称", "code": "device.pop_name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + txErr.Error()})
+			dbErr(c, "更新", txErr)
 			return
 		}
 		db.Preload("Site").First(&pop, id)
@@ -282,7 +282,7 @@ func DeleteDevicePoP(db *gorm.DB) gin.HandlerFunc {
 			return tx.Delete(&models.DevicePoP{}, id).Error
 		})
 		if txErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "删除失败: " + txErr.Error()})
+			dbErr(c, "删除", txErr)
 			return
 		}
 		writeDeviceAudit(db, getUsername(c), "delete_pop", "pop", &id,
@@ -317,7 +317,7 @@ func CreateDeviceRole(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
+			dbErr(c, "创建", err)
 			return
 		}
 		writeDeviceAudit(db, getUsername(c), "create_role", "role", &role.ID,
@@ -353,7 +353,7 @@ func UpdateDeviceRole(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
+			dbErr(c, "更新", err)
 			return
 		}
 		db.First(&role, id) // re-fetch to ensure response reflects applied updates
@@ -375,7 +375,7 @@ func DeleteDeviceRole(db *gorm.DB) gin.HandlerFunc {
 			return tx.Delete(&models.DeviceRole{}, id).Error
 		})
 		if txErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "删除失败: " + txErr.Error()})
+			dbErr(c, "删除", txErr)
 			return
 		}
 		writeDeviceAudit(db, getUsername(c), "delete_role", "role", &id,
@@ -410,7 +410,7 @@ func CreateDeviceVendor(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
+			dbErr(c, "创建", err)
 			return
 		}
 		writeDeviceAudit(db, getUsername(c), "create_vendor", "vendor", &vendor.ID,
@@ -446,7 +446,7 @@ func UpdateDeviceVendor(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
+			dbErr(c, "更新", err)
 			return
 		}
 		db.First(&vendor, id) // re-fetch to ensure response reflects applied updates
@@ -468,7 +468,7 @@ func DeleteDeviceVendor(db *gorm.DB) gin.HandlerFunc {
 			return tx.Delete(&models.DeviceVendor{}, id).Error
 		})
 		if txErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "删除失败: " + txErr.Error()})
+			dbErr(c, "删除", txErr)
 			return
 		}
 		writeDeviceAudit(db, getUsername(c), "delete_vendor", "vendor", &id,
@@ -846,7 +846,7 @@ func CreateDevice(db *gorm.DB, snmpCfg SNMPConfig) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, codedErrJSON(ce))
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
+			dbErr(c, "创建", err)
 			return
 		}
 		db.Preload("Site").Preload("PoP").Preload("Role").Preload("Vendor").First(&device, device.ID)
@@ -994,7 +994,7 @@ func UpdateDevice(db *gorm.DB, snmpCfg SNMPConfig) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, codedErrJSON(ce))
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
+			dbErr(c, "更新", err)
 			return
 		}
 		db.Preload("Site").Preload("PoP").Preload("Role").Preload("Vendor").Preload("SNMP").First(&device, id)
@@ -1039,7 +1039,7 @@ func DeleteDevice(db *gorm.DB) gin.HandlerFunc {
 			return tx.Delete(&device).Error
 		})
 		if txErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "删除失败: " + txErr.Error()})
+			dbErr(c, "删除", txErr)
 			return
 		}
 		writeDeviceAudit(db, getUsername(c), "delete_device", "device", &id,

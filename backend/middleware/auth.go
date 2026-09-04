@@ -44,12 +44,13 @@ func JWTAuth(jwtSecret string) gin.HandlerFunc {
 			return
 		}
 
-		// 强制改密时只允许访问 me 和 change-password 接口
+		// 强制改密时只允许访问 me / change-password / logout 接口
 		if claims.MustChangePassword {
 			path := c.Request.URL.Path
 			allowedPaths := map[string]bool{
 				"/api/v1/auth/me":              true,
 				"/api/v1/auth/change-password": true,
+				"/api/v1/auth/logout":          true,
 			}
 			if !allowedPaths[path] {
 				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{

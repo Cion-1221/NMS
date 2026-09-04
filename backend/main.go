@@ -454,6 +454,8 @@ func main() {
 	r.MaxMultipartMemory = 128 << 20 // 128 MiB，支持上传较大的 Agent 二进制
 	// 自定义 Recovery：panic 堆栈写入 slog（落盘），而非 gin 默认的 stderr
 	r.Use(middleware.Recovery())
+	// API 响应基础安全头（nosniff / DENY / no-referrer / no-store）
+	r.Use(middleware.SecurityHeaders())
 	if cfg.Log.AccessLog {
 		r.Use(slogGinMiddleware())
 	}

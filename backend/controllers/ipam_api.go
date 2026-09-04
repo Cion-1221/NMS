@@ -88,7 +88,7 @@ func CreateIPAMGroup(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error(), "code": "server_error"})
+			dbErr(c, "创建", err)
 			return
 		}
 		writeAudit(db, getUsername(c), "create_group", "group", &g.ID, fmt.Sprintf("Created group: %s", req.Name))
@@ -121,7 +121,7 @@ func UpdateIPAMGroup(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error(), "code": "server_error"})
+			dbErr(c, "更新", err)
 			return
 		}
 		writeAudit(db, getUsername(c), "update_group", "group", &id, fmt.Sprintf("Updated group %d: %s", id, req.Name))
@@ -142,7 +142,7 @@ func DeleteIPAMGroup(db *gorm.DB) gin.HandlerFunc {
 			return tx.Delete(&models.IPAMGroup{}, id).Error
 		})
 		if txErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "删除失败: " + txErr.Error()})
+			dbErr(c, "删除", txErr)
 			return
 		}
 		writeAudit(db, getUsername(c), "delete_group", "group", &id, fmt.Sprintf("Deleted group %d", id))
@@ -176,7 +176,7 @@ func CreateIPAMType(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error(), "code": "server_error"})
+			dbErr(c, "创建", err)
 			return
 		}
 		writeAudit(db, getUsername(c), "create_type", "type", &t.ID, fmt.Sprintf("Created type: %s", req.Name))
@@ -209,7 +209,7 @@ func UpdateIPAMType(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error(), "code": "server_error"})
+			dbErr(c, "更新", err)
 			return
 		}
 		writeAudit(db, getUsername(c), "update_type", "type", &id, fmt.Sprintf("Updated type %d: %s", id, req.Name))
@@ -230,7 +230,7 @@ func DeleteIPAMType(db *gorm.DB) gin.HandlerFunc {
 			return tx.Delete(&models.IPAMType{}, id).Error
 		})
 		if txErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "删除失败: " + txErr.Error()})
+			dbErr(c, "删除", txErr)
 			return
 		}
 		writeAudit(db, getUsername(c), "delete_type", "type", &id, fmt.Sprintf("Deleted type %d", id))
@@ -265,7 +265,7 @@ func CreateVRF(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error(), "code": "server_error"})
+			dbErr(c, "创建", err)
 			return
 		}
 		writeAudit(db, getUsername(c), "create_vrf", "vrf", &v.ID, fmt.Sprintf("Created VRF: %s (RD: %s)", req.Name, req.RD))
@@ -299,7 +299,7 @@ func UpdateVRF(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error(), "code": "server_error"})
+			dbErr(c, "更新", err)
 			return
 		}
 		writeAudit(db, getUsername(c), "update_vrf", "vrf", &id, fmt.Sprintf("Updated VRF %d: %s", id, req.Name))
@@ -320,7 +320,7 @@ func DeleteVRF(db *gorm.DB) gin.HandlerFunc {
 			return tx.Delete(&models.IPAMVRF{}, id).Error
 		})
 		if txErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "删除失败: " + txErr.Error()})
+			dbErr(c, "删除", txErr)
 			return
 		}
 		writeAudit(db, getUsername(c), "delete_vrf", "vrf", &id, fmt.Sprintf("Deleted VRF %d", id))
@@ -366,7 +366,7 @@ func CreateRootPrefix(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "该根前缀已存在", "code": "ipam.cidr_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error(), "code": "server_error"})
+			dbErr(c, "创建", err)
 			return
 		}
 		db.Preload("Group").Preload("Type").Preload("VRF").First(&root, root.ID)
@@ -413,7 +413,7 @@ func UpdateRootPrefix(db *gorm.DB) gin.HandlerFunc {
 			"vrf_id":   req.VRFID,
 			"remark":   req.Remark,
 		}).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error(), "code": "server_error"})
+			dbErr(c, "更新", err)
 			return
 		}
 		db.Preload("Group").Preload("Type").Preload("VRF").First(&root, id)
@@ -443,7 +443,7 @@ func DeleteRootPrefix(db *gorm.DB) gin.HandlerFunc {
 			}
 			return tx.Delete(&root).Error
 		}); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "删除失败: " + err.Error()})
+			dbErr(c, "删除", err)
 			return
 		}
 		writeAudit(db, getUsername(c), "delete_root", "root_prefix", &id,
@@ -476,7 +476,7 @@ func GetSubnetTree(db *gorm.DB) gin.HandlerFunc {
 		if err := db.Where("root_prefix_id = ?", rootPrefixID).
 			Preload("Group").Preload("Type").Preload("VRF").
 			Find(&subnets).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "查询树失败: " + err.Error()})
+			internalErr(c, http.StatusInternalServerError, "查询树失败", err)
 			return
 		}
 		sortSubnetsByIP(subnets)
@@ -547,7 +547,7 @@ func UpdateSubnet(db *gorm.DB) gin.HandlerFunc {
 			"vrf_id":   req.VRFID,
 			"remark":   req.Remark,
 		}).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error(), "code": "server_error"})
+			dbErr(c, "更新", err)
 			return
 		}
 		writeAudit(db, getUsername(c), "update_subnet", "subnet", &id,

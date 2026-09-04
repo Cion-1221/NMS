@@ -123,9 +123,10 @@ func ListUsers(db *gorm.DB) gin.HandlerFunc {
 			Cnt    int64
 		}
 		var rows []sessRow
+		// 已旋转的旧行只是重放检测的痕迹，不算活跃会话
 		db.Model(&models.SysRefreshToken{}).
 			Select("user_id, COUNT(*) AS cnt").
-			Where("expires_at > ?", time.Now()).
+			Where("expires_at > ? AND rotated_at IS NULL", time.Now()).
 			Group("user_id").Scan(&rows)
 		cnt := make(map[uint]int64, len(rows))
 		for _, r := range rows {
@@ -143,7 +144,7 @@ func CreateUser(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
 			Username string `json:"username" binding:"required,min=3,max=50"`
-			Password string `json:"password" binding:"required,min=8"`
+			Password string `json:"password" binding:"required,min=8,max=72"`
 			GroupID  uint   `json:"group_id" binding:"required"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -174,7 +175,7 @@ func CreateUser(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "用户名已存在，请使用其他用户名", "code": "sys.username_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "用户创建失败: " + err.Error(), "code": "server_error"})
+			dbErr(c, "用户创建", err)
 			return
 		}
 		db.Preload("Group").First(&user, user.ID)
@@ -233,6 +234,10 @@ func UpdateUser(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "新密码至少需要 8 位", "code": "auth.pwd_too_short"})
 				return
 			}
+			if len(req.Password) > maxPasswordLen {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "密码最长 72 个字符", "code": "auth.pwd_too_long"})
+				return
+			}
 			hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "密码处理失败", "code": "server_error"})
@@ -276,7 +281,7 @@ func UpdateUser(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		if err := db.Model(&user).Updates(updates).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败: " + err.Error(), "code": "server_error"})
+			dbErr(c, "更新", err)
 			return
 		}
 
@@ -388,10 +393,41 @@ func ListUserSessions(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在", "code": "not_found"})
 			return
 		}
-		var sessions []models.SysRefreshToken
-		db.Where("user_id = ? AND expires_at > ?", targetID, time.Now()).
+		sessions := make([]models.SysRefreshToken, 0)
+		db.Where("user_id = ? AND expires_at > ? AND rotated_at IS NULL", targetID, time.Now()).
 			Order("created_at desc").Find(&sessions)
 		c.JSON(http.StatusOK, gin.H{"username": user.Username, "items": sessions})
+	}
+}
+
+// ResetUserTOTP POST /api/v1/system/users/:id/totp/reset
+// 管理员重置目标用户的两步验证（验证器丢失时解锁）。属安全事件：同时吊销其全部
+// 会话；用户下次凭密码登录后应立即重新开启。
+func ResetUserTOTP(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		targetID, ok := parseUserID(c)
+		if !ok {
+			return
+		}
+		var user models.SysUser
+		if err := db.First(&user, targetID).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在", "code": "not_found"})
+			return
+		}
+		if !user.TOTPEnabled && user.TOTPSecret == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "该账号未开启两步验证", "code": "auth.totp_not_enabled"})
+			return
+		}
+		if err := db.Model(&user).Updates(map[string]interface{}{
+			"totp_enabled": false, "totp_secret": "", "totp_last_counter": 0, "totp_recovery_codes": "",
+		}).Error; err != nil {
+			dbErr(c, "重置", err)
+			return
+		}
+		result := db.Where("user_id = ?", targetID).Delete(&models.SysRefreshToken{})
+		writeSysAudit(db, getUsername(c), "reset_totp", "user", user.Username,
+			fmt.Sprintf("Reset two-factor authentication of user %q, revoked %d session(s)", user.Username, result.RowsAffected))
+		c.JSON(http.StatusOK, gin.H{"revoked": result.RowsAffected})
 	}
 }
 
@@ -467,7 +503,7 @@ func CreateGroup(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "用户组名称已存在，请使用其他名称", "code": "common.name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "用户组创建失败: " + err.Error(), "code": "server_error"})
+			dbErr(c, "用户组创建", err)
 			return
 		}
 		writeSysAudit(db, getUsername(c), "create_group", "group", group.Name,
@@ -638,6 +674,7 @@ func RegisterSystemRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc) {
 		sys.POST("/users/:id/force-logout", ForceLogoutUser(db))
 		sys.GET("/users/:id/sessions", ListUserSessions(db))
 		sys.DELETE("/users/:id/sessions/:sid", RevokeUserSession(db))
+		sys.POST("/users/:id/totp/reset", ResetUserTOTP(db))
 
 		sys.GET("/groups", ListGroups(db))
 		sys.POST("/groups", CreateGroup(db))

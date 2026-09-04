@@ -4,6 +4,10 @@
  * and styling change. The left brand panel is hidden under 900px (.cion-login-brand
  * media query in index.html) so the form centers on narrow viewports.
  *
+ * Two-step flow: when the account has TOTP enabled the password step returns a
+ * short-lived mfa_token instead of a token bundle; the form then swaps to a
+ * verification-code step (authenticator code or a recovery code).
+ *
  * NOTE: colours come from the raw `palette` keyed by resolvedTheme, NOT from
  * `var(--ant-color-*)`. The login page's root is OUTSIDE any antd component, and
  * under antd 6's cssVar mode those variables are scoped to antd component subtrees
@@ -11,8 +15,12 @@
  */
 import React, { useState } from 'react';
 import { Button, Checkbox, Form, Input, Tooltip, message } from 'antd';
-import { ArrowRightOutlined, BulbOutlined, LockOutlined, MoonOutlined, UserOutlined } from '@ant-design/icons';
-import { login as loginApi } from '../../api/auth';
+import {
+  ArrowLeftOutlined, ArrowRightOutlined, BulbOutlined, LockOutlined, MoonOutlined,
+  SafetyCertificateOutlined, UserOutlined,
+} from '@ant-design/icons';
+import { login as loginApi, loginTOTP } from '../../api/auth';
+import { isTOTPChallenge } from '../../types/auth';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAppContext } from '../../contexts/AppContext';
 import { useApiError, useT } from '../../i18n';
@@ -34,14 +42,35 @@ const LoginPage: React.FC = () => {
   const t = useT();
   const apiErr = useApiError();
   const [loading, setLoading] = useState(false);
+  // 非空 = 密码已通过，等待第二步验证码
+  const [mfaToken, setMfaToken] = useState<string | null>(null);
 
   const handleFinish = async (values: { username: string; password: string }) => {
     setLoading(true);
     try {
       const res = await loginApi(values.username, values.password);
+      if (isTOTPChallenge(res.data)) {
+        setMfaToken(res.data.mfa_token);
+        return;
+      }
       login(res.data);
     } catch (err: any) {
       message.error(apiErr(err, t('auth.login.errCred')));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTOTP = async (values: { code: string }) => {
+    if (!mfaToken) return;
+    setLoading(true);
+    try {
+      const res = await loginTOTP(mfaToken, values.code.trim());
+      login(res.data);
+    } catch (err: any) {
+      message.error(apiErr(err));
+      // 挑战过期 / 尝试次数用尽：回到第一步重新输入密码
+      if (err?.response?.data?.code === 'auth.mfa_invalid') setMfaToken(null);
     } finally {
       setLoading(false);
     }
@@ -102,31 +131,66 @@ const LoginPage: React.FC = () => {
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 32 }}>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ width: '100%', maxWidth: 380 }}>
-            <h2 style={{ fontSize: 25, fontWeight: 700, margin: '0 0 7px', color: c.text }}>
-              {t('auth.login.title')}
-            </h2>
-            <p style={{ fontSize: 14, color: c.textDim, margin: '0 0 30px' }}>
-              {t('auth.login.subtitle')}
-            </p>
+            {mfaToken ? (
+              <>
+                <h2 style={{ fontSize: 25, fontWeight: 700, margin: '0 0 7px', color: c.text }}>
+                  {t('auth.login.totpTitle')}
+                </h2>
+                <p style={{ fontSize: 14, color: c.textDim, margin: '0 0 30px' }}>
+                  {t('auth.login.totpHint')}
+                </p>
+                <Form layout="vertical" onFinish={handleTOTP} autoComplete="off" size="large" requiredMark={false}>
+                  <Form.Item name="code" label={t('auth.login.totpCode')}
+                    rules={[{ required: true, message: `${t('auth.login.totpCode')} is required` }]}>
+                    <Input
+                      prefix={<SafetyCertificateOutlined />}
+                      placeholder="123456"
+                      autoFocus
+                      maxLength={32}
+                      autoComplete="one-time-code"
+                      inputMode="numeric"
+                      style={{ fontFamily: MONO, letterSpacing: '.12em' }}
+                    />
+                  </Form.Item>
+                  <Form.Item style={{ marginBottom: 12 }}>
+                    <Button type="primary" htmlType="submit" block loading={loading} iconPosition="end" icon={<ArrowRightOutlined />}>
+                      {t('auth.login.totpVerify')}
+                    </Button>
+                  </Form.Item>
+                  <Button type="text" block icon={<ArrowLeftOutlined />} onClick={() => setMfaToken(null)} disabled={loading}>
+                    {t('auth.login.totpBack')}
+                  </Button>
+                </Form>
+              </>
+            ) : (
+              <>
+                <h2 style={{ fontSize: 25, fontWeight: 700, margin: '0 0 7px', color: c.text }}>
+                  {t('auth.login.title')}
+                </h2>
+                <p style={{ fontSize: 14, color: c.textDim, margin: '0 0 30px' }}>
+                  {t('auth.login.subtitle')}
+                </p>
 
-            <Form layout="vertical" onFinish={handleFinish} autoComplete="off" size="large" requiredMark={false}>
-              <Form.Item name="username" label={t('auth.login.username')}
-                rules={[{ required: true, message: `${t('auth.login.username')} is required` }]}>
-                <Input prefix={<UserOutlined />} placeholder={t('auth.login.username')} />
-              </Form.Item>
-              <Form.Item name="password" label={t('auth.login.password')}
-                rules={[{ required: true, message: `${t('auth.login.password')} is required` }]}>
-                <Input.Password prefix={<LockOutlined />} placeholder={t('auth.login.password')} />
-              </Form.Item>
-              <Form.Item>
-                <Checkbox defaultChecked>{t('auth.login.remember')}</Checkbox>
-              </Form.Item>
-              <Form.Item style={{ marginBottom: 0 }}>
-                <Button type="primary" htmlType="submit" block loading={loading} iconPosition="end" icon={<ArrowRightOutlined />}>
-                  {t('auth.login.btn')}
-                </Button>
-              </Form.Item>
-            </Form>
+                <Form layout="vertical" onFinish={handleFinish} autoComplete="off" size="large" requiredMark={false}>
+                  <Form.Item name="username" label={t('auth.login.username')}
+                    rules={[{ required: true, message: `${t('auth.login.username')} is required` }]}>
+                    <Input prefix={<UserOutlined />} placeholder={t('auth.login.username')} />
+                  </Form.Item>
+                  <Form.Item name="password" label={t('auth.login.password')}
+                    rules={[{ required: true, message: `${t('auth.login.password')} is required` }]}>
+                    <Input.Password prefix={<LockOutlined />} placeholder={t('auth.login.password')} />
+                  </Form.Item>
+                  <Form.Item>
+                    <Checkbox defaultChecked>{t('auth.login.remember')}</Checkbox>
+                  </Form.Item>
+                  <Form.Item style={{ marginBottom: 0 }}>
+                    <Button type="primary" htmlType="submit" block loading={loading} iconPosition="end" icon={<ArrowRightOutlined />}>
+                      {t('auth.login.btn')}
+                    </Button>
+                  </Form.Item>
+                </Form>
+              </>
+            )}
           </div>
         </div>
 

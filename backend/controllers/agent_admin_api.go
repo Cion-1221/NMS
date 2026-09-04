@@ -212,7 +212,7 @@ func UpdateAgent(db *gorm.DB) gin.HandlerFunc {
 			"source_ip_override": sourceIP,
 			"group_id":           req.GroupID,
 		}).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败: " + err.Error()})
+			dbErr(c, "更新", err)
 			return
 		}
 		db.Preload("Group").Where("agent_id = ?", agentID).First(&agent)
@@ -248,7 +248,7 @@ func DeleteAgent(db *gorm.DB) gin.HandlerFunc {
 			return tx.Delete(&agent).Error
 		})
 		if txErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败: " + txErr.Error()})
+			dbErr(c, "删除", txErr)
 			return
 		}
 		writeAgentAudit(db, getUsername(c), "delete_agent", "agent", agentID,
@@ -268,7 +268,7 @@ func RevokeAgent(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		if err := db.Model(&agent).Updates(map[string]interface{}{"revoked": true, "status": "offline"}).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "作废失败: " + err.Error()})
+			dbErr(c, "作废", err)
 			return
 		}
 		writeAgentAudit(db, getUsername(c), "revoke_agent", "agent", agentID,
@@ -303,7 +303,7 @@ func CreateAgentGroup(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
+			dbErr(c, "创建", err)
 			return
 		}
 		writeAgentAudit(db, getUsername(c), "create_group", "agent_group", strconv.Itoa(int(group.ID)),
@@ -339,7 +339,7 @@ func UpdateAgentGroup(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": msg, "code": "common.name_taken"})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
+			dbErr(c, "更新", err)
 			return
 		}
 		db.First(&group, id)
@@ -364,7 +364,7 @@ func DeleteAgentGroup(db *gorm.DB) gin.HandlerFunc {
 			return tx.Delete(&models.AgentGroup{}, id).Error
 		})
 		if txErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "删除失败: " + txErr.Error()})
+			dbErr(c, "删除", txErr)
 			return
 		}
 		writeAgentAudit(db, getUsername(c), "delete_group", "agent_group", strconv.Itoa(int(id)),
@@ -535,7 +535,7 @@ func CreateAgentTasks(db *gorm.DB) gin.HandlerFunc {
 				SkipTLSVerify: req.SkipTLSVerify, AddressFamily: req.AddressFamily,
 			}
 			if err := db.Create(&task).Error; err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "创建失败: " + err.Error()})
+				dbErr(c, "创建", err)
 				return
 			}
 			created = append(created, task)
@@ -602,7 +602,7 @@ func UpdateAgentTask(db *gorm.DB) gin.HandlerFunc {
 			"group_id": req.GroupID, "agent_id": req.AgentID, "enabled": req.Enabled,
 			"skip_tls_verify": req.SkipTLSVerify, "address_family": req.AddressFamily,
 		}).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "更新失败: " + err.Error()})
+			dbErr(c, "更新", err)
 			return
 		}
 		db.Preload("Group").Preload("Agent").First(&task, id)
@@ -620,7 +620,7 @@ func DeleteAgentTask(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		if err := db.Delete(&models.AgentTask{}, id).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "删除失败: " + err.Error()})
+			dbErr(c, "删除", err)
 			return
 		}
 		writeAgentAudit(db, getUsername(c), "delete_task", "agent_task", strconv.Itoa(int(id)),
@@ -683,7 +683,7 @@ func CreateAgentToken(db *gorm.DB) gin.HandlerFunc {
 			CreatedBy:     getUsername(c),
 		}
 		if err := db.Create(&token).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建失败: " + err.Error()})
+			dbErr(c, "创建", err)
 			return
 		}
 		writeAgentAudit(db, getUsername(c), "create_token", "agent_token", strconv.Itoa(int(token.ID)),
@@ -729,7 +729,7 @@ func GetCAStatus(pki *core.PKI) gin.HandlerFunc {
 func RotateCA(db *gorm.DB, pki *core.PKI, caDays int) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := pki.Rotate(caDays); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "轮换失败: " + err.Error(), "code": "server_error"})
+			internalErr(c, http.StatusInternalServerError, "轮换失败", err)
 			return
 		}
 		writeAgentAudit(db, getUsername(c), "rotate_ca", "ca", "",
@@ -854,7 +854,7 @@ func CreateAgentRelease(db *gorm.DB, releaseDir string) gin.HandlerFunc {
 			Notes: notes, CreatedBy: getUsername(c),
 		}
 		if err := db.Create(&rel).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建记录失败: " + err.Error()})
+			dbErr(c, "创建记录", err)
 			return
 		}
 
@@ -889,7 +889,7 @@ func DeleteAgentRelease(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		if err := db.Delete(&rel).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败: " + err.Error()})
+			dbErr(c, "删除", err)
 			return
 		}
 		if rel.FilePath != "" {
@@ -928,7 +928,7 @@ func SetAgentReleaseActive(db *gorm.DB) gin.HandlerFunc {
 				Update("active", false)
 		}
 		if err := db.Model(&rel).Update("active", req.Active).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败: " + err.Error()})
+			dbErr(c, "更新", err)
 			return
 		}
 		rel.Active = req.Active

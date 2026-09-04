@@ -17,6 +17,8 @@ export interface SysUser {
   token_lifetime_hours: number;
   /** 当前未过期的 Refresh Token 数（服务端聚合） */
   active_sessions: number;
+  /** 是否已开启两步验证（TOTP）；管理员可重置以处理验证器丢失 */
+  totp_enabled: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -83,6 +85,8 @@ export interface SecuritySettings {
   max_attempts: number;
   window_minutes: number;
   lockout_minutes: number;
+  /** 同一用户名跨全部 IP 的失败上限（防分布式撞库）；0 = 关闭 */
+  user_max_attempts: number;
 }
 
 /** 当前处于锁定状态的「用户名 + IP」条目 — 对应 GET /system/security/lockouts */
