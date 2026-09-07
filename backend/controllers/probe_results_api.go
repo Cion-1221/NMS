@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -363,16 +364,11 @@ func deleteProbeResultsChunkedProgress(db *gorm.DB, progress func(rows int64), c
 	const maxRetries = 5
 	var total int64
 	for {
-		q := db
-		if cond != "" {
-			q = q.Where(cond, args...)
-		}
-		var result *gorm.DB
+		var affected int64
 		var lastErr error
 		for attempt := 0; attempt < maxRetries; attempt++ {
-			result = q.Limit(probeResultsPurgeChunk).Delete(&models.ProbeResult{})
-			lastErr = result.Error
-			if lastErr == nil || !strings.Contains(lastErr.Error(), "Deadlock found") {
+			affected, lastErr = deleteProbeResultsChunkOnce(db, cond, args...)
+			if lastErr == nil || !isRetryableLockErr(lastErr) {
 				break
 			}
 			time.Sleep(time.Duration(200*(attempt+1)) * time.Millisecond)
@@ -380,15 +376,46 @@ func deleteProbeResultsChunkedProgress(db *gorm.DB, progress func(rows int64), c
 		if lastErr != nil {
 			return total, lastErr
 		}
-		total += result.RowsAffected
-		if progress != nil && result.RowsAffected > 0 {
-			progress(result.RowsAffected)
+		total += affected
+		if progress != nil && affected > 0 {
+			progress(affected)
 		}
-		if result.RowsAffected < probeResultsPurgeChunk {
+		if affected < probeResultsPurgeChunk {
 			return total, nil
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// deleteProbeResultsChunkOnce 执行一片删除。每次调用都从根 db 重新构建语句，并放在
+// 独立的 READ COMMITTED 事务里：
+//   - gorm 链式对象执行过一次之后带着 Error 和已结束的事务状态，复用它重试不会再
+//     执行 SQL，只会每次追加一条 "invalid transaction"——此前的死锁重试就是这样
+//     失效的（日志形如 "Deadlock found …; invalid transaction; invalid transaction…"）；
+//   - REPEATABLE READ 下按索引区间扫描的 DELETE 会对区间加 gap 锁，与并发的 Agent
+//     上报 INSERT 互相等待，这正是 1213 的主要来源；READ COMMITTED 只锁命中的行。
+//     清理的是历史点，不需要可重复读语义。
+func deleteProbeResultsChunkOnce(db *gorm.DB, cond string, args ...interface{}) (int64, error) {
+	tx := db.Begin(&sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if tx.Error != nil {
+		return 0, tx.Error
+	}
+	q := tx
+	if cond != "" {
+		q = q.Where(cond, args...)
+	} else {
+		// 全表清空也分片进行；gorm 要求 Delete 必须带 WHERE，用恒真条件代替 AllowGlobalUpdate
+		q = q.Where("1 = 1")
+	}
+	res := q.Limit(probeResultsPurgeChunk).Delete(&models.ProbeResult{})
+	if res.Error != nil {
+		tx.Rollback()
+		return 0, res.Error
+	}
+	if err := tx.Commit().Error; err != nil {
+		return 0, err
+	}
+	return res.RowsAffected, nil
 }
 
 // PurgeProbeResults DELETE /api/v1/probe-results?days=N —— 手动清理探测结果（管理员专用）。

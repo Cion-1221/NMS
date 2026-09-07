@@ -903,6 +903,7 @@ sudo nginx -t && sudo systemctl reload nginx      # 改 Nginx 配置后
 | 启动报 "audit 保留策略配置无效" | `probe_rollups` 桶粒度未严格递增，或原始保留天数 < 最大桶 × 2 + 2 |
 | MIB 上传后"未解析" | IMPORTS 的依赖模块尚未上传，补传后自动重建转好；解析错误在列表可见 |
 | 磁盘被 `probe_results` 打满 | 开启 `audit.probe_disk_guard`，缩短 `probe_results_max_age_days` 并启用归档层；页头「清理历史数据」可立即释放 |
+| 日志出现 `探测结果自动清理失败 … Error 1213 Deadlock found` | 清理与 Agent 上报 INSERT 在热表上撞锁。分片删除已改为每片独立的 READ COMMITTED 事务（不加 gap 锁）并对 1213 / 1205 退避重试 5 次；偶发一条即可忽略，持续出现说明写入压力过大，缩短保留期或加大 Agent 上报间隔 |
 | AutoMigrate 报外键 errno 150 | 已在 GORM 层禁用内联外键约束；若仍出现，检查表引擎是否统一为 InnoDB |
 | CA 轮换后 Agent 仍用旧证书连不上 | 轮换 / 终结只落盘，需 `systemctl restart nms-backend`；终结前确认全部 Agent 已续期 |
 

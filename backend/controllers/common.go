@@ -96,6 +96,21 @@ func isDuplicateErr(err error) bool {
 	return strings.Contains(err.Error(), "Duplicate entry")
 }
 
+// isRetryableLockErr 判断 err 是否为 InnoDB 的瞬时锁错误：1213 死锁、1205 锁等待
+// 超时。两者官方文档都建议应用层重试。驱动错误码优先；错误被包装或非驱动类型时
+// 回退子串匹配兜底。
+func isRetryableLockErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var me *mysql.MySQLError
+	if errors.As(err, &me) {
+		return me.Number == 1213 || me.Number == 1205
+	}
+	s := err.Error()
+	return strings.Contains(s, "Deadlock found") || strings.Contains(s, "Lock wait timeout")
+}
+
 // friendlyNameUniqueErr 将单列 name 唯一索引的冲突翻译为友好提示（IPAMGroup/
 // IPAMType/IPAMVRF/DeviceSite/DeviceRole/DeviceVendor/AgentGroup 等字典实体通用）。
 // entityName 为展示用标签，如 "站点"、"分组"、"VRF"。非唯一键冲突返回 ""。
