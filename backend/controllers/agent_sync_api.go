@@ -154,6 +154,59 @@ func GetAgentTasks(db *gorm.DB, snmpCfg SNMPConfig) gin.HandlerFunc {
 	}
 }
 
+// stackFamilies 解析 agents.stack（"v4" / "v6" / "v4,v6"）。
+func stackFamilies(s string) (v4, v6 bool) {
+	for _, f := range strings.Split(s, ",") {
+		switch strings.TrimSpace(f) {
+		case "v4":
+			v4 = true
+		case "v6":
+			v6 = true
+		}
+	}
+	return
+}
+
+// agentAddressFamilies 判断 Agent 当前可用的地址族，两层信息取交集：
+//
+//   - 地址来源（决定"用哪个地址"）：管理员填了 source_ip_override 就以它为准——它也是
+//     该 Agent 作为对端时的目标地址；只填 IPv4 即让该节点退出 IPv6 互测。否则用自动
+//     追踪的 connection_ipv4 / ipv6（Agent 用 tcp4 / tcp6 各连一次 /my-ip 自发现，两者
+//     都空时回退 connection_ip）。
+//   - 能力声明（决定"这一族现在能不能用"）：新版 Agent 启动时同步完成自发现，之后
+//     每个请求带 X-Agent-Stack，服务端记在 agents.stack。声明里没有的族即便 Override
+//     写了也不下发——Override 是管理员的地址选择，压不过节点当下的真实能力；重启 Agent
+//     即重新声明，撤掉的 IPv6 随之消失。旧版 Agent 不声明（stack 为空），只按地址来源
+//     判断，此时只有 TCP 来源那一族会被自动记录，会被当作单栈——升级 Agent 即可。
+func agentAddressFamilies(a *models.Agent) (hasV4, hasV6 bool) {
+	mark := func(s string) {
+		if addr, err := netip.ParseAddr(strings.TrimSpace(s)); err == nil {
+			if addr.Is4() {
+				hasV4 = true
+			} else {
+				hasV6 = true
+			}
+		}
+	}
+	if a.SourceIPOverride != nil && *a.SourceIPOverride != "" {
+		for _, part := range strings.SplitN(*a.SourceIPOverride, "/", 2) {
+			mark(part)
+		}
+	}
+	if !hasV4 && !hasV6 {
+		mark(a.ConnectionIPv4)
+		mark(a.ConnectionIPv6)
+	}
+	if !hasV4 && !hasV6 {
+		mark(a.ConnectionIP)
+	}
+	if a.Stack != "" {
+		sv4, sv6 := stackFamilies(a.Stack)
+		hasV4, hasV6 = hasV4 && sv4, hasV6 && sv6
+	}
+	return
+}
+
 // resolveMeshPingTargets 查询其他"存活"（LastSeenAt 在 onlineThreshold 内、未被吊销）
 // Agent 的可达 IP，作为 MeshPing 目标列表（排除自身）。
 //
@@ -161,6 +214,11 @@ func GetAgentTasks(db *gorm.DB, snmpCfg SNMPConfig) gin.HandlerFunc {
 //  1. source_ip_override（管理员手动，支持单 IP 或 "ipv4 / ipv6" 双栈格式）
 //  2. connection_ipv4 + connection_ipv6（自动追踪，有哪个发哪个）
 //  3. connection_ip（兜底：旧数据或尚未更新的 agent）
+//
+// 地址族自适应（见 agentAddressFamilies）：一个目标地址只有在请求方和对端**都**可用
+// 该族时才下发。只有 IPv4 的 Agent 不会收到对端的 IPv6 地址，反之亦然；对端声明了
+// 没有 IPv6，即便它的 Override 里还写着 v6 地址也不会成为目标。否则每个周期都会产生
+// 注定失败的记录，既污染矩阵也白白占存储。
 //
 // scope=group：仅限任务指定 Group 内的成员。
 // scope=global / scope=agent：所有存活 Agent（无 group 过滤）。
@@ -178,25 +236,38 @@ func resolveMeshPingTargets(db *gorm.DB, self *models.Agent, task models.AgentTa
 	var peers []models.Agent
 	q.Find(&peers)
 
+	selfV4, selfV6 := agentAddressFamilies(self)
 	targets := make([]string, 0, len(peers)*2)
-	for _, p := range peers {
+	// add 按"请求方 ∩ 对端"的可用地址族过滤后追加目标；保留原始字符串形式（不做规范化），
+	// 避免改变已有结果序列的 target 键
+	add := func(ip string, peerV4, peerV6 bool) {
+		ip = strings.TrimSpace(ip)
+		addr, err := netip.ParseAddr(ip)
+		if err != nil {
+			return
+		}
+		if addr.Is4() && !(selfV4 && peerV4) {
+			return
+		}
+		if !addr.Is4() && !(selfV6 && peerV6) {
+			return
+		}
+		targets = append(targets, ip)
+	}
+	for i := range peers {
+		p := &peers[i]
+		peerV4, peerV6 := agentAddressFamilies(p)
 		if p.SourceIPOverride != nil && *p.SourceIPOverride != "" {
 			// 管理员手动优先：支持单 IP 或 "ipv4 / ipv6" 双栈格式
 			for _, part := range strings.SplitN(*p.SourceIPOverride, "/", 2) {
-				if part = strings.TrimSpace(part); part != "" {
-					targets = append(targets, part)
-				}
+				add(part, peerV4, peerV6)
 			}
 		} else if p.ConnectionIPv4 != "" || p.ConnectionIPv6 != "" {
-			// 自动追踪的双栈地址：有哪个发哪个，agent 自行处理不可达
-			if p.ConnectionIPv4 != "" {
-				targets = append(targets, p.ConnectionIPv4)
-			}
-			if p.ConnectionIPv6 != "" {
-				targets = append(targets, p.ConnectionIPv6)
-			}
+			// 自动追踪的双栈地址：有哪个发哪个
+			add(p.ConnectionIPv4, peerV4, peerV6)
+			add(p.ConnectionIPv6, peerV4, peerV6)
 		} else if p.ConnectionIP != "" {
-			targets = append(targets, p.ConnectionIP)
+			add(p.ConnectionIP, peerV4, peerV6)
 		}
 	}
 	return targets

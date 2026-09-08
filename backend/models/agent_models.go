@@ -37,11 +37,14 @@ type Agent struct {
 	Version          string      `gorm:"type:varchar(50)" json:"version"`
 	OS               string      `gorm:"type:varchar(50)" json:"os"`
 	Arch             string      `gorm:"type:varchar(20)" json:"arch"`
-	RegisteredAt     time.Time   `json:"registered_at"`
-	CertExpiry       time.Time   `json:"cert_expiry"`
-	CertSerial       string      `gorm:"type:varchar(100)" json:"-"`
-	Revoked          bool        `gorm:"not null;default:false" json:"revoked"`
-	LastSeenAt       *time.Time  `json:"last_seen_at"`
+	// Stack 是 Agent 启动自发现后通过 X-Agent-Stack 声明的可用地址族（"v4" / "v6" /
+	// "v4,v6"），mesh 互测目标按它裁剪；旧版 Agent 不声明时为空（不裁剪）。
+	Stack        string     `gorm:"type:varchar(10)" json:"stack"`
+	RegisteredAt time.Time  `json:"registered_at"`
+	CertExpiry   time.Time  `json:"cert_expiry"`
+	CertSerial   string     `gorm:"type:varchar(100)" json:"-"`
+	Revoked      bool       `gorm:"not null;default:false" json:"revoked"`
+	LastSeenAt   *time.Time `json:"last_seen_at"`
 }
 
 func (Agent) TableName() string { return "agents" }

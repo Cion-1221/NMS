@@ -498,9 +498,9 @@ L1 / L2 子网**禁止单独删除**，只能通过 Split / Merge 重组——�
 
 - 列表：搜索 + 分组 / 版本 / 系统架构 / 状态四个下拉过滤（候选由服务端去重给出，不受分页影响）+ 健康汇总卡（total / online / offline / revoked / 近 1 小时探测量与失败率）
 - 状态口径：online / offline 只统计未作废的 Agent，revoked 单独一类
-- 编辑：hostname、分组、**Source IP Override**（覆盖自动追踪的连接地址，支持 `ipv4 / ipv6` 双栈格式——作为 MeshPing 互测目标与探测源绑定）
+- 编辑：hostname、分组、**Source IP Override**（覆盖自动追踪的连接地址，支持 `ipv4 / ipv6` 双栈格式——作为 MeshPing 互测目标与探测源绑定；填了它就以它为地址来源，只填 IPv4 即让该节点退出 IPv6 互测。Override 决定"用哪个地址"，Agent 启动时声明的 `X-Agent-Stack` 决定"这一族当下能不能用"，两者取交集）
 - **作废证书（Revoke）**：立即断连但保留历史数据；**删除**为硬删除（`?purge=true` 连带清探测记录，并解绑其名下设备的 SNMP 采集）；支持多选批量
-- **心跳机制**：Agent 周期调用 `GET /agent-sync/tasks` 拉任务，该调用本身即心跳——mTLS 中间件顺手刷新 `last_seen_at` / 连接 IP（写库 30 秒节流；`X-Agent-IPv4/IPv6` 头上报双栈地址，`X-Agent-Version/OS/Arch` 上报档案）；失联超 5 分钟由后台扫描（每分钟）翻转为 offline
+- **心跳机制**：Agent 周期调用 `GET /agent-sync/tasks` 拉任务，该调用本身即心跳——mTLS 中间件顺手刷新 `last_seen_at` / 连接 IP（写库 30 秒节流；`X-Agent-IPv4/IPv6` 头上报双栈地址，`X-Agent-Stack` 声明可用地址族——声明里没有的那一族即使库里还留着上次的地址也会被清掉，`X-Agent-Version/OS/Arch` 上报档案）；失联超 5 分钟由后台扫描（每分钟）翻转为 offline
 
 #### 4.4.2 分组
 
@@ -511,7 +511,7 @@ L1 / L2 子网**禁止单独删除**，只能通过 Split / Merge 重组——�
 - **8 种类型**：`ping` · `tcpping` · `httpcheck` · `dnscheck` · `traceroute` · `mtr` · `meshping` · `meshmtr`；POST 支持多类型一次批量创建（共享同一份 Target 列表，校验按所选类型的并集放行）
 - **三级 Scope**：Global（全部 Agent）/ Group（指定分组）/ Agent（指定单台）
 - **Target 格式**：每行一个字面 IP **或域名**；`tcpping` / `httpcheck` 可附加 `:port`（IPv6 用 `[addr]:port`；省略时 Agent 侧有默认值）；`httpcheck` 亦支持完整 `http(s)://` URL；`dnscheck` 填待解析域名
-- **meshping / meshmtr**：Target 由 Server 动态解析——同组（或全局）存活 Agent 的 IP 实时组装下发，配置时填写的 Target 被忽略。peer IP 优先级：`source_ip_override` → 自动追踪的 `connection_ipv4/v6` → 旧版 `connection_ip` 兜底
+- **meshping / meshmtr**：Target 由 Server 动态解析——同组（或全局）存活 Agent 的 IP 实时组装下发，配置时填写的 Target 被忽略。peer IP 优先级：`source_ip_override` → 自动追踪的 `connection_ipv4/v6` → 旧版 `connection_ip` 兜底。**地址族自适应**：一个目标地址只有在请求方和对端都可用该族时才下发。可用性 = 地址来源（Source IP Override 优先，否则自发现的 `connection_ipv4/v6`）∩ Agent 启动时声明的 `X-Agent-Stack`。只有 IPv4 的 Agent 不会去测对端的 IPv6，对端撤掉 IPv6 后重启 Agent 即自动退出 v6 互测（即使旧的 Override 里还写着 v6 地址），避免每周期产生注定失败的记录。旧版 Agent（无 `X-Agent-Stack`）只按地址来源判断
 - **每任务可选项**
   - `address_family`——域名 Target 的解析族：`auto`（默认）/ `v4` / `v6` / `both`（两族各测一次，结果以 ` (v4)` / ` (v6)` 后缀分为两条独立序列）。字面 IP 不受影响。切换 both 会更换序列键（旧序列停止增长）；traceroute 在 both 下两族串行，建议 interval ≥ 300s
   - `skip_tls_verify`——仅 `httpcheck`：探测裸 IP（证书 SAN 只签域名）或自签证书设备时开启
@@ -546,7 +546,7 @@ Ping / TCPing / HTTPCheck / MTR 四个 Tab 共用同一组件：
 
 #### 4.5.2 MeshPing 矩阵
 
-- NxN 延迟热力矩阵（v4 / v6 独立单元格），按分组 / 关键字过滤，30 秒轮询
+- NxN 延迟热力矩阵（v4 / v6 独立单元格），按分组 / 关键字过滤，30 秒轮询；只采纳最近 24 小时内的结果，不再产生新结果的序列（对端下线、地址变更、某一族不再下发）一天后自动从矩阵消失
 - 单元格菜单可下钻：对应 (源, 目标) 的 **MTR 逐跳详情**（meshmtr 结果）或**延迟趋势图**
 - 已知取舍：矩阵按各 Agent *当前* IP 反查历史结果归属，IP 变化瞬间个别历史单元格可能短暂错位
 
@@ -1002,7 +1002,7 @@ ESLint（`npm run lint`）不阻塞 CI，作为本地提交前自查。依赖版
 
 ### 8.6 Agent 同步 sync 端口
 
-端口 `8444`，强制 mTLS；请求头 `X-Agent-Version / OS / Arch / IPv4 / IPv6` 上报档案与双栈地址：
+端口 `8444`，强制 mTLS；请求头 `X-Agent-Version / OS / Arch / IPv4 / IPv6` 上报档案与双栈地址，`X-Agent-Stack`（新版 Agent）声明可用地址族：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|

@@ -136,11 +136,18 @@ type meshPingLatestRow struct {
 	ReportedAt time.Time
 }
 
+// meshMatrixStaleWindow 矩阵只采纳这个时间窗内的结果。矩阵是"当前状态"视图，而
+// "每对最新一条"对不再产生新结果的序列会一直停在最后一次结论上——对端下线、地址
+// 变更、或某一族目标因自适应不再下发之后，那格 "v6 Failed" 会挂满整个保留期
+// （默认 30 天）。24 小时远大于任何合理的 meshping 间隔，又足够让失效序列自然消失。
+const meshMatrixStaleWindow = 24 * time.Hour
+
 // GetMeshPingMatrix GET /api/v1/probe-results/meshping-matrix —— 将 meshping 结果
 // 透视为 NxN 矩阵：行/列 = 当前非吊销 Agent，单元格结构为 {"v4": {...}, "v6": {...}}。
 // 同一 (src, dst) 对的 IPv4 和 IPv6 探测结果独立存储，前端分别渲染，支持双栈同时显示。
 func GetMeshPingMatrix(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		since := time.Now().Add(-meshMatrixStaleWindow)
 		agentQuery := db.Model(&models.Agent{}).Where("revoked = ?", false)
 		if v := c.Query("group_id"); v != "" {
 			if id, err := strconv.Atoi(v); err == nil && id > 0 {
@@ -153,7 +160,7 @@ func GetMeshPingMatrix(db *gorm.DB) gin.HandlerFunc {
 		var agents []models.Agent
 		agentQuery.Order("group_id asc, agent_id asc").Find(&agents)
 
-		var rows []meshPingLatestRow
+		rows := make([]meshPingLatestRow, 0)
 		db.Raw(`
 			SELECT pr.agent_id AS agent_id, pr.target AS target, pr.success AS success,
 			       pr.latency_ms AS latency_ms, pr.reported_at AS reported_at
@@ -161,12 +168,12 @@ func GetMeshPingMatrix(db *gorm.DB) gin.HandlerFunc {
 			INNER JOIN (
 				SELECT agent_id, target, MAX(reported_at) AS max_time
 				FROM probe_results
-				WHERE type = ?
+				WHERE type = ? AND reported_at >= ?
 				GROUP BY agent_id, target
 			) latest
 			ON pr.agent_id = latest.agent_id AND pr.target = latest.target AND pr.reported_at = latest.max_time
-			WHERE pr.type = ?
-		`, "meshping", "meshping").Scan(&rows)
+			WHERE pr.type = ? AND pr.reported_at >= ?
+		`, "meshping", since, "meshping", since).Scan(&rows)
 
 		// 建立 IP → AgentID 的反查表：覆盖所有可能的 IP 字段 + source_ip_override
 		ipToAgent := make(map[string]string, len(agents)*3)
