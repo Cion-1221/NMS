@@ -45,10 +45,11 @@ type Agent struct {
 	CertSerial   string     `gorm:"type:varchar(100)" json:"-"`
 	// TrustedCAFP 记录 Agent 通过 X-Agent-CA-FP 上报的本地信任锚指纹集合（逗号分隔的 16 位 SHA-256 前缀），
 	// 用于三阶段 CA 轮换中观测多少在线 Agent 已完成新 CA 预分发同步。
-	TrustedCAFP string `gorm:"type:varchar(255)" json:"-"`
+	// 必须显式指定 column:trusted_ca_fp，否则 GORM 默认将连续大写 CAFP 映射为 trusted_cafp。
+	TrustedCAFP string `gorm:"column:trusted_ca_fp;type:varchar(255)" json:"-"`
 	// CertIssuerFP 记录签发当前 Agent 客户端证书的 CA 指纹（16 位 SHA-256 前缀），
 	// 用于观测切换新 CA 后多少在线 Agent 已完成客户端证书续期。
-	CertIssuerFP string     `gorm:"type:varchar(64)" json:"-"`
+	CertIssuerFP string     `gorm:"column:cert_issuer_fp;type:varchar(64)" json:"-"`
 	Revoked      bool       `gorm:"not null;default:false" json:"revoked"`
 	LastSeenAt   *time.Time `json:"last_seen_at"`
 }

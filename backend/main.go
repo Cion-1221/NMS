@@ -348,6 +348,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 一次性 schema 修正：清理 v1.31.0 未显式指定 column tag 时自动生成的冗余列 agents.trusted_cafp
+	var legacyCAFPCol int64
+	db.Raw(`SELECT COUNT(*) FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'agents' AND COLUMN_NAME = 'trusted_cafp'`).
+		Scan(&legacyCAFPCol)
+	if legacyCAFPCol > 0 {
+		if err := db.Exec("ALTER TABLE agents DROP COLUMN trusted_cafp").Error; err != nil {
+			slog.Warn("删除遗留列 agents.trusted_cafp 失败", "err", err)
+		} else {
+			slog.Info("已删除遗留列 agents.trusted_cafp")
+		}
+	}
+
 	// 写入初始化种子数据（仅空库首次执行）
 	controllers.SeedDatabase(db)
 

@@ -547,23 +547,35 @@ func upsertProbeLatestStates(db *gorm.DB, rows []models.ProbeResult) {
 	}
 }
 
-// BackfillProbeLatestStates 存量升级一次性回填：当快照表为空且历史热表非空时，按类型
-// 将每个 (agent_id, target) 的最新记录回填至 probe_latest_states（后台执行，不阻塞启动）。
+// BackfillProbeLatestStates 存量升级一次性回填：按探测类型检查，若某类型在历史热表中有数据但
+// 在快照表中尚无记录，则将每个 (agent_id, target) 的最新记录回填至 probe_latest_states。
 func BackfillProbeLatestStates(ctx context.Context, wg *sync.WaitGroup, db *gorm.DB) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		var latestCount int64
-		if err := db.Model(&models.ProbeLatestState{}).Count(&latestCount).Error; err != nil || latestCount > 0 {
-			return
-		}
 		var types []string
-		db.Model(&models.ProbeResult{}).Distinct().Pluck("type", &types)
-		if len(types) == 0 {
+		if err := db.Model(&models.ProbeResult{}).Distinct().Pluck("type", &types).Error; err != nil || len(types) == 0 {
 			return
 		}
-		slog.Info("开始从历史 probe_results 回填 probe_latest_states 快照表", "types", len(types))
+		var existingTypes []string
+		_ = db.Model(&models.ProbeLatestState{}).Distinct().Pluck("type", &existingTypes).Error
+		hasType := make(map[string]bool, len(existingTypes))
+		for _, t := range existingTypes {
+			hasType[t] = true
+		}
+
+		var missing []string
 		for _, tp := range types {
+			if tp != "" && !hasType[tp] {
+				missing = append(missing, tp)
+			}
+		}
+		if len(missing) == 0 {
+			return
+		}
+
+		slog.Info("开始从历史 probe_results 回填 probe_latest_states 快照表", "types", len(missing))
+		for _, tp := range missing {
 			if ctx.Err() != nil {
 				return
 			}
@@ -584,11 +596,11 @@ func BackfillProbeLatestStates(ctx context.Context, wg *sync.WaitGroup, db *gorm
 					GROUP BY p2.agent_id, p2.target
 				) pick ON pr.id = pick.max_id
 				ON DUPLICATE KEY UPDATE
-					task_id     = IF(VALUES(reported_at) >= reported_at, VALUES(task_id), task_id),
-					success     = IF(VALUES(reported_at) >= reported_at, VALUES(success), success),
-					latency_ms  = IF(VALUES(reported_at) >= reported_at, VALUES(latency_ms), latency_ms),
-					detail      = IF(VALUES(reported_at) >= reported_at, VALUES(detail), detail),
-					reported_at = IF(VALUES(reported_at) >= reported_at, VALUES(reported_at), reported_at)`,
+					task_id     = IF(VALUES(reported_at) >= probe_latest_states.reported_at, VALUES(task_id), probe_latest_states.task_id),
+					success     = IF(VALUES(reported_at) >= probe_latest_states.reported_at, VALUES(success), probe_latest_states.success),
+					latency_ms  = IF(VALUES(reported_at) >= probe_latest_states.reported_at, VALUES(latency_ms), probe_latest_states.latency_ms),
+					detail      = IF(VALUES(reported_at) >= probe_latest_states.reported_at, VALUES(detail), probe_latest_states.detail),
+					reported_at = IF(VALUES(reported_at) >= probe_latest_states.reported_at, VALUES(reported_at), probe_latest_states.reported_at)`,
 				tp, tp).Error
 			if err != nil {
 				slog.Error("回填 probe_latest_states 失败", "type", tp, "err", err)

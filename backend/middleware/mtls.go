@@ -156,7 +156,9 @@ func AgentMTLSWithPKI(db *gorm.DB, pki *core.PKI) gin.HandlerFunc {
 		if len(updates) > 0 || agent.LastSeenAt == nil ||
 			now.Sub(*agent.LastSeenAt) >= heartbeatWriteInterval {
 			updates["last_seen_at"] = now
-			db.Model(&agent).Updates(updates)
+			if err := db.Model(&agent).Updates(updates).Error; err != nil {
+				slog.Error("agent: 更新心跳状态失败", "agent_id", agentID, "err", err)
+			}
 		}
 		agent.ConnectionIP = ip
 		agent.LastSeenAt = &now
