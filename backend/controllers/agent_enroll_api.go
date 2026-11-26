@@ -148,8 +148,10 @@ func EnrollAgent(db *gorm.DB, pki *core.PKI, cfg AgentPKIConfig) gin.HandlerFunc
 		}
 
 		var req struct {
-			ProvisioningToken string `json:"provisioning_token" binding:"required"`
-			Hostname          string `json:"hostname" binding:"required"`
+			ProvisioningToken string            `json:"provisioning_token" binding:"required"`
+			Hostname          string            `json:"hostname" binding:"required"`
+			Region            string            `json:"region"`
+			Tags              map[string]string `json:"tags"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			// 公网未认证端点：不回显绑定细节（结构字段名）
@@ -202,6 +204,8 @@ func EnrollAgent(db *gorm.DB, pki *core.PKI, cfg AgentPKIConfig) gin.HandlerFunc
 				RegisteredAt: time.Now(),
 				CertExpiry:   issued.Expiry,
 				CertSerial:   issued.Serial,
+				TrustedCAFP:  pki.BundleFingerprints(),
+				CertIssuerFP: pki.ActiveCAFingerprint(),
 			}
 			if addr, err := netip.ParseAddr(clientIP); err == nil {
 				if addr.Is4() {
@@ -228,7 +232,7 @@ func EnrollAgent(db *gorm.DB, pki *core.PKI, cfg AgentPKIConfig) gin.HandlerFunc
 			"agent_id":    agentID,
 			"cert_pem":    string(issued.CertPEM),
 			"key_pem":     string(issued.KeyPEM),
-			"ca_cert_pem": string(pki.CACertPEM()),
+			"ca_cert_pem": string(pki.CABundlePEM()),
 			"cert_expiry": issued.Expiry,
 			"sync_port":   cfg.SyncPort,
 		})
@@ -236,10 +240,10 @@ func EnrollAgent(db *gorm.DB, pki *core.PKI, cfg AgentPKIConfig) gin.HandlerFunc
 }
 
 // GetCACert GET /api/v1/agents/ca-cert （公开端点，单向 HTTPS，无需认证）。
-// 供 Agent / 管理员预先获取 Root CA 公钥证书，用于首次引导建立信任链。
+// 返回当前完整信任锚集合（含预分发与过渡期 CA），供 Agent / 管理员引导或更新信任链。
 func GetCACert(pki *core.PKI) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Data(http.StatusOK, "application/x-pem-file", pki.CACertPEM())
+		c.Data(http.StatusOK, "application/x-pem-file", pki.CABundlePEM())
 	}
 }
 

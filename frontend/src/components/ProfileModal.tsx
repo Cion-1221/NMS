@@ -199,7 +199,7 @@ const TwoFactorSection: React.FC = () => {
   const [disableOpen, setDisableOpen] = useState(false);
   const [disableForm] = Form.useForm();
   const [regenOpen, setRegenOpen] = useState(false);
-  const [regenCode, setRegenCode] = useState('');
+  const [regenForm] = Form.useForm();
 
   const enabled = !!user?.totp_enabled;
 
@@ -241,12 +241,13 @@ const TwoFactorSection: React.FC = () => {
   };
 
   const handleRegen = async () => {
-    if (!regenCode.trim()) return;
+    let v: { password: string; code: string };
+    try { v = await regenForm.validateFields(); } catch { return; }
     setBusy(true);
     try {
-      const res = await totpRegenerateRecoveryCodes(regenCode.trim());
+      const res = await totpRegenerateRecoveryCodes(v.password, v.code.trim());
       setRegenOpen(false);
-      setRegenCode('');
+      regenForm.resetFields();
       setCodes(res.data.recovery_codes ?? []);
     } catch (err: any) { message.error(apiErrMsg(err)); }
     finally { setBusy(false); }
@@ -335,27 +336,32 @@ const TwoFactorSection: React.FC = () => {
         </Form>
       </Modal>
 
-      {/* 重新生成恢复码：验证码确认 */}
+      {/* 重新生成恢复码：当前密码 + 验证码确认 */}
       <Modal
         title={t('security.totp.regen')}
         open={regenOpen}
         onOk={handleRegen}
-        onCancel={() => { setRegenOpen(false); setRegenCode(''); }}
+        onCancel={() => { setRegenOpen(false); regenForm.resetFields(); }}
         okText={t('security.totp.regen')}
         okButtonProps={{ loading: busy }}
         cancelText={t('common.cancel')}
         destroyOnClose
       >
-        <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>{t('security.totp.regenHint')}</Text>
-        <Input
-          value={regenCode}
-          onChange={(e) => setRegenCode(e.target.value)}
-          placeholder="123456"
-          maxLength={32}
-          autoComplete="one-time-code"
-          style={{ fontFamily: FONT_MONO }}
-          onPressEnter={handleRegen}
-        />
+        <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>{t('security.totp.regenConfirmHint')}</Text>
+        <Form form={regenForm} layout="vertical">
+          <Form.Item label={t('security.totp.password')} name="password" rules={[{ required: true }]}>
+            <Input.Password prefix={<LockOutlined />} />
+          </Form.Item>
+          <Form.Item label={t('security.totp.code')} name="code" rules={[{ required: true }]}>
+            <Input
+              placeholder="123456"
+              maxLength={32}
+              autoComplete="one-time-code"
+              style={{ fontFamily: FONT_MONO }}
+              onPressEnter={handleRegen}
+            />
+          </Form.Item>
+        </Form>
       </Modal>
 
       <RecoveryCodesModal codes={codes} onClose={() => setCodes(null)} />

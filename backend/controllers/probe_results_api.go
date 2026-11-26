@@ -64,12 +64,8 @@ func ListProbeResults(db *gorm.DB) gin.HandlerFunc {
 }
 
 // GetLatestProbeResults GET /api/v1/probe-results/latest —— "当前状态"快照视图：
-// 每个 (agent_id, target) 组合只返回最新一条结果，而不是完整历史。与
-// ListProbeResults 共享同一套过滤参数（type 必填，agent_id/q/success 可选）。
-//
-// 用闭包重新构建查询而不是复用同一个 *gorm.DB 链对象分别 Count/Scan——这条查询带
-// 自定义 Joins 子查询，比简单的 Where 链更容易在"复用查询对象做 Count 再 Find"上
-// 出岔子，分别构建虽然多几行但每次都是全新语句，不存在状态复用的歧义。
+// 每个 (agent_id, target) 组合只返回最新一条结果，直接查询千行级的 probe_latest_states
+// 快照表，零热表聚合开销。与 ListProbeResults 共享同一套过滤参数（type 必填）。
 func GetLatestProbeResults(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -91,26 +87,20 @@ func GetLatestProbeResults(db *gorm.DB) gin.HandlerFunc {
 		targetExact := c.Query("target") // 精确 target IP 过滤，供 MeshPing→MTR 跳转使用
 
 		buildQuery := func() *gorm.DB {
-			tx := db.Table("probe_results AS pr").
-				Joins(`INNER JOIN (
-					SELECT agent_id, target, MAX(reported_at) AS max_time
-					FROM probe_results WHERE type = ?
-					GROUP BY agent_id, target
-				) latest ON pr.agent_id = latest.agent_id AND pr.target = latest.target AND pr.reported_at = latest.max_time`, typeFilter).
-				Where("pr.type = ?", typeFilter)
+			tx := db.Model(&models.ProbeLatestState{}).Where("type = ?", typeFilter)
 			if agentID != "" {
-				tx = tx.Where("pr.agent_id = ?", agentID)
+				tx = tx.Where("agent_id = ?", agentID)
 			}
 			if targetExact != "" {
-				tx = tx.Where("pr.target = ?", targetExact)
+				tx = tx.Where("target = ?", targetExact)
 			}
 			if q != "" {
 				agentSub := db.Model(&models.Agent{}).Select("agent_id").
 					Where("agent_id LIKE ? OR hostname LIKE ?", "%"+q+"%", "%"+q+"%")
-				tx = tx.Where("pr.agent_id IN (?) OR pr.target LIKE ?", agentSub, "%"+q+"%")
+				tx = tx.Where("agent_id IN (?) OR target LIKE ?", agentSub, "%"+q+"%")
 			}
 			if successStr != "" {
-				tx = tx.Where("pr.success = ?", successStr == "true")
+				tx = tx.Where("success = ?", successStr == "true")
 			}
 			return tx
 		}
@@ -118,10 +108,9 @@ func GetLatestProbeResults(db *gorm.DB) gin.HandlerFunc {
 		var total int64
 		buildQuery().Count(&total)
 
-		// Scan 零行时不触碰目标：显式初始化，避免 items 序列化成 JSON null
-		results := make([]models.ProbeResult, 0)
-		buildQuery().Select("pr.*").Order("pr.agent_id asc, pr.reported_at desc").
-			Offset((page - 1) * pageSize).Limit(pageSize).Scan(&results)
+		results := make([]models.ProbeLatestState, 0)
+		buildQuery().Order("agent_id asc, reported_at desc").
+			Offset((page - 1) * pageSize).Limit(pageSize).Find(&results)
 
 		c.JSON(http.StatusOK, gin.H{"total": total, "items": results, "page": page, "page_size": pageSize})
 	}
@@ -144,7 +133,7 @@ const meshMatrixStaleWindow = 24 * time.Hour
 
 // GetMeshPingMatrix GET /api/v1/probe-results/meshping-matrix —— 将 meshping 结果
 // 透视为 NxN 矩阵：行/列 = 当前非吊销 Agent，单元格结构为 {"v4": {...}, "v6": {...}}。
-// 同一 (src, dst) 对的 IPv4 和 IPv6 探测结果独立存储，前端分别渲染，支持双栈同时显示。
+// 直接读取 probe_latest_states 快照表，无需扫描历史热表。
 func GetMeshPingMatrix(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		since := time.Now().Add(-meshMatrixStaleWindow)
@@ -161,19 +150,10 @@ func GetMeshPingMatrix(db *gorm.DB) gin.HandlerFunc {
 		agentQuery.Order("group_id asc, agent_id asc").Find(&agents)
 
 		rows := make([]meshPingLatestRow, 0)
-		db.Raw(`
-			SELECT pr.agent_id AS agent_id, pr.target AS target, pr.success AS success,
-			       pr.latency_ms AS latency_ms, pr.reported_at AS reported_at
-			FROM probe_results pr
-			INNER JOIN (
-				SELECT agent_id, target, MAX(reported_at) AS max_time
-				FROM probe_results
-				WHERE type = ? AND reported_at >= ?
-				GROUP BY agent_id, target
-			) latest
-			ON pr.agent_id = latest.agent_id AND pr.target = latest.target AND pr.reported_at = latest.max_time
-			WHERE pr.type = ? AND pr.reported_at >= ?
-		`, "meshping", since, "meshping", since).Scan(&rows)
+		db.Model(&models.ProbeLatestState{}).
+			Select("agent_id, target, success, latency_ms, reported_at").
+			Where("type = ? AND reported_at >= ?", "meshping", since).
+			Scan(&rows)
 
 		// 建立 IP → AgentID 的反查表：覆盖所有可能的 IP 字段 + source_ip_override
 		ipToAgent := make(map[string]string, len(agents)*3)
@@ -230,6 +210,18 @@ func GetMeshPingMatrix(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// deleteProbeSeriesRollups 同步清理某条 (type, agent_id, target) 序列的快照与归档数据。
+func deleteProbeSeriesRollups(db *gorm.DB, agentID, target, typeFilter string) {
+	db.Where("type = ? AND agent_id = ? AND target = ?", typeFilter, agentID, target).
+		Delete(&models.ProbeLatestState{})
+	var series models.ProbeSeries
+	if err := db.Where("type = ? AND agent_id = ? AND target = ?", typeFilter, agentID, target).
+		First(&series).Error; err == nil {
+		db.Where("series_id = ?", series.ID).Delete(&models.ProbeRollup{})
+		db.Delete(&series)
+	}
+}
+
 // DeleteProbeResultPair DELETE /api/v1/probe-results/pair?agent_id=X&target=Y&type=Z
 // 删除指定 (agent_id, target, type) 组合的全部历史记录（管理员专用）。
 // 在 "latest" 快照视图里删除一行时，必须清掉该组合的所有历史，否则上一条历史记录会
@@ -243,23 +235,21 @@ func DeleteProbeResultPair(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少必要参数 agent_id / target / type", "code": "bad_request"})
 			return
 		}
-		result := db.Where("agent_id = ? AND target = ? AND type = ?", agentID, target, typeFilter).
-			Delete(&models.ProbeResult{})
-		if result.Error != nil {
-			internalErr(c, http.StatusInternalServerError, "删除失败", result.Error)
+		deleted, err := deleteProbeResultsChunked(db, "agent_id = ? AND target = ? AND type = ?", agentID, target, typeFilter)
+		if err != nil {
+			internalErr(c, http.StatusInternalServerError, "删除失败", err)
 			return
 		}
+		deleteProbeSeriesRollups(db, agentID, target, typeFilter)
 		// 与 PurgeProbeResults 同口径：管理员删数据必须留审计痕迹
 		writeAgentAudit(db, getUsername(c), "delete_probe_pair", "probe_results", "",
-			fmt.Sprintf("Deleted probe results for agent=%s target=%s type=%s (%d rows)", agentID, target, typeFilter, result.RowsAffected))
-		c.JSON(http.StatusOK, gin.H{"deleted": result.RowsAffected})
+			fmt.Sprintf("Deleted probe results for agent=%s target=%s type=%s (%d rows)", agentID, target, typeFilter, deleted))
+		c.JSON(http.StatusOK, gin.H{"deleted": deleted})
 	}
 }
 
 // GetProbeResultTargets GET /api/v1/probe-results/targets?type=X[&agent_id=Y]
-// 通用结果 Tab 的 Target 下拉候选：该类型（可再限定 Agent）下去重后的 target。
-// 列表是服务端分页，前端无法从当前页推导全集。查询走 idx_probe_latest
-// (type, agent_id, target, ...) 的松散索引扫描，不触碰数据行。
+// 通用结果 Tab 的 Target 下拉候选：直接从 probe_latest_states 快照表取去重后的 target。
 func GetProbeResultTargets(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		typeFilter := c.Query("type")
@@ -267,7 +257,7 @@ func GetProbeResultTargets(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 type 参数", "code": "bad_request"})
 			return
 		}
-		q := db.Model(&models.ProbeResult{}).Where("type = ?", typeFilter)
+		q := db.Model(&models.ProbeLatestState{}).Where("type = ?", typeFilter)
 		if v := c.Query("agent_id"); v != "" {
 			q = q.Where("agent_id = ?", v)
 		}
@@ -329,6 +319,8 @@ func DeleteProbeResultPairs(db *gorm.DB) gin.HandlerFunc {
 						if firstErr == nil {
 							firstErr = err
 						}
+					} else {
+						deleteProbeSeriesRollups(db, p.AgentID, p.Target, typeFilter)
 					}
 					update(func(j *probeJob) { j.PairsDone++ })
 				}
@@ -440,9 +432,11 @@ func PurgeProbeResults(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		// 条件在 goroutine 外定死：cond 为空 = 全表
+		var cutoff time.Time
 		cond, args := "", []interface{}{}
 		if days > 0 {
-			cond, args = "reported_at < ?", []interface{}{time.Now().AddDate(0, 0, -days)}
+			cutoff = time.Now().AddDate(0, 0, -days)
+			cond, args = "reported_at < ?", []interface{}{cutoff}
 		}
 		user := getUsername(c) // gin.Context 不能带进 goroutine，先取出来
 
@@ -464,6 +458,15 @@ func PurgeProbeResults(db *gorm.DB) gin.HandlerFunc {
 				deleted, delErr := deleteProbeResultsChunkedProgress(db, func(n int64) {
 					update(func(j *probeJob) { j.DeletedRows += n })
 				}, cond, args...)
+				if delErr == nil {
+					if days == 0 {
+						db.Where("1 = 1").Delete(&models.ProbeLatestState{})
+						db.Where("1 = 1").Delete(&models.ProbeRollup{})
+						db.Where("1 = 1").Delete(&models.ProbeSeries{})
+					} else {
+						db.Where("reported_at < ?", cutoff).Delete(&models.ProbeLatestState{})
+					}
+				}
 				detail := fmt.Sprintf("Purged probe results (days=%d, deleted=%d rows)", days, deleted)
 				if delErr != nil {
 					detail += " — FAILED: " + delErr.Error()
@@ -550,9 +553,11 @@ func GetLatencySeries(db *gorm.DB, rc RetentionConfig) gin.HandlerFunc {
 		}
 
 		// ── 选源 ──
-		// 未配置归档层时无条件走原始表（超出保留期的部分自然为空，不会 panic 于空层列表）
+		// 未配置归档层时无条件走原始表（超出保留期的部分自然为空，不会 panic 于空层列表）。
+		// 留 1 小时余量容忍前后端时钟微差与日常清理边界（原先减 1 整天会导致 8 天保留期下
+		// 点 7D 预设直接跌落到归档表，甚至保留期为 1 天时 1H 预设都无法命中原始表）。
 		rawCovers := rc.ProbeResultsMaxAgeDays == 0 ||
-			start.After(time.Now().AddDate(0, 0, -(rc.ProbeResultsMaxAgeDays-1)))
+			start.After(time.Now().AddDate(0, 0, -rc.ProbeResultsMaxAgeDays).Add(time.Hour))
 		useRaw := len(rc.Rollups) == 0 || (rawCovers && windowSec <= 45*86400)
 
 		var rows []latencyBucketRow
@@ -563,10 +568,10 @@ func GetLatencySeries(db *gorm.DB, rc RetentionConfig) gin.HandlerFunc {
 			displayBucket := alignBucket(windowSec, int64(intervalSec))
 			db.Raw(`
 				SELECT CAST(FLOOR(UNIX_TIMESTAMP(reported_at)/?)*? AS SIGNED) AS ts,
-					COALESCE(SUM(latency_ms), 0) AS lat_sum,
-					COUNT(latency_ms) AS lat_cnt,
-					MIN(latency_ms) AS min_ms,
-					MAX(latency_ms) AS max_ms,
+					COALESCE(SUM(CASE WHEN success = 1 THEN latency_ms END), 0) AS lat_sum,
+					COUNT(CASE WHEN success = 1 THEN latency_ms END) AS lat_cnt,
+					MIN(CASE WHEN success = 1 THEN latency_ms END) AS min_ms,
+					MAX(CASE WHEN success = 1 THEN latency_ms END) AS max_ms,
 					COUNT(*) AS runs,
 					CAST(SUM(success = 0) AS SIGNED) AS failed
 				FROM probe_results
@@ -575,10 +580,11 @@ func GetLatencySeries(db *gorm.DB, rc RetentionConfig) gin.HandlerFunc {
 				displayBucket, displayBucket, typeFilter, agentID, target, start, end).Scan(&rows)
 			sourceBucket = int(displayBucket)
 		} else {
-			// 选择保留期能覆盖起点的最细归档层；都覆盖不了则用最粗层（尽力返回现存数据）
+			// 选择保留期能覆盖起点的最细归档层（带 1 小时容差防止预设刚好卡在边界掉层）；
+			// 都覆盖不了则用最粗层（尽力返回现存数据）
 			tier := rc.Rollups[len(rc.Rollups)-1]
 			for _, t := range rc.Rollups {
-				if start.After(time.Now().AddDate(0, 0, -t.MaxAgeDays)) {
+				if start.After(time.Now().AddDate(0, 0, -t.MaxAgeDays).Add(-time.Hour)) {
 					tier = t
 					break
 				}
@@ -590,26 +596,49 @@ func GetLatencySeries(db *gorm.DB, rc RetentionConfig) gin.HandlerFunc {
 
 			var series models.ProbeSeries
 			if err := db.Where("type = ? AND agent_id = ? AND target = ?", typeFilter, agentID, target).
-				First(&series).Error; err != nil {
-				// 序列尚无归档（新序列或归档未启用期间的数据已过期）——返回空集
-				c.JSON(http.StatusOK, gin.H{
-					"source": source, "source_bucket_seconds": sourceBucket,
-					"interval_seconds": intervalSec, "points": []gin.H{}, "summary": nil,
-				})
-				return
+				First(&series).Error; err == nil {
+				db.Raw(`
+					SELECT CAST(FLOOR(bucket_ts/?)*? AS SIGNED) AS ts,
+						SUM(lat_sum) AS lat_sum,
+						SUM(lat_cnt) AS lat_cnt,
+						MIN(CASE WHEN lat_cnt > 0 THEN min_ms END) AS min_ms,
+						MAX(CASE WHEN lat_cnt > 0 THEN max_ms END) AS max_ms,
+						SUM(runs) AS runs,
+						SUM(failed) AS failed
+					FROM probe_rollups
+					WHERE series_id = ? AND bucket_seconds = ? AND bucket_ts >= ? AND bucket_ts < ?
+					GROUP BY ts ORDER BY ts`,
+					displayBucket, displayBucket, series.ID, tierSec, start.Unix(), end.Unix()).Scan(&rows)
 			}
+
+			// 尾部实时补齐：后台归档周期之间（或新序列首次归档前）最新几分钟的数据尚在
+			// probe_results 中，用原始表补齐最后一个显示桶及之后的尾段，确保图表右端实时不断档。
+			tailFrom := start
+			if len(rows) > 0 {
+				lastBucketStart := time.Unix(rows[len(rows)-1].Ts, 0)
+				if lastBucketStart.After(tailFrom) {
+					tailFrom = lastBucketStart
+				}
+			}
+			var tailRows []latencyBucketRow
 			db.Raw(`
-				SELECT CAST(FLOOR(bucket_ts/?)*? AS SIGNED) AS ts,
-					SUM(lat_sum) AS lat_sum,
-					SUM(lat_cnt) AS lat_cnt,
-					MIN(CASE WHEN lat_cnt > 0 THEN min_ms END) AS min_ms,
-					MAX(CASE WHEN lat_cnt > 0 THEN max_ms END) AS max_ms,
-					SUM(runs) AS runs,
-					SUM(failed) AS failed
-				FROM probe_rollups
-				WHERE series_id = ? AND bucket_seconds = ? AND bucket_ts >= ? AND bucket_ts < ?
+				SELECT CAST(FLOOR(UNIX_TIMESTAMP(reported_at)/?)*? AS SIGNED) AS ts,
+					COALESCE(SUM(CASE WHEN success = 1 THEN latency_ms END), 0) AS lat_sum,
+					COUNT(CASE WHEN success = 1 THEN latency_ms END) AS lat_cnt,
+					MIN(CASE WHEN success = 1 THEN latency_ms END) AS min_ms,
+					MAX(CASE WHEN success = 1 THEN latency_ms END) AS max_ms,
+					COUNT(*) AS runs,
+					CAST(SUM(success = 0) AS SIGNED) AS failed
+				FROM probe_results
+				WHERE type = ? AND agent_id = ? AND target = ? AND reported_at >= ? AND reported_at < ?
 				GROUP BY ts ORDER BY ts`,
-				displayBucket, displayBucket, series.ID, tierSec, start.Unix(), end.Unix()).Scan(&rows)
+				displayBucket, displayBucket, typeFilter, agentID, target, tailFrom, end).Scan(&tailRows)
+			if len(tailRows) > 0 {
+				if len(rows) > 0 && rows[len(rows)-1].Ts >= tailRows[0].Ts {
+					rows = rows[:len(rows)-1]
+				}
+				rows = append(rows, tailRows...)
+			}
 		}
 
 		// ── 组装响应 + 窗口汇总 ──

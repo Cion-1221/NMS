@@ -1,7 +1,9 @@
 package controllers
 
 import (
+	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"nms-backend/core"
@@ -19,14 +21,16 @@ import (
 //
 // 各参数 <= 0 即视为该项不启用（永久保留，仍可通过各模块的手动清理接口删除）。
 // 后台 goroutine 始终启动：还承担过期 Refresh Token 的每日兜底清理。
-func StartAuditRetention(db *gorm.DB, rc RetentionConfig) {
+func StartAuditRetention(ctx context.Context, wg *sync.WaitGroup, db *gorm.DB, rc RetentionConfig) {
 	if rc.AuditMaxAgeDays <= 0 {
 		slog.Info("审计日志自动保留未启用 (audit.max_age_days = 0)")
 	}
 	if rc.ProbeResultsMaxAgeDays <= 0 {
 		slog.Info("探测结果自动保留未启用 (audit.probe_results_max_age_days = 0)")
 	}
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 		for {
@@ -35,7 +39,11 @@ func StartAuditRetention(db *gorm.DB, rc RetentionConfig) {
 			}
 			purgeExpiredProbeResults(db, rc)
 			purgeExpiredRefreshTokens(db)
-			<-ticker.C
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
 		}
 	}()
 }
@@ -93,6 +101,7 @@ func purgeExpiredProbeResults(db *gorm.DB, rc RetentionConfig) {
 				slog.Error("探测结果自动清理失败（标量类）", "err", err)
 				return
 			}
+			db.Where("reported_at < ? AND type NOT IN ?", cutoff, pathProbeTypes).Delete(&models.ProbeLatestState{})
 			scalarDeleted = deleted
 		}
 		pathCutoff := time.Now().AddDate(0, 0, -pathDays)
@@ -101,6 +110,7 @@ func purgeExpiredProbeResults(db *gorm.DB, rc RetentionConfig) {
 			slog.Error("探测结果自动清理失败（路径类）", "err", err)
 			return
 		}
+		db.Where("reported_at < ? AND type IN ?", pathCutoff, pathProbeTypes).Delete(&models.ProbeLatestState{})
 		pathDeleted = deleted
 		if scalarDeleted > 0 || pathDeleted > 0 {
 			slog.Info("探测结果自动清理完成",
@@ -119,6 +129,7 @@ func purgeExpiredProbeResults(db *gorm.DB, rc RetentionConfig) {
 		slog.Error("探测结果自动清理失败", "err", err)
 		return
 	}
+	db.Where("reported_at < ?", cutoff).Delete(&models.ProbeLatestState{})
 	if deleted > 0 {
 		slog.Info("探测结果自动清理完成", "max_age_days", probeDays, "deleted", deleted)
 	}
@@ -139,50 +150,99 @@ func purgeExpiredProbeResults(db *gorm.DB, rc RetentionConfig) {
 // 部署把数据库放在独立挂载点，这个检查覆盖不到那个分区，需要另行监控。
 const diskSpaceCheckPath = "."
 
-// DiskGuardConfig 对应 config.yaml 的 audit.probe_disk_guard 块。
+// DiskGuardConfig 对应 config.yaml 的 audit.probe_disk_guard 块（可选功能，默认关闭）。
 type DiskGuardConfig struct {
 	Enabled              bool
 	CheckIntervalMinutes int
 	CriticalFreeMB       int
+	CheckPath            string
 }
 
-// StartDiskSpaceGuard 启动磁盘空间守护 goroutine（dg.Enabled=false 时直接跳过，
+// diskGuardCooldown 紧急清理冷却时间：InnoDB 的 DELETE 只标记表空间（.ibd）内部页可复用，
+// 不会立刻将磁盘字节归还给操作系统文件系统（statfs）。若不加冷却，清理完成后 OS 可用空间
+// 依然低于阈值，守护协程会每 10 分钟陷入无效 DELETE + ERROR 刷屏死循环。
+const diskGuardCooldown = 6 * time.Hour
+
+// StartDiskSpaceGuard 启动磁盘空间守护 goroutine（可选功能：dg.Enabled=false 时直接跳过，
 // 不启动 goroutine）：立即检查一次，之后每 dg.CheckIntervalMinutes 检查一次；
 // 可用空间跌破 dg.CriticalFreeMB 时对 probe_results 执行一次紧急清理。紧急清理
 // 比 rc.ProbeResultsMaxAgeDays 更激进（对半砍），但不会砍破归档层要求的最小
 // 原始点保留天数（否则会破坏 rollup 聚合前原始点必须存在的前提，见
 // ValidateRetentionConfig）。当前平台不支持磁盘查询时（FreeDiskBytes 返回
 // ok=false）静默跳过，不影响其他功能。
-func StartDiskSpaceGuard(db *gorm.DB, rc RetentionConfig, dg DiskGuardConfig) {
+func StartDiskSpaceGuard(ctx context.Context, wg *sync.WaitGroup, db *gorm.DB, rc RetentionConfig, dg DiskGuardConfig) {
 	if !dg.Enabled {
 		slog.Info("磁盘空间兜底未启用 (audit.probe_disk_guard.enabled = false)")
 		return
 	}
+	if dg.CheckIntervalMinutes <= 0 {
+		dg.CheckIntervalMinutes = 10
+	}
+	if dg.CriticalFreeMB <= 0 {
+		dg.CriticalFreeMB = 500
+	}
+	checkPath := dg.CheckPath
+	if checkPath == "" {
+		checkPath = diskSpaceCheckPath
+	}
 	criticalBytes := uint64(dg.CriticalFreeMB) * 1024 * 1024
 	interval := time.Duration(dg.CheckIntervalMinutes) * time.Minute
-	slog.Info("磁盘空间兜底已启用", "check_interval_minutes", dg.CheckIntervalMinutes, "critical_free_mb", dg.CriticalFreeMB)
+	slog.Info("磁盘空间兜底已启用",
+		"check_interval_minutes", dg.CheckIntervalMinutes,
+		"critical_free_mb", dg.CriticalFreeMB,
+		"check_path", checkPath)
+
+	var lastPurgeAt time.Time
+	var lastPurgeFree uint64
 
 	check := func() {
-		free, ok := core.FreeDiskBytes(diskSpaceCheckPath)
+		free, ok := core.FreeDiskBytes(checkPath)
 		if !ok || free >= criticalBytes {
 			return
 		}
+		// 冷却期内若可用空间未继续恶化超过 50MB，跳过重复清理（避免 InnoDB 不缩文件导致死循环）
+		if !lastPurgeAt.IsZero() && time.Since(lastPurgeAt) < diskGuardCooldown {
+			const furtherDropThreshold = 50 * 1024 * 1024
+			if free >= lastPurgeFree || lastPurgeFree-free < furtherDropThreshold {
+				return
+			}
+		}
 		days := emergencyPurgeCutoffDays(rc)
+		cutoff := time.Now().AddDate(0, 0, -days)
 		slog.Error("磁盘可用空间严重不足，触发探测结果紧急清理",
 			"free_bytes", free, "threshold_bytes", criticalBytes, "cutoff_days", days)
-		deleted, err := deleteProbeResultsChunked(db, "reported_at < ?", time.Now().AddDate(0, 0, -days))
+		deleted, err := deleteProbeResultsChunked(db, "reported_at < ?", cutoff)
 		if err != nil {
 			slog.Error("磁盘紧急清理失败", "err", err)
 			return
 		}
-		slog.Warn("磁盘紧急清理完成", "cutoff_days", days, "deleted", deleted)
+		db.Where("reported_at < ?", cutoff).Delete(&models.ProbeLatestState{})
+		lastPurgeAt = time.Now()
+		if afterFree, ok2 := core.FreeDiskBytes(checkPath); ok2 {
+			lastPurgeFree = afterFree
+		} else {
+			lastPurgeFree = free
+		}
+		if deleted == 0 {
+			slog.Warn("磁盘紧急清理：已无超期探测数据可删（InnoDB DELETE 不会直接向 OS 归还 .ibd 表空间，已进入冷却期）",
+				"cutoff_days", days, "cooldown", diskGuardCooldown.String())
+		} else {
+			slog.Warn("磁盘紧急清理完成", "cutoff_days", days, "deleted", deleted, "cooldown", diskGuardCooldown.String())
+		}
 	}
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		check()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		for range ticker.C {
-			check()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				check()
+			}
 		}
 	}()
 }

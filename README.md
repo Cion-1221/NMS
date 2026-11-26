@@ -1010,7 +1010,7 @@ ESLint（`npm run lint`）不阻塞 CI，作为本地提交前自查。依赖版
 | POST | `/api/v1/agent-sync/results` | 批量上报探测结果。样本时间取 Agent 采集时刻 `collected_at`（旧版缺失时回退入库时刻）；超窗样本（未来 5 分钟以上 / 过去 1 小时以上）丢弃并以 `dropped` 计数返回；按唯一键幂等去重（`deduped` 计数）——重试重放整批是安全的 |
 | POST | `/api/v1/agent-sync/snmp-results` | 批量回传 SNMP 采集结论（校验设备归属 + 采集时刻单调性） |
 | POST | `/api/v1/agent-sync/renew-cert` | 证书自助续期 |
-| GET | `/api/v1/agent-sync/my-ip` | 返回 Server 所见来源 IP（tcp4 / tcp6 各调一次做双栈探测） |
+| GET | `/api/v1/agent-sync/my-ip` | 返回 Server 所见来源 IP，响应 `{"ip": "…"}`（Agent 用 tcp4 / tcp6 各调一次做双栈探测） |
 | GET | `/api/v1/agent-sync/binary/:id` | 流式下载 Agent 二进制 |
 
 ### 8.7 Agent 管理

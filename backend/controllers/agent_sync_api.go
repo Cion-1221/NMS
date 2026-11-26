@@ -1,11 +1,13 @@
 package controllers
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/netip"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"nms-backend/core"
@@ -16,6 +18,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+// maxSyncBatchBytes Agent 结果上报请求体上限（32 MiB），防止异常大报文打爆内存。
+const maxSyncBatchBytes = 32 << 20
 
 // onlineThreshold：超过该时长未通过 mTLS 调用刷新心跳的 Agent 不再视为"存活"，
 // 不会被纳入 MeshPing 目标列表。
@@ -61,12 +66,16 @@ type snmpTaskParams struct {
 // 用 1<<30 + device_id 保证两个命名空间永不冲突。
 const snmpTaskIDBase = 1 << 30
 
-// GetAgentTasks GET /api/v1/agent-sync/tasks
-// mTLS 校验已由 AgentMTLS 中间件完成并将 Agent 记录注入 context。
-// 组装该 Agent 当前生效的任务列表：全局任务 + 所属 Group 任务 + 专属任务；
-// meshping 任务的目标列表动态替换为同组存活 Agent 的 IP；此外附加从 devices 表
-// 即时合成的 snmp_poll 任务（指派给本 Agent 的探针代理采集，见 resolveSNMPPollTasks）。
+// GetAgentTasks GET /api/v1/agent-sync/tasks（兼容无 PKI 注入的测试调用签名）。
 func GetAgentTasks(db *gorm.DB, snmpCfg SNMPConfig) gin.HandlerFunc {
+	return GetAgentTasksWithPKI(db, nil, snmpCfg)
+}
+
+// GetAgentTasksWithPKI GET /api/v1/agent-sync/tasks
+// mTLS 校验已由 AgentMTLSWithPKI 中间件完成并将 Agent 记录与客户端证书注入 context。
+// 除任务列表与 OTA 升级指令外，还随响应下发当前完整 CA 信任包（ca_bundle_pem）及按需续签标记
+// （renew_cert），驱动三阶段平滑 CA 轮换中 Agent 自动热更新本地信任链与客户端证书。
+func GetAgentTasksWithPKI(db *gorm.DB, pki *core.PKI, snmpCfg SNMPConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		agent := middleware.GetAgent(c)
 		if agent == nil {
@@ -143,14 +152,22 @@ func GetAgentTasks(db *gorm.DB, snmpCfg SNMPConfig) gin.HandlerFunc {
 			}
 		}
 
-		c.JSON(http.StatusOK, gin.H{
+		resp := gin.H{
 			"agent_id":    agent.AgentID,
 			"source_ip":   sourceIP,   // raw stored value (backward compat)
 			"source_ipv4": sourceIPv4, // parsed IPv4 component
 			"source_ipv6": sourceIPv6, // parsed IPv6 component
 			"tasks":       payloads,
 			"update":      updatePayload, // nil = no update; non-nil = download and replace
-		})
+		}
+		if pki != nil {
+			resp["ca_bundle_pem"] = string(pki.CABundlePEM())
+			if peerCert := middleware.GetAgentPeerCert(c); peerCert != nil && !pki.IsIssuedByActiveCA(peerCert) {
+				resp["renew_cert"] = true
+			}
+		}
+
+		c.JSON(http.StatusOK, resp)
 	}
 }
 
@@ -418,10 +435,17 @@ func PostAgentResults(db *gorm.DB) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "未认证"})
 			return
 		}
+		extendTransferDeadlines(c, 2*time.Minute)
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSyncBatchBytes)
+
 		var req struct {
 			Results []probeResultIn `json:"results" binding:"required,dive"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
+			if isMaxBytesErr(err) {
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "上报批次体积超出上限 (32 MiB)"})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
 			return
 		}
@@ -466,6 +490,7 @@ func PostAgentResults(db *gorm.DB) gin.HandlerFunc {
 				insertErr = result.Error
 				continue
 			}
+			upsertProbeLatestStates(db, chunk)
 			// RowsAffected = 实际插入行数（重复行计 0）；差值即被去重的重放行
 			if d := int64(len(chunk)) - result.RowsAffected; d > 0 {
 				deduped += d
@@ -483,47 +508,148 @@ func PostAgentResults(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// upsertProbeLatestStates 将已落库分片的最新状态同步至 probe_latest_states 快照表。
+// 先在内存按 (type, agent_id, target) 归并保留采集时刻最新的一条，再以单调递增条件
+// （VALUES(reported_at) >= reported_at）执行幂等 upsert，防止乱序重试覆盖更新快照。
+func upsertProbeLatestStates(db *gorm.DB, rows []models.ProbeResult) {
+	if len(rows) == 0 {
+		return
+	}
+	type latestKey struct {
+		typ, agentID, target string
+	}
+	dedup := make(map[latestKey]models.ProbeResult, len(rows))
+	for _, r := range rows {
+		k := latestKey{r.Type, r.AgentID, r.Target}
+		if prev, ok := dedup[k]; !ok || !r.ReportedAt.Before(prev.ReportedAt) {
+			dedup[k] = r
+		}
+	}
+	vals := make([]string, 0, len(dedup))
+	args := make([]interface{}, 0, len(dedup)*8)
+	for _, r := range dedup {
+		vals = append(vals, "(?, ?, ?, ?, ?, ?, ?, ?)")
+		args = append(args, r.Type, r.AgentID, r.Target, r.TaskID, r.Success, r.LatencyMs, r.Detail, r.ReportedAt)
+	}
+	// MySQL ON DUPLICATE KEY UPDATE 从左向右顺序赋值：reported_at 必须放在最后，
+	// 确保前序字段比较 VALUES(reported_at) >= reported_at 时读取的是旧行的 reported_at。
+	sqlStr := `INSERT INTO probe_latest_states
+		(type, agent_id, target, task_id, success, latency_ms, detail, reported_at)
+		VALUES ` + strings.Join(vals, ",") + `
+		ON DUPLICATE KEY UPDATE
+		task_id     = IF(VALUES(reported_at) >= reported_at, VALUES(task_id), task_id),
+		success     = IF(VALUES(reported_at) >= reported_at, VALUES(success), success),
+		latency_ms  = IF(VALUES(reported_at) >= reported_at, VALUES(latency_ms), latency_ms),
+		detail      = IF(VALUES(reported_at) >= reported_at, VALUES(detail), detail),
+		reported_at = IF(VALUES(reported_at) >= reported_at, VALUES(reported_at), reported_at)`
+	if err := db.Exec(sqlStr, args...).Error; err != nil {
+		slog.Error("更新探测最新快照表失败", "count", len(dedup), "err", err)
+	}
+}
+
+// BackfillProbeLatestStates 存量升级一次性回填：当快照表为空且历史热表非空时，按类型
+// 将每个 (agent_id, target) 的最新记录回填至 probe_latest_states（后台执行，不阻塞启动）。
+func BackfillProbeLatestStates(ctx context.Context, wg *sync.WaitGroup, db *gorm.DB) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var latestCount int64
+		if err := db.Model(&models.ProbeLatestState{}).Count(&latestCount).Error; err != nil || latestCount > 0 {
+			return
+		}
+		var types []string
+		db.Model(&models.ProbeResult{}).Distinct().Pluck("type", &types)
+		if len(types) == 0 {
+			return
+		}
+		slog.Info("开始从历史 probe_results 回填 probe_latest_states 快照表", "types", len(types))
+		for _, tp := range types {
+			if ctx.Err() != nil {
+				return
+			}
+			err := db.Exec(`
+				INSERT INTO probe_latest_states
+					(type, agent_id, target, task_id, success, latency_ms, detail, reported_at)
+				SELECT pr.type, pr.agent_id, pr.target, pr.task_id, pr.success, pr.latency_ms, pr.detail, pr.reported_at
+				FROM probe_results pr
+				INNER JOIN (
+					SELECT MAX(p2.id) AS max_id
+					FROM probe_results p2
+					INNER JOIN (
+						SELECT agent_id, target, MAX(reported_at) AS max_time
+						FROM probe_results WHERE type = ?
+						GROUP BY agent_id, target
+					) lt ON p2.agent_id = lt.agent_id AND p2.target = lt.target AND p2.reported_at = lt.max_time
+					WHERE p2.type = ?
+					GROUP BY p2.agent_id, p2.target
+				) pick ON pr.id = pick.max_id
+				ON DUPLICATE KEY UPDATE
+					task_id     = IF(VALUES(reported_at) >= reported_at, VALUES(task_id), task_id),
+					success     = IF(VALUES(reported_at) >= reported_at, VALUES(success), success),
+					latency_ms  = IF(VALUES(reported_at) >= reported_at, VALUES(latency_ms), latency_ms),
+					detail      = IF(VALUES(reported_at) >= reported_at, VALUES(detail), detail),
+					reported_at = IF(VALUES(reported_at) >= reported_at, VALUES(reported_at), reported_at)`,
+				tp, tp).Error
+			if err != nil {
+				slog.Error("回填 probe_latest_states 失败", "type", tp, "err", err)
+			}
+		}
+		slog.Info("probe_latest_states 快照表历史回填完成")
+	}()
+}
+
 // EnsureProbeDedupIndex 确保 probe_results 上存在幂等去重唯一索引 idx_probe_dedup
 // （详见 PostAgentResults）。不通过模型 tag 交给 AutoMigrate：存量库可能已有完全
 // 重复的历史行（旧版同批结果共享同一入库时刻，重复 Target 行会撞键），AutoMigrate
 // 建索引失败是致命错误；这里失败时先清理重复行再重试一次，最终失败仅告警降级——
 // 去重能力依赖该索引，缺失时入库行为与旧版一致（可能出现偶发重复点）。
-// 大表建索引/清重可能耗时数分钟，调用方应放到后台 goroutine，不阻塞启动。
-func EnsureProbeDedupIndex(db *gorm.DB) {
-	var n int64
-	db.Raw(`SELECT COUNT(*) FROM information_schema.STATISTICS
-		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'probe_results' AND INDEX_NAME = 'idx_probe_dedup'`).
-		Scan(&n)
-	if n > 0 {
-		return
-	}
-	const create = "CREATE UNIQUE INDEX idx_probe_dedup ON probe_results (agent_id, task_id, target, reported_at)"
-	if err := db.Exec(create).Error; err == nil {
+// 大表建索引/清重可能耗时数分钟，放到后台 goroutine，不阻塞启动。
+func EnsureProbeDedupIndex(ctx context.Context, wg *sync.WaitGroup, db *gorm.DB) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if ctx.Err() != nil {
+			return
+		}
+		var n int64
+		db.Raw(`SELECT COUNT(*) FROM information_schema.STATISTICS
+			WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'probe_results' AND INDEX_NAME = 'idx_probe_dedup'`).
+			Scan(&n)
+		if n > 0 || ctx.Err() != nil {
+			return
+		}
+		const create = "CREATE UNIQUE INDEX idx_probe_dedup ON probe_results (agent_id, task_id, target, reported_at)"
+		if err := db.Exec(create).Error; err == nil {
+			slog.Info("probe_results 幂等去重索引已创建", "index", "idx_probe_dedup")
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		slog.Warn("创建 idx_probe_dedup 失败，尝试清理历史重复行后重试（大表可能耗时较长）")
+		del := db.Exec(`DELETE t1 FROM probe_results t1 JOIN probe_results t2
+			ON t1.agent_id = t2.agent_id AND t1.task_id = t2.task_id
+			AND t1.target = t2.target AND t1.reported_at = t2.reported_at
+			AND t1.id > t2.id
+			WHERE t1.task_id IS NOT NULL`)
+		if del.Error != nil {
+			slog.Warn("清理 probe_results 历史重复行失败，去重索引未启用（入库降级为可能出现偶发重复点）",
+				"err", del.Error)
+			return
+		}
+		if del.RowsAffected > 0 {
+			slog.Info("已清理 probe_results 历史重复行", "deleted", del.RowsAffected)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if err := db.Exec(create).Error; err != nil {
+			slog.Warn("重试创建 idx_probe_dedup 仍失败，去重索引未启用（入库降级为可能出现偶发重复点）",
+				"err", err)
+			return
+		}
 		slog.Info("probe_results 幂等去重索引已创建", "index", "idx_probe_dedup")
-		return
-	}
-	// 建索引失败最常见原因：历史数据存在完全重复的行。只删除键值完全相同的多余行
-	//（保留 id 最小的一条）；task_id 为 NULL 的行不受唯一约束，不清理。
-	slog.Warn("创建 idx_probe_dedup 失败，尝试清理历史重复行后重试（大表可能耗时较长）")
-	del := db.Exec(`DELETE t1 FROM probe_results t1 JOIN probe_results t2
-		ON t1.agent_id = t2.agent_id AND t1.task_id = t2.task_id
-		AND t1.target = t2.target AND t1.reported_at = t2.reported_at
-		AND t1.id > t2.id
-		WHERE t1.task_id IS NOT NULL`)
-	if del.Error != nil {
-		slog.Warn("清理 probe_results 历史重复行失败，去重索引未启用（入库降级为可能出现偶发重复点）",
-			"err", del.Error)
-		return
-	}
-	if del.RowsAffected > 0 {
-		slog.Info("已清理 probe_results 历史重复行", "deleted", del.RowsAffected)
-	}
-	if err := db.Exec(create).Error; err != nil {
-		slog.Warn("重试创建 idx_probe_dedup 仍失败，去重索引未启用（入库降级为可能出现偶发重复点）",
-			"err", err)
-		return
-	}
-	slog.Info("probe_results 幂等去重索引已创建", "index", "idx_probe_dedup")
+	}()
 }
 
 // ── SNMP 采集结果上报 ────────────────────────────────────────────────────────
@@ -563,10 +689,17 @@ func PostAgentSNMPResults(db *gorm.DB) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "未认证"})
 			return
 		}
+		extendTransferDeadlines(c, 2*time.Minute)
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSyncBatchBytes)
+
 		var req struct {
 			Results []snmpResultIn `json:"results" binding:"required,dive"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
+			if isMaxBytesErr(err) {
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "上报批次体积超出上限 (32 MiB)"})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
 			return
 		}
@@ -638,7 +771,10 @@ func RenewAgentCert(db *gorm.DB, pki *core.PKI, clientCertDays int) gin.HandlerF
 			return
 		}
 		if err := db.Model(agent).Updates(map[string]interface{}{
-			"cert_serial": issued.Serial, "cert_expiry": issued.Expiry,
+			"cert_serial":    issued.Serial,
+			"cert_expiry":    issued.Expiry,
+			"trusted_ca_fp":  pki.BundleFingerprints(),
+			"cert_issuer_fp": pki.ActiveCAFingerprint(),
 		}).Error; err != nil {
 			internalErr(c, http.StatusInternalServerError, "更新证书记录失败", err)
 			return
@@ -647,7 +783,7 @@ func RenewAgentCert(db *gorm.DB, pki *core.PKI, clientCertDays int) gin.HandlerF
 			"agent_id":    agent.AgentID,
 			"cert_pem":    string(issued.CertPEM),
 			"key_pem":     string(issued.KeyPEM),
-			"ca_cert_pem": string(pki.CACertPEM()),
+			"ca_cert_pem": string(pki.CABundlePEM()),
 			"cert_expiry": issued.Expiry,
 		})
 	}
@@ -656,8 +792,10 @@ func RenewAgentCert(db *gorm.DB, pki *core.PKI, clientCertDays int) gin.HandlerF
 // StartAgentOfflineSweeper 启动后台任务：周期性把超过 onlineThreshold 仍未刷新心跳
 // 的 Agent 从 online 翻转为 offline。AgentMTLS 中间件只负责"标记上线"，没有这个
 // sweeper 的话，一台失联的 Agent 会在 Agent List 里永久显示为 online。
-func StartAgentOfflineSweeper(db *gorm.DB) {
+func StartAgentOfflineSweeper(ctx context.Context, wg *sync.WaitGroup, db *gorm.DB) {
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
@@ -669,7 +807,11 @@ func StartAgentOfflineSweeper(db *gorm.DB) {
 			} else if result.RowsAffected > 0 {
 				slog.Info("Agent 离线状态扫描完成", "marked_offline", result.RowsAffected)
 			}
-			<-ticker.C
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
 		}
 	}()
 }
@@ -702,6 +844,8 @@ func GetAgentBinary(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在（可能已被删除）"})
 			return
 		}
+		// 对齐 Agent updater 侧 10 分钟下载超时，防止跨洲低带宽节点被全局 WriteTimeout(120s) 截断
+		extendTransferDeadlines(c, 10*time.Minute)
 		c.FileAttachment(rel.FilePath, "nms-agent")
 	}
 }
@@ -709,9 +853,9 @@ func GetAgentBinary(db *gorm.DB) gin.HandlerFunc {
 // RegisterAgentSyncRoutes 挂载到独立的 sync mTLS 引擎（tls.RequireAndVerifyClientCert）。
 func RegisterAgentSyncRoutes(r *gin.Engine, db *gorm.DB, pki *core.PKI, clientCertDays int, snmpCfg SNMPConfig) {
 	sync := r.Group("/api/v1/agent-sync")
-	sync.Use(middleware.AgentMTLS(db))
+	sync.Use(middleware.AgentMTLSWithPKI(db, pki))
 	{
-		sync.GET("/tasks", GetAgentTasks(db, snmpCfg))
+		sync.GET("/tasks", GetAgentTasksWithPKI(db, pki, snmpCfg))
 		sync.POST("/results", PostAgentResults(db))
 		sync.POST("/snmp-results", PostAgentSNMPResults(db))
 		sync.POST("/renew-cert", RenewAgentCert(db, pki, clientCertDays))

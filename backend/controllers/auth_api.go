@@ -22,12 +22,14 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // AuthConfig 认证模块配置
 type AuthConfig struct {
 	JWTSecret        string
-	RefreshTokenDays int // Refresh Token 有效期（天），默认 7
+	RefreshTokenDays int             // Refresh Token 有效期（天），默认 7
+	Secrets          *core.SecretBox // TOTP 种子密钥静态加密盒（可选，复用 snmp.credentials_key）
 }
 
 // totpIssuer 验证器 App 里显示的签发方名称
@@ -46,8 +48,8 @@ const refreshReuseGrace = 30 * time.Second
 
 // buildToken 签发 Access Token。有效期 = 用户自设 TokenLifetimeHours，且不超过
 // 管理员在安全设置中配置的全局上限（maxHours，见 login_protection.go 的 SessionPolicy）。
-// 用户组的模块级权限随 Token 固化进 perms 声明，组权限变更在下次刷新时生效。
-func buildToken(user *models.SysUser, isAdmin bool, secret string, maxHours int) (tokenStr string, expiresAt time.Time, err error) {
+// familyID 绑定当前会话家族，使强制下线/禁用/删除/改密/单会话吊销能立即作废该 Access Token。
+func buildToken(user *models.SysUser, isAdmin bool, secret string, maxHours int, familyID string) (tokenStr string, expiresAt time.Time, err error) {
 	hours := user.TokenLifetimeHours
 	if hours <= 0 || hours > 720 {
 		hours = 24 // 兜底：1h～720h 之外均使用 24h
@@ -63,6 +65,7 @@ func buildToken(user *models.SysUser, isAdmin bool, secret string, maxHours int)
 		IsAdmin:            isAdmin,
 		MustChangePassword: user.MustChangePassword,
 		Permissions:        user.Group.PermList(),
+		SessionFamily:      familyID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -121,7 +124,10 @@ func buildUserInfo(user *models.SysUser, isAdmin bool) gin.H {
 
 // issueRefreshToken 签发一行 Refresh Token 并返回明文。familyID 为空表示一次新登录
 // （生成新家族）；旋转时传入旧行的家族 ID 以继承，重放检测按家族整体吊销。
-func issueRefreshToken(db *gorm.DB, userID uint, days int, c *gin.Context, familyID string) (string, error) {
+// 若 Access Token 寿命（如 30 天）长于配置的 RefreshTokenDays（默认 7 天），自动将
+// Refresh Token 过期时间保底拉齐到 accessExpiresAt + 24h，避免 Access Token 尚未到期
+// 而 Refresh Token 已先过期导致无法续签。
+func issueRefreshToken(db *gorm.DB, userID uint, days int, accessExpiresAt time.Time, c *gin.Context, familyID string) (string, error) {
 	raw, hashed, err := generateRefreshToken()
 	if err != nil {
 		return "", err
@@ -135,12 +141,16 @@ func issueRefreshToken(db *gorm.DB, userID uint, days int, c *gin.Context, famil
 	if len(ua) > 255 {
 		ua = ua[:255]
 	}
+	rtExpiresAt := time.Now().Add(time.Duration(days) * 24 * time.Hour)
+	if minExpires := accessExpiresAt.Add(24 * time.Hour); rtExpiresAt.Before(minExpires) {
+		rtExpiresAt = minExpires
+	}
 	rt := models.SysRefreshToken{
 		UserID:    userID,
 		TokenHash: hashed,
 		CreatedIP: c.ClientIP(),
 		UserAgent: ua,
-		ExpiresAt: time.Now().Add(time.Duration(days) * 24 * time.Hour),
+		ExpiresAt: rtExpiresAt,
 		FamilyID:  familyID,
 	}
 	if err := db.Create(&rt).Error; err != nil {
@@ -182,15 +192,20 @@ func issueSession(db *gorm.DB, cfg AuthConfig, c *gin.Context, user *models.SysU
 	now := time.Now()
 	db.Model(user).Update("last_login_at", now)
 
+	familyID, err := randomHex(16)
+	if err != nil {
+		return nil, err
+	}
 	isAdmin := user.Group.IsAdmin()
-	accessToken, expiresAt, err := buildToken(user, isAdmin, cfg.JWTSecret, getSessionPolicy(db).MaxTokenLifetimeHours)
+	accessToken, expiresAt, err := buildToken(user, isAdmin, cfg.JWTSecret, getSessionPolicy(db).MaxTokenLifetimeHours, familyID)
 	if err != nil {
 		return nil, err
 	}
-	refreshToken, err := issueRefreshToken(db, user.ID, cfg.RefreshTokenDays, c, "")
+	refreshToken, err := issueRefreshToken(db, user.ID, cfg.RefreshTokenDays, expiresAt, c, familyID)
 	if err != nil {
 		return nil, err
 	}
+	middleware.InvalidateUserAuthCache(user.ID)
 	writeSysAudit(db, user.Username, "login_success", "session", user.Username, "method="+method+" "+clientInfo(c))
 	slog.Info("login success", "username", user.Username, "ip", clientIP, "method", method)
 	return gin.H{
@@ -273,12 +288,57 @@ func (s *mfaStore) finish(tok string) {
 	delete(s.m, tok)
 }
 
+// EncryptExistingTOTPSecrets 启动时一次性将存量 TOTP 种子密钥收敛为当前密钥密文
+// （明文加密 + 轮换密钥重封，与 EncryptExistingSNMPCredentials 同语义）。
+func EncryptExistingTOTPSecrets(db *gorm.DB, secrets *core.SecretBox) {
+	if secrets == nil {
+		return
+	}
+	var users []models.SysUser
+	db.Select("id, username, totp_secret").Where("totp_secret <> ''").Find(&users)
+	count, failed := 0, 0
+	for _, u := range users {
+		out, changed, err := secrets.Reseal(u.TOTPSecret)
+		if err != nil {
+			failed++
+			slog.Error("TOTP 密钥重封失败（两把密钥均不匹配，保留原值）",
+				"user_id", u.ID, "username", u.Username, "err", err)
+			continue
+		}
+		if changed {
+			db.Model(&models.SysUser{}).Where("id = ?", u.ID).UpdateColumns(map[string]interface{}{
+				"totp_secret": out,
+			})
+			count++
+		}
+	}
+	if count > 0 || failed > 0 {
+		slog.Info("TOTP 种子密钥静态加密/轮换清扫完成", "resealed_users", count, "failed", failed)
+	}
+}
+
+func openTOTPSecret(secrets *core.SecretBox, userID uint, stored string) (string, bool) {
+	if stored == "" {
+		return "", false
+	}
+	plain, err := secrets.Open(stored)
+	if err != nil {
+		slog.Error("TOTP 密钥解密失败", "user_id", userID, "err", err)
+		return "", false
+	}
+	return plain, plain != ""
+}
+
 // verifySecondFactor 校验验证器 6 位码或一次性恢复码；成功时持久化防重放状态
 // （TOTP 推进时间步计数、恢复码消费掉），并发场景用条件 UPDATE 保证只成功一次。
-func verifySecondFactor(db *gorm.DB, user *models.SysUser, code string) bool {
+func verifySecondFactor(db *gorm.DB, secrets *core.SecretBox, user *models.SysUser, code string) bool {
 	code = strings.TrimSpace(code)
 	if core.IsTOTPCode(code) {
-		counter, ok := core.ValidateTOTP(user.TOTPSecret, code, time.Now(), user.TOTPLastCounter)
+		plainSecret, ok := openTOTPSecret(secrets, user.ID, user.TOTPSecret)
+		if !ok {
+			return false
+		}
+		counter, ok := core.ValidateTOTP(plainSecret, code, time.Now(), user.TOTPLastCounter)
 		if !ok {
 			return false
 		}
@@ -410,7 +470,16 @@ func LoginTOTP(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			return
 		}
 		var user models.SysUser
-		if err := db.Preload("Group").First(&user, userID).Error; err != nil || !user.TOTPEnabled || !user.Enabled {
+		if err := db.Preload("Group").First(&user, userID).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				internalErr(c, http.StatusServiceUnavailable, "服务暂时不可用，请稍后重试", err)
+				return
+			}
+			mfaChallenges.finish(req.MFAToken)
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "验证会话已过期，请重新登录", "code": "auth.mfa_invalid"})
+			return
+		}
+		if !user.TOTPEnabled || !user.Enabled {
 			mfaChallenges.finish(req.MFAToken)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "验证会话已过期，请重新登录", "code": "auth.mfa_invalid"})
 			return
@@ -419,7 +488,7 @@ func LoginTOTP(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": msg, "code": "auth.locked", "minutes": mins})
 			return
 		}
-		if !verifySecondFactor(db, &user, req.Code) {
+		if !verifySecondFactor(db, cfg.Secrets, &user, req.Code) {
 			recordLoginFailure(db, c, user.Username, "totp")
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "验证码错误", "code": "auth.totp_invalid"})
 			return
@@ -453,6 +522,10 @@ func Refresh(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 		hashed := hashToken(req.RefreshToken)
 		var rt models.SysRefreshToken
 		if err := db.Where("token_hash = ?", hashed).First(&rt).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				internalErr(c, http.StatusServiceUnavailable, "服务暂时不可用，请稍后重试", err)
+				return
+			}
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Refresh Token 无效或已过期，请重新登录", "code": "auth.refresh_invalid"})
 			return
 		}
@@ -469,6 +542,7 @@ func Refresh(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			} else {
 				db.Delete(&rt)
 			}
+			middleware.InvalidateUserAuthCache(rt.UserID)
 			writeSysAudit(db, owner.Username, "refresh_reused", "session", owner.Username,
 				"Rotated refresh token reused; whole session family revoked "+clientInfo(c))
 			slog.Warn("refresh token reuse detected", "username", owner.Username, "ip", c.ClientIP())
@@ -482,6 +556,10 @@ func Refresh(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 		// 加载用户信息
 		var user models.SysUser
 		if err := db.Preload("Group").First(&user, rt.UserID).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				internalErr(c, http.StatusServiceUnavailable, "服务暂时不可用，请稍后重试", err)
+				return
+			}
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "关联用户不存在", "code": "auth.refresh_invalid"})
 			return
 		}
@@ -490,34 +568,86 @@ func Refresh(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			return
 		}
 
-		// 旋转：旧行标记已旋转（首次旋转时才写，宽限期内的并发刷新保留最初时间戳），
-		// 新行继承家族；升级前签发的旧行没有家族 ID，补一个
-		family := rt.FamilyID
-		if family == "" {
+		// 事务内锁定旧行并完成旋转与新行签发：
+		// 宽限期内的多标签并发刷新不再额外制造活跃子会话，先把同家族现有的未旋转行统一标为已旋转，
+		// 保证同一会话家族始终至多只有一条 rotated_at IS NULL 的活跃记录。
+		var accessToken, newRefreshToken string
+		var expiresAt time.Time
+		isAdmin := user.Group.IsAdmin()
+		maxHours := getSessionPolicy(db).MaxTokenLifetimeHours
+
+		var reuseDetected bool
+		txErr := db.Transaction(func(tx *gorm.DB) error {
+			var lockedRT models.SysRefreshToken
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedRT, rt.ID).Error; err != nil {
+				return err
+			}
+			if now.After(lockedRT.ExpiresAt) {
+				return gorm.ErrRecordNotFound
+			}
+			if lockedRT.RotatedAt != nil && now.Sub(*lockedRT.RotatedAt) > refreshReuseGrace {
+				reuseDetected = true
+				return nil
+			}
+
+			family := lockedRT.FamilyID
+			if family == "" {
+				var err error
+				if family, err = randomHex(16); err != nil {
+					return err
+				}
+				if err := tx.Model(&lockedRT).Update("family_id", family).Error; err != nil {
+					return err
+				}
+			}
+			if lockedRT.RotatedAt == nil {
+				if err := tx.Model(&lockedRT).Update("rotated_at", now).Error; err != nil {
+					return err
+				}
+			} else {
+				// 并发刷新落入宽限期：将同家族刚刚签发的其他未旋转行合并标为已旋转，消除重复会话计数与孤儿行
+				if err := tx.Model(&models.SysRefreshToken{}).
+					Where("family_id = ? AND rotated_at IS NULL", family).
+					Update("rotated_at", now).Error; err != nil {
+					return err
+				}
+			}
+
 			var err error
-			if family, err = randomHex(16); err != nil {
-				internalErr(c, http.StatusInternalServerError, "Refresh Token 签发失败", err)
+			accessToken, expiresAt, err = buildToken(&user, isAdmin, cfg.JWTSecret, maxHours, family)
+			if err != nil {
+				return err
+			}
+			newRefreshToken, err = issueRefreshToken(tx, user.ID, cfg.RefreshTokenDays, expiresAt, c, family)
+			return err
+		})
+		if txErr != nil {
+			if errors.Is(txErr, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Refresh Token 无效或已过期，请重新登录", "code": "auth.refresh_invalid"})
 				return
 			}
-			db.Model(&rt).Update("family_id", family)
+			internalErr(c, http.StatusServiceUnavailable, "Refresh Token 签发失败", txErr)
+			return
 		}
-		if rt.RotatedAt == nil {
-			db.Model(&rt).Update("rotated_at", now)
+		if reuseDetected {
+			if rt.FamilyID != "" {
+				db.Where("family_id = ?", rt.FamilyID).Delete(&models.SysRefreshToken{})
+			} else {
+				db.Delete(&rt)
+			}
+			middleware.InvalidateUserAuthCache(rt.UserID)
+			writeSysAudit(db, user.Username, "refresh_reused", "session", user.Username,
+				"Rotated refresh token reused; whole session family revoked "+clientInfo(c))
+			slog.Warn("refresh token reuse detected", "username", user.Username, "ip", c.ClientIP())
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "检测到已失效的会话令牌被重复使用，该登录的全部会话已吊销，请重新登录",
+				"code":  "auth.refresh_reused",
+			})
+			return
 		}
+
 		cleanupExpiredTokens(db, user.ID)
-
-		isAdmin := user.Group.IsAdmin()
-		accessToken, expiresAt, err := buildToken(&user, isAdmin, cfg.JWTSecret, getSessionPolicy(db).MaxTokenLifetimeHours)
-		if err != nil {
-			internalErr(c, http.StatusInternalServerError, "Access Token 生成失败", err)
-			return
-		}
-
-		newRefreshToken, err := issueRefreshToken(db, user.ID, cfg.RefreshTokenDays, c, family)
-		if err != nil {
-			internalErr(c, http.StatusInternalServerError, "Refresh Token 签发失败", err)
-			return
-		}
+		middleware.InvalidateUserAuthCache(user.ID)
 
 		c.JSON(http.StatusOK, gin.H{
 			"access_token":            accessToken,
@@ -554,6 +684,11 @@ func Logout(db *gorm.DB) gin.HandlerFunc {
 				}
 			}
 		}
+		if claims.SessionFamily != "" && revoked == 0 {
+			res := db.Where("family_id = ? AND user_id = ?", claims.SessionFamily, claims.UserID).Delete(&models.SysRefreshToken{})
+			revoked = res.RowsAffected
+		}
+		middleware.InvalidateUserAuthCache(claims.UserID)
 		writeSysAudit(db, claims.Username, "logout", "session", claims.Username,
 			fmt.Sprintf("revoked=%d %s", revoked, clientInfo(c)))
 		c.JSON(http.StatusOK, gin.H{"revoked": revoked})
@@ -566,6 +701,10 @@ func GetMe(db *gorm.DB) gin.HandlerFunc {
 		claims := c.MustGet(middleware.CtxUserKey).(*middleware.Claims)
 		var user models.SysUser
 		if err := db.Preload("Group").First(&user, claims.UserID).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				internalErr(c, http.StatusServiceUnavailable, "服务暂时不可用，请稍后重试", err)
+				return
+			}
 			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在", "code": "auth.user_not_found"})
 			return
 		}
@@ -603,6 +742,10 @@ func ChangePassword(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 
 		var user models.SysUser
 		if err := db.Preload("Group").First(&user, claims.UserID).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				internalErr(c, http.StatusServiceUnavailable, "服务暂时不可用，请稍后重试", err)
+				return
+			}
 			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在", "code": "auth.user_not_found"})
 			return
 		}
@@ -632,18 +775,24 @@ func ChangePassword(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 			"User changed own password; other sessions revoked "+clientInfo(c))
 
 		user.MustChangePassword = false
+		familyID, err := randomHex(16)
+		if err != nil {
+			internalErr(c, http.StatusInternalServerError, "Token 签发失败", err)
+			return
+		}
 		isAdmin := user.Group.IsAdmin()
-		accessToken, expiresAt, err := buildToken(&user, isAdmin, cfg.JWTSecret, getSessionPolicy(db).MaxTokenLifetimeHours)
+		accessToken, expiresAt, err := buildToken(&user, isAdmin, cfg.JWTSecret, getSessionPolicy(db).MaxTokenLifetimeHours, familyID)
 		if err != nil {
 			internalErr(c, http.StatusInternalServerError, "Token 签发失败", err)
 			return
 		}
 
-		newRefreshToken, err := issueRefreshToken(db, user.ID, cfg.RefreshTokenDays, c, "")
+		newRefreshToken, err := issueRefreshToken(db, user.ID, cfg.RefreshTokenDays, expiresAt, c, familyID)
 		if err != nil {
 			internalErr(c, http.StatusInternalServerError, "Refresh Token 签发失败", err)
 			return
 		}
+		middleware.InvalidateUserAuthCache(user.ID)
 
 		c.JSON(http.StatusOK, gin.H{
 			"message":                 "密码已成功修改",
@@ -729,6 +878,10 @@ func UpdateProfile(db *gorm.DB) gin.HandlerFunc {
 
 		var user models.SysUser
 		if err := db.Preload("Group").First(&user, claims.UserID).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				internalErr(c, http.StatusServiceUnavailable, "服务暂时不可用，请稍后重试", err)
+				return
+			}
 			c.JSON(http.StatusNotFound, gin.H{"error": "User not found", "code": "auth.user_not_found"})
 			return
 		}
@@ -750,6 +903,10 @@ func loadCurrentUser(db *gorm.DB, c *gin.Context) (*models.SysUser, bool) {
 	claims := c.MustGet(middleware.CtxUserKey).(*middleware.Claims)
 	var user models.SysUser
 	if err := db.Preload("Group").First(&user, claims.UserID).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			internalErr(c, http.StatusServiceUnavailable, "服务暂时不可用，请稍后重试", err)
+			return nil, false
+		}
 		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在", "code": "auth.user_not_found"})
 		return nil, false
 	}
@@ -757,7 +914,7 @@ func loadCurrentUser(db *gorm.DB, c *gin.Context) (*models.SysUser, bool) {
 }
 
 // TOTPSetup POST /api/v1/auth/totp/setup —— 生成待确认密钥与 otpauth URI（前端渲染二维码）
-func TOTPSetup(db *gorm.DB) gin.HandlerFunc {
+func TOTPSetup(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user, ok := loadCurrentUser(db, c)
 		if !ok {
@@ -773,7 +930,7 @@ func TOTPSetup(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		if err := db.Model(user).Updates(map[string]interface{}{
-			"totp_secret": secret, "totp_last_counter": 0,
+			"totp_secret": cfg.Secrets.Seal(secret), "totp_last_counter": 0,
 		}).Error; err != nil {
 			internalErr(c, http.StatusInternalServerError, "保存密钥失败", err)
 			return
@@ -786,7 +943,7 @@ func TOTPSetup(db *gorm.DB) gin.HandlerFunc {
 }
 
 // TOTPEnable POST /api/v1/auth/totp/enable {code} —— 用验证码确认密钥已正确录入，正式开启
-func TOTPEnable(db *gorm.DB) gin.HandlerFunc {
+func TOTPEnable(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
 			Code string `json:"code" binding:"required,max=16"`
@@ -799,6 +956,10 @@ func TOTPEnable(db *gorm.DB) gin.HandlerFunc {
 		if !ok {
 			return
 		}
+		if msg, mins := loginGuardCheck(db, user.Username, c.ClientIP()); msg != "" {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": msg, "code": "auth.locked", "minutes": mins})
+			return
+		}
 		if user.TOTPEnabled {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "两步验证已开启", "code": "auth.totp_already_enabled"})
 			return
@@ -807,8 +968,14 @@ func TOTPEnable(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "请先开始设置以获取密钥", "code": "auth.totp_setup_required"})
 			return
 		}
-		counter, valid := core.ValidateTOTP(user.TOTPSecret, req.Code, time.Now(), user.TOTPLastCounter)
+		plainSecret, secretOK := openTOTPSecret(cfg.Secrets, user.ID, user.TOTPSecret)
+		if !secretOK {
+			internalErr(c, http.StatusInternalServerError, "读取密钥失败", errors.New("totp secret decrypt failed"))
+			return
+		}
+		counter, valid := core.ValidateTOTP(plainSecret, req.Code, time.Now(), user.TOTPLastCounter)
 		if !valid {
+			recordLoginFailure(db, c, user.Username, "totp")
 			c.JSON(http.StatusBadRequest, gin.H{"error": "验证码错误", "code": "auth.totp_invalid"})
 			return
 		}
@@ -830,7 +997,7 @@ func TOTPEnable(db *gorm.DB) gin.HandlerFunc {
 }
 
 // TOTPDisable POST /api/v1/auth/totp/disable {password, code}
-func TOTPDisable(db *gorm.DB) gin.HandlerFunc {
+func TOTPDisable(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
 			Password string `json:"password" binding:"required,max=72"`
@@ -844,15 +1011,21 @@ func TOTPDisable(db *gorm.DB) gin.HandlerFunc {
 		if !ok {
 			return
 		}
+		if msg, mins := loginGuardCheck(db, user.Username, c.ClientIP()); msg != "" {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": msg, "code": "auth.locked", "minutes": mins})
+			return
+		}
 		if !user.TOTPEnabled {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "该账号未开启两步验证", "code": "auth.totp_not_enabled"})
 			return
 		}
 		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+			recordLoginFailure(db, c, user.Username, "totp_disable_pwd")
 			c.JSON(http.StatusBadRequest, gin.H{"error": "当前密码不正确", "code": "auth.pwd_old_wrong"})
 			return
 		}
-		if !verifySecondFactor(db, user, req.Code) {
+		if !verifySecondFactor(db, cfg.Secrets, user, req.Code) {
+			recordLoginFailure(db, c, user.Username, "totp")
 			c.JSON(http.StatusBadRequest, gin.H{"error": "验证码错误", "code": "auth.totp_invalid"})
 			return
 		}
@@ -867,11 +1040,12 @@ func TOTPDisable(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// TOTPRegenerateRecoveryCodes POST /api/v1/auth/totp/recovery-codes {code} —— 旧码立即失效
-func TOTPRegenerateRecoveryCodes(db *gorm.DB) gin.HandlerFunc {
+// TOTPRegenerateRecoveryCodes POST /api/v1/auth/totp/recovery-codes {password, code} —— 旧码立即失效
+func TOTPRegenerateRecoveryCodes(db *gorm.DB, cfg AuthConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Code string `json:"code" binding:"required,max=64"`
+			Password string `json:"password" binding:"required,max=72"`
+			Code     string `json:"code" binding:"required,max=64"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "bad_request"})
@@ -881,11 +1055,21 @@ func TOTPRegenerateRecoveryCodes(db *gorm.DB) gin.HandlerFunc {
 		if !ok {
 			return
 		}
+		if msg, mins := loginGuardCheck(db, user.Username, c.ClientIP()); msg != "" {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": msg, "code": "auth.locked", "minutes": mins})
+			return
+		}
 		if !user.TOTPEnabled {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "该账号未开启两步验证", "code": "auth.totp_not_enabled"})
 			return
 		}
-		if !verifySecondFactor(db, user, req.Code) {
+		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+			recordLoginFailure(db, c, user.Username, "totp_regen_pwd")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "当前密码不正确", "code": "auth.pwd_old_wrong"})
+			return
+		}
+		if !verifySecondFactor(db, cfg.Secrets, user, req.Code) {
+			recordLoginFailure(db, c, user.Username, "totp")
 			c.JSON(http.StatusBadRequest, gin.H{"error": "验证码错误", "code": "auth.totp_invalid"})
 			return
 		}
@@ -906,7 +1090,7 @@ func TOTPRegenerateRecoveryCodes(db *gorm.DB) gin.HandlerFunc {
 
 // RegisterAuthRoutes 注册认证相关路由
 func RegisterAuthRoutes(r *gin.Engine, db *gorm.DB, cfg AuthConfig) {
-	authMW := middleware.JWTAuth(cfg.JWTSecret)
+	authMW := middleware.JWTAuth(cfg.JWTSecret, db)
 
 	auth := r.Group("/api/v1/auth")
 
@@ -918,6 +1102,7 @@ func RegisterAuthRoutes(r *gin.Engine, db *gorm.DB, cfg AuthConfig) {
 	auth.POST("/refresh", middleware.RateLimit(60, time.Minute), Refresh(db, cfg))
 
 	// ── 需要 JWT（change-password / logout 在 must_change_password 状态下也被放行）──
+	totpRL := middleware.RateLimit(20, time.Minute)
 	auth.Use(authMW)
 	{
 		auth.GET("/me", GetMe(db))
@@ -925,9 +1110,9 @@ func RegisterAuthRoutes(r *gin.Engine, db *gorm.DB, cfg AuthConfig) {
 		auth.POST("/change-password", ChangePassword(db, cfg))
 		auth.PUT("/settings", UpdateTokenSettings(db))
 		auth.PUT("/profile", UpdateProfile(db))
-		auth.POST("/totp/setup", TOTPSetup(db))
-		auth.POST("/totp/enable", TOTPEnable(db))
-		auth.POST("/totp/disable", TOTPDisable(db))
-		auth.POST("/totp/recovery-codes", TOTPRegenerateRecoveryCodes(db))
+		auth.POST("/totp/setup", totpRL, TOTPSetup(db, cfg))
+		auth.POST("/totp/enable", totpRL, TOTPEnable(db, cfg))
+		auth.POST("/totp/disable", totpRL, TOTPDisable(db, cfg))
+		auth.POST("/totp/recovery-codes", totpRL, TOTPRegenerateRecoveryCodes(db, cfg))
 	}
 }

@@ -136,13 +136,21 @@ const LatencyTrendModal: React.FC<Props> = ({ open, onClose, agentId, target, pr
     if (open) void load();
   }, [open, load]);
 
-  // 时间标签按窗口长度选格式。标签必须逐桶唯一（x 轴是分类轴，G2 会把重复
-  // 标签合并到同一位置）：恰好 24h 的窗口经落桶对齐后首尾两个桶的 HH:mm 相同
-  // （昨天 16:50 与今天 16:50），若仍用纯 HH:mm，最后一个点会被画回最左端、
-  // 折线拉出一条横穿全图的假直线——因此 24h 及以上一律带日期，严格小于 24h
-  // 的窗口内 HH:mm 天然不重复。
+  // 时间标签按窗口长度与数据桶粒度共同选格式。标签必须逐桶唯一（x 轴是分类轴，
+  // G2 会把重复标签合并到同一位置）：
+  // 1) 桶粒度 < 60s（如 15s/30s 任务在 1h 视图下）必须带秒 `:ss`，否则同分钟内
+  //    多个桶会折叠到同一 x 坐标；
+  // 2) 桶粒度 < 1 天（如 30d 视图下桶宽为 90m/2h，每天有 12~16 个桶）必须带 `HH:mm`，
+  //    若只用 `YYYY-MM-DD` 会把同一天的十几个归档桶折叠成一根竖刺；
+  // 3) 只有桶粒度 ≥ 1 天（如 1y 视图下桶宽为 1d）才使用 `YYYY-MM-DD`。
   const windowSec = range[1].diff(range[0], 'second');
-  const timeFmt = windowSec < 86400 ? 'HH:mm' : windowSec <= 8 * 86400 ? 'MM-DD HH:mm' : 'YYYY-MM-DD';
+  const bucketSec = data?.source_bucket_seconds ?? 60;
+  const timeFmt =
+    bucketSec < 60
+      ? (windowSec < 86400 ? 'HH:mm:ss' : 'MM-DD HH:mm:ss')
+      : bucketSec < 86400
+        ? (windowSec < 86400 ? 'HH:mm' : windowSec <= 365 * 86400 ? 'MM-DD HH:mm' : 'YYYY-MM-DD HH:mm')
+        : 'YYYY-MM-DD';
 
   const AVG_LABEL = t('trend.avg');
   const MIN_LABEL = t('trend.min');

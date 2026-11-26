@@ -14,7 +14,9 @@ const ProbeResultsPage: React.FC = () => {
   const t = useT();
   const isAdminUser = useCan(PERM_ADMIN);
   const [activeKey, setActiveKey] = useState('1');
-  const [versions, setVersions]   = useState<Record<string, number>>({ '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 });
+  const [versions, setVersions]   = useState<Record<string, number>>({
+    '1': 0, '2': 0, '3': 0, '4': 0, '5': 0, '6': 0, '7': 0,
+  });
   const [purgeOpen, setPurgeOpen] = useState(false);
   const [purging, setPurging]     = useState(false);
   const [form] = Form.useForm();
@@ -33,7 +35,7 @@ const ProbeResultsPage: React.FC = () => {
 
   const handleTabChange = (key: string) => {
     setActiveKey(key);
-    setVersions((prev) => ({ ...prev, [key]: prev[key] + 1 }));
+    setVersions((prev) => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }));
   };
 
   // 递增所有 Tab 的版本号强制重挂载（原先固定写 1，第二次清理后不会再触发重载）
@@ -92,8 +94,10 @@ const ProbeResultsPage: React.FC = () => {
           { key: '1', label: t('proberesults.tab.ping'),       children: <TabGenericResults key={versions['1']} type="ping" /> },
           { key: '2', label: t('proberesults.tab.tcpping'),    children: <TabGenericResults key={versions['2']} type="tcpping" /> },
           { key: '3', label: t('proberesults.tab.httpcheck'),  children: <TabGenericResults key={versions['3']} type="httpcheck" /> },
-          { key: '4', label: t('proberesults.tab.mtr'),        children: <TabGenericResults key={versions['4']} type="mtr" /> },
-          { key: '5', label: t('proberesults.tab.meshping'),   children: <TabMeshPingMatrix key={versions['5']} /> },
+          { key: '4', label: t('proberesults.tab.dnscheck'),   children: <TabGenericResults key={versions['4']} type="dnscheck" /> },
+          { key: '5', label: t('proberesults.tab.traceroute'), children: <TabGenericResults key={versions['5']} type="traceroute" /> },
+          { key: '6', label: t('proberesults.tab.mtr'),        children: <TabGenericResults key={versions['6']} type="mtr" /> },
+          { key: '7', label: t('proberesults.tab.meshping'),   children: <TabMeshPingMatrix key={versions['7']} /> },
         ]}
       />
 

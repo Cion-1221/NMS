@@ -1050,25 +1050,30 @@ func DeleteDevice(db *gorm.DB) gin.HandlerFunc {
 
 // ── SNMP 辅助端点 ──────────────────────────────────────────────────────────────
 
-// ListDeviceAgentsLite GET /api/v1/devices/agents-lite
-// Devices 表单"采集探针"下拉专用的轻量 Agent 列表。/api/v1/agents 全量列表是
-// admin-only，而设备编辑只要求 devices:write——这里只暴露挑选探针所需的最小字段
-// 集（无 IP/证书/版本等敏感运维信息），与其余 devices GET 端点一样登录即可读。
+// ListDeviceAgentsLite GET /api/v1/devices/agents-lite & GET /api/v1/agents-lite
+// 轻量级非分页 Agent 元数据端点（agent_id / hostname / status / group_name / last_seen_at）。
+// /api/v1/agents 全量列表仅管理员可访问且单页上限 200；本端点不含 IP/证书等敏感运维字段，
+// 登录即可读取，供 Devices 采集探针下拉、Probe Results 主机名展示/筛选、Probe Config 选择器共用。
+// 默认仅返回未作废（revoked=false）的探针；传 ?include_revoked=true 时一并返回已作废探针（供历史探测结果反查主机名）。
 func ListDeviceAgentsLite(db *gorm.DB) gin.HandlerFunc {
 	type agentLite struct {
 		AgentID    string     `json:"agent_id"`
 		Hostname   string     `json:"hostname"`
 		Status     string     `json:"status"`
+		Revoked    bool       `json:"revoked"`
 		GroupName  string     `json:"group_name"`
 		LastSeenAt *time.Time `json:"last_seen_at"`
 	}
 	return func(c *gin.Context) {
 		// 同 ListDeviceSites：Scan 零行时保持 nil → JSON null，必须显式初始化
 		rows := make([]agentLite, 0)
-		db.Model(&models.Agent{}).
-			Select("agents.agent_id, agents.hostname, agents.status, COALESCE(agent_groups.name, '') AS group_name, agents.last_seen_at").
-			Joins("LEFT JOIN agent_groups ON agent_groups.id = agents.group_id").
-			Where("agents.revoked = ?", false).
+		q := db.Model(&models.Agent{}).
+			Select("agents.agent_id, agents.hostname, agents.status, agents.revoked, COALESCE(agent_groups.name, '') AS group_name, agents.last_seen_at").
+			Joins("LEFT JOIN agent_groups ON agent_groups.id = agents.group_id")
+		if c.Query("include_revoked") != "true" {
+			q = q.Where("agents.revoked = ?", false)
+		}
+		q.Order("agents.revoked ASC").
 			Order("agents.status = 'online' DESC").
 			Order("agents.hostname ASC").
 			Scan(&rows)

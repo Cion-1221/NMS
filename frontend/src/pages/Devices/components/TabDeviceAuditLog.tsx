@@ -28,30 +28,23 @@ const timeCell = (v: string) => {
 };
 
 const ACTION_COLOR: Record<string, string> = {
-  create_device: 'green',  update_device: 'blue',   delete_device: 'red',
-  create_site:   'green',  update_site:   'blue',   delete_site:   'red',
-  create_pop:    'green',  update_pop:    'blue',   delete_pop:    'red',
-  create_role:   'green',  update_role:   'blue',   delete_role:   'red',
-  create_vendor: 'green',  update_vendor: 'blue',   delete_vendor: 'red',
-  purge_audit:   'orange',
+  create_device:   'green',   update_device:   'blue', delete_device:   'red',
+  create_site:     'green',   update_site:     'blue', delete_site:     'red',
+  create_pop:      'green',   update_pop:      'blue', delete_pop:      'red',
+  create_role:     'green',   update_role:     'blue', delete_role:     'red',
+  create_vendor:   'green',   update_vendor:   'blue', delete_vendor:   'red',
+  upload_mib:      'green',   delete_mib:      'red',
+  add_snmp_oid:    'green',   update_snmp_oid: 'blue', delete_snmp_oid: 'red',
+  reboot_detected: 'volcano',
+  purge_audit:     'orange',
 };
 
 // ACTION_OPTIONS is the single source of truth: add a new entry to ACTION_COLOR above
 // and it automatically appears in both the color renderer and the filter dropdown.
 const ACTION_OPTIONS = Object.keys(ACTION_COLOR).map(a => ({ value: a, label: a }));
 
-// RESOURCE_OPTIONS is auto-derived from ACTION_COLOR keys so it stays in sync without
-// a separate maintenance step.
-// Derivation rule: "create_device" → "device", "purge_audit" → "audit_log"
-// (purge_* actions have a special mapping because the resource type logged is "audit_log").
 const RESOURCE_OPTIONS = [
-  ...new Set(
-    Object.keys(ACTION_COLOR).map(action => {
-      if (action.startsWith('purge_')) return 'audit_log';
-      const sep = action.indexOf('_');
-      return sep >= 0 ? action.slice(sep + 1) : action;
-    }),
-  ),
+  'device', 'site', 'pop', 'role', 'vendor', 'mib', 'audit_log',
 ].map(r => ({ value: r, label: r }));
 
 const TabDeviceAuditLog: React.FC = () => {
@@ -95,9 +88,19 @@ const TabDeviceAuditLog: React.FC = () => {
     }
   }, [page, pageSize, debUser, filterAction, filterResource]);
 
-  // 筛选条件变化时回到第一页（loadLogs 依赖变化会自动触发重新查询）
-  useEffect(() => { setPage(1); }, [debUser, filterAction, filterResource]);
-  useEffect(() => { void loadLogs(); }, [loadLogs]);
+  // 筛选条件变化时回到第一页，避免在 page > 1 时先用旧页码发一次多余请求
+  const filterKey = JSON.stringify([debUser, filterAction, filterResource]);
+  const prevFilterKey = useRef(filterKey);
+  useEffect(() => {
+    if (prevFilterKey.current !== filterKey) {
+      if (page !== 1) {
+        setPage(1);
+        return;
+      }
+      prevFilterKey.current = filterKey;
+    }
+    void loadLogs();
+  }, [loadLogs, filterKey, page]);
 
   const handleTableChange = (p: number, ps: number) => {
     // 切换每页条数时回到第一页，避免落在超出范围的页码上

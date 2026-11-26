@@ -7,8 +7,13 @@ import React, {
   useState,
 } from 'react';
 import { AuthUser, TokenBundle } from '../types/auth';
-import { logout as logoutApi, refreshToken as refreshTokenApi } from '../api/auth';
-import { SESSION_REFRESHED_EVENT, storageKeys } from '../api/client';
+import { logout as logoutApi } from '../api/auth';
+import {
+  isAuthInvalidError,
+  refreshSessionSingleFlight,
+  SESSION_REFRESHED_EVENT,
+  storageKeys,
+} from '../api/client';
 
 // ─── 类型 ─────────────────────────────────────────────────────────────────────
 
@@ -42,6 +47,10 @@ const AuthContext = createContext<AuthContextType>({
 // ─── Provider ─────────────────────────────────────────────────────────────────
 
 const REFRESH_BUFFER_MS = 5 * 60 * 1000; // Token 过期前 5 分钟触发静默刷新
+// 浏览器 setTimeout 的延时参数在底层 WebIDL 中为 32 位有符号整数（最大 2^31 - 1 ≈ 24.85 天），
+// 超过该值（如 30 天会话）会溢出导致 1ms 内立即触发死循环刷新。超出时分段接力定时。
+const MAX_SET_TIMEOUT_MS = 2_147_483_647;
+const TRANSIENT_RETRY_MS = 30_000; // 网络瞬断或后端重启（502/503）时 30 秒后重试，不踢出登录
 
 function clearStorage() {
   Object.values(storageKeys).forEach((k) => localStorage.removeItem(k));
@@ -71,7 +80,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const expiresMs = new Date(expiresAtIso).getTime();
     const refreshAt = expiresMs - REFRESH_BUFFER_MS;
-    const delay = Math.max(refreshAt - Date.now(), 1000); // 至少 1 秒后
+    const baseRemaining = Math.max(refreshAt - Date.now(), 1000); // 至少 1 秒后
+    // 多标签页错峰抖动（0~3s）：避免多个同源标签页在同一毫秒并发击穿 /auth/refresh
+    const jitter = baseRemaining > 10_000 ? Math.floor(Math.random() * 3000) : 0;
+    const remaining = baseRemaining + jitter;
+
+    // 超出 32 位定时器上限（24.85 天）时先定满一段，唤醒后接力剩余时间
+    if (remaining > MAX_SET_TIMEOUT_MS) {
+      timerRef.current = setTimeout(() => {
+        scheduleRefresh(expiresAtIso);
+      }, MAX_SET_TIMEOUT_MS);
+      return;
+    }
 
     timerRef.current = setTimeout(async () => {
       const storedRefresh = localStorage.getItem(storageKeys.refreshToken);
@@ -82,19 +102,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
       try {
-        const res = await refreshTokenApi(storedRefresh);
-        const bundle = res.data;
-        saveBundle(bundle);
+        const bundle = await refreshSessionSingleFlight();
         setToken(bundle.access_token);
         setUser(bundle.user);
         scheduleRefresh(bundle.access_token_expires_at); // 递归调度下一次
-      } catch {
-        // Refresh Token 失效 → 登出
-        clearStorage();
-        setToken(null);
-        setUser(null);
+      } catch (err) {
+        if (!localStorage.getItem(storageKeys.refreshToken) || isAuthInvalidError(err)) {
+          // 服务端明确拒绝（401/403）→ 登出
+          clearStorage();
+          setToken(null);
+          setUser(null);
+        } else {
+          // 瞬时网络抖动或服务端重启中（502/503）→ 保留会话，30s 后重试
+          scheduleRefresh(new Date(Date.now() + REFRESH_BUFFER_MS + TRANSIENT_RETRY_MS).toISOString());
+        }
       }
-    }, delay);
+    }, remaining);
   }, []);
 
   // ─── 初始化：从 localStorage 恢复 session ───────────────────────────────────
@@ -121,14 +144,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } else {
           // Token 即将到期或已过期：立即用 Refresh Token 换取新 Token
           try {
-            const res = await refreshTokenApi(storedRefresh);
-            const bundle = res.data;
-            saveBundle(bundle);
+            const bundle = await refreshSessionSingleFlight();
             setToken(bundle.access_token);
             setUser(bundle.user);
             scheduleRefresh(bundle.access_token_expires_at);
-          } catch {
-            clearStorage();
+          } catch (err) {
+            if (isAuthInvalidError(err)) {
+              clearStorage();
+            } else {
+              // 瞬时网络错误：先用本地缓存态恢复界面，稍后重试刷新
+              try {
+                setToken(storedToken);
+                setUser(JSON.parse(storedUser) as AuthUser);
+                scheduleRefresh(new Date(Date.now() + REFRESH_BUFFER_MS + TRANSIENT_RETRY_MS).toISOString());
+              } catch {
+                clearStorage();
+              }
+            }
           }
         }
       }
@@ -162,6 +194,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
     window.addEventListener(SESSION_REFRESHED_EVENT, onSessionRefreshed);
     return () => window.removeEventListener(SESSION_REFRESHED_EVENT, onSessionRefreshed);
+  }, [scheduleRefresh]);
+
+  // ─── 跨标签页会话与用户信息实时同步（storage 事件）──────────────────────────
+  // 任一标签页完成静默续期、登录、退出或修改偏好后，其余同源标签页即时同步最新状态并重设定时器，
+  // 防止旧标签页继续持有已旋转的旧 Refresh Token 撞车，也确保单标签页登出后全窗口同步退出。
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === storageKeys.accessToken) {
+        if (!e.newValue) {
+          if (timerRef.current) {
+            clearTimeout(timerRef.current);
+            timerRef.current = null;
+          }
+          setToken(null);
+          setUser(null);
+          return;
+        }
+        const storedExpires = localStorage.getItem(storageKeys.expiresAt);
+        const storedUser    = localStorage.getItem(storageKeys.user);
+        setToken(e.newValue);
+        if (storedUser) {
+          try { setUser(JSON.parse(storedUser) as AuthUser); } catch { /* ignore */ }
+        }
+        if (storedExpires) {
+          scheduleRefresh(storedExpires);
+        }
+      } else if (e.key === storageKeys.user && e.newValue) {
+        try { setUser(JSON.parse(e.newValue) as AuthUser); } catch { /* ignore */ }
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
   }, [scheduleRefresh]);
 
   // ─── 公开方法 ───────────────────────────────────────────────────────────────

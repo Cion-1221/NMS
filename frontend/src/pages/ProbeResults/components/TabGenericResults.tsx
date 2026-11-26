@@ -3,10 +3,10 @@ import { Button, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tool
 import { DeleteOutlined, ExclamationCircleFilled, LineChartOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
-  getLatestProbeResults, getAgents, getProbeResultTargets,
+  getLatestProbeResults, getAgentsLite, getProbeResultTargets,
   deleteProbeResultPair, deleteProbeResultPairs, lookupASN,
 } from '../../../api/agent';
-import type { Agent, MtrHop, ProbeResult, TaskType } from '../../../types/agent';
+import type { AgentLiteItem, MtrHop, ProbeResult, TaskType, TraceDetail, TraceHop } from '../../../types/agent';
 import { apiErrMsg, useT } from '../../../i18n';
 import { PERM_ADMIN, useCan } from '../../../utils/perms';
 import { useDebounced } from '../../../utils/useDebounced';
@@ -54,7 +54,7 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
   const isAdminUser = useCan(PERM_ADMIN);
   const [trend, setTrend] = useState<{ agentId: string; target: string; probeType: string; label: string } | null>(null);
   const [data, setData]         = useState<ProbeResult[]>([]);
-  const [agents, setAgents]     = useState<Agent[]>([]);
+  const [agents, setAgents]     = useState<AgentLiteItem[]>([]);
   const [loading, setLoading]   = useState(false);
   const [search, setSearch]     = useState('');
   const [successFilter, setSuccessFilter] = useState<string | undefined>(undefined);
@@ -72,7 +72,8 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal]       = useState(0);
 
-  const [mtrHops, setMtrHops] = useState<MtrHop[] | null>(null);
+  const [mtrHops, setMtrHops]     = useState<MtrHop[] | null>(null);
+  const [traceDetail, setTraceDetail] = useState<TraceDetail | null>(null);
   const [asnMap, setAsnMap]         = useState<Record<string, { asn: number; name: string } | null>>({});
   const [asnLoading, setAsnLoading] = useState(false);
 
@@ -117,10 +118,20 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
     } catch { /* 静默 */ }
   }, [type, agentFilter]);
 
-  useEffect(() => { setPage(1); }, [debSearch, successFilter, agentFilter, targetFilter]);
-  useEffect(() => { void loadData(); }, [loadData]);
+  const filterKey = JSON.stringify([debSearch, successFilter, agentFilter, targetFilter]);
+  const prevFilterKey = useRef(filterKey);
+  useEffect(() => {
+    if (prevFilterKey.current !== filterKey) {
+      if (page !== 1) {
+        setPage(1);
+        return;
+      }
+      prevFilterKey.current = filterKey;
+    }
+    void loadData();
+  }, [loadData, filterKey, page]);
   useEffect(() => { void loadTargets(); }, [loadTargets]);
-  useEffect(() => { getAgents({ page: 1, page_size: 200 }).then(r => setAgents(r.data.items ?? [])).catch(() => {}); }, []);
+  useEffect(() => { getAgentsLite(true).then(r => setAgents(r.data ?? [])).catch(() => {}); }, []);
 
   const handleDelete = async (r: ProbeResult) => {
     try {
@@ -163,21 +174,31 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
     });
   };
 
-  const openMtrDetail = useCallback(async (hops: MtrHop[]) => {
-    setMtrHops(hops);
+  const fetchASNForIPs = useCallback(async (ips: string[]) => {
     setAsnMap({});
-    const ips = [...new Set(hops.map(h => h.host).filter(h => h && h !== '???'))];
     if (ips.length === 0) return;
     setAsnLoading(true);
     try {
       const r = await lookupASN(ips);
       setAsnMap(r.data);
     } catch {
-      // ASN lookup failure is non-critical; MTR hop table still displays without it.
+      // ASN lookup failure is non-critical; hop table still displays without it.
     } finally {
       setAsnLoading(false);
     }
   }, []);
+
+  const openMtrDetail = useCallback(async (hops: MtrHop[]) => {
+    setMtrHops(hops);
+    const ips = [...new Set(hops.map(h => h.host).filter(h => h && h !== '???'))];
+    await fetchASNForIPs(ips);
+  }, [fetchASNForIPs]);
+
+  const openTraceDetail = useCallback(async (detail: TraceDetail) => {
+    setTraceDetail(detail);
+    const ips = [...new Set((detail.hops ?? []).map(h => h.ip ?? '').filter(Boolean))];
+    await fetchASNForIPs(ips);
+  }, [fetchASNForIPs]);
 
   const columns: ColumnsType<ProbeResult> = [
     {
@@ -203,13 +224,30 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
         if (type === 'mtr' && v) {
           try {
             const hops: MtrHop[] = JSON.parse(v);
-            const maxLoss = Math.max(...hops.map(h => h.loss_rate));
-            return (
-              <Button type="link" size="small" style={{ padding: 0 }} onClick={() => { void openMtrDetail(hops); }}>
-                {hops.length} hops{maxLoss > 0 ? `, max loss ${maxLoss}%` : ''}
-              </Button>
-            );
+            if (Array.isArray(hops)) {
+              const maxLoss = hops.length > 0 ? Math.max(...hops.map(h => h.loss_rate)) : 0;
+              return (
+                <Button type="link" size="small" style={{ padding: 0 }} onClick={() => { void openMtrDetail(hops); }}>
+                  {hops.length} hops{maxLoss > 0 ? `, max loss ${maxLoss}%` : ''}
+                </Button>
+              );
+            }
           } catch { /* fall through */ }
+        }
+        if (type === 'traceroute' && v) {
+          try {
+            const td: TraceDetail = JSON.parse(v);
+            if (td && Array.isArray(td.hops)) {
+              return (
+                <Button type="link" size="small" style={{ padding: 0 }} onClick={() => { void openTraceDetail(td); }}>
+                  {td.hops.length} hops · {td.reached ? t('traceroute.reached') : t('traceroute.unreached')}
+                </Button>
+              );
+            }
+          } catch { /* fall through (e.g. raw socket error message) */ }
+        }
+        if (type === 'dnscheck' && v) {
+          return <Tooltip title={v}>{mono(v)}</Tooltip>;
         }
         return v
           ? <Tooltip title={v}><span style={{ maxWidth: 300, display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{v}</span></Tooltip>
@@ -359,6 +397,61 @@ const TabGenericResults: React.FC<Props> = ({ type }) => {
               title: t('mtr.stddev'), dataIndex: 'stddev_rtt_ms', key: 'stddev_rtt_ms', width: 80, align: 'right' as const,
               render: (v: number | undefined, r: MtrHop) =>
                 r.loss_rate >= 100 || v == null ? '—' : `${v.toFixed(1)} ms`,
+            },
+          ]}
+        />
+      </Modal>
+
+      <Modal
+        title={
+          <Space>
+            <span>{t('traceroute.hopDetails')}</span>
+            {traceDetail && (
+              <Tag color={traceDetail.reached ? 'success' : 'warning'}>
+                {traceDetail.reached ? t('traceroute.reached') : t('traceroute.unreached')}
+              </Tag>
+            )}
+          </Space>
+        }
+        open={traceDetail !== null}
+        onCancel={() => { setTraceDetail(null); setAsnMap({}); }}
+        footer={null}
+        width={720}
+        destroyOnClose
+      >
+        <Table
+          size="small"
+          dataSource={traceDetail?.hops ?? []}
+          rowKey="ttl"
+          pagination={false}
+          columns={[
+            { title: t('mtr.hop'), dataIndex: 'ttl', key: 'ttl', width: 65 },
+            {
+              title: t('mtr.host'), key: 'ip',
+              render: (_: unknown, r: TraceHop) => r.timeout || !r.ip
+                ? <span style={{ color: 'var(--ant-color-text-tertiary)' }}>* ({t('traceroute.timeout')})</span>
+                : mono(r.ip),
+            },
+            {
+              title: t('mtr.asn'), key: 'asn', width: 250,
+              render: (_: unknown, r: TraceHop) => {
+                if (r.timeout || !r.ip) return <span style={{ color: 'var(--ant-color-text-tertiary)' }}>—</span>;
+                if (asnLoading) return <Spin size="small" />;
+                const info = asnMap[r.ip];
+                if (!info) return <span style={{ color: 'var(--ant-color-text-tertiary)' }}>—</span>;
+                return (
+                  <span style={{ fontSize: 12 }}>
+                    <span style={{ color: 'var(--ant-color-text-secondary)', marginRight: 6 }}>AS{info.asn}</span>
+                    {info.name}
+                  </span>
+                );
+              },
+            },
+            {
+              title: t('traceroute.rtt'), key: 'rtt', width: 110, align: 'right' as const,
+              render: (_: unknown, r: TraceHop) => r.timeout || r.rtt_ms == null
+                ? <span style={{ color: 'var(--ant-color-text-tertiary)' }}>—</span>
+                : mono(`${r.rtt_ms.toFixed(1)} ms`),
             },
           ]}
         />

@@ -93,9 +93,19 @@ const TabSysAuditLog: React.FC = () => {
     }
   }, [page, pageSize, debUser, filterAction, filterResource]);
 
-  // 筛选条件变化时回到第一页（loadLogs 依赖变化会自动触发重新查询）
-  useEffect(() => { setPage(1); }, [debUser, filterAction, filterResource]);
-  useEffect(() => { void loadLogs(); }, [loadLogs]);
+  // 筛选条件变化时回到第一页，避免在 page > 1 时先用旧页码发一次多余请求
+  const filterKey = JSON.stringify([debUser, filterAction, filterResource]);
+  const prevFilterKey = useRef(filterKey);
+  useEffect(() => {
+    if (prevFilterKey.current !== filterKey) {
+      if (page !== 1) {
+        setPage(1);
+        return;
+      }
+      prevFilterKey.current = filterKey;
+    }
+    void loadLogs();
+  }, [loadLogs, filterKey, page]);
 
   const handleTableChange = (p: number, ps: number) => {
     // 切换每页条数时回到第一页，避免落在超出范围的页码上

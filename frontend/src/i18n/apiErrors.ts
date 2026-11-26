@@ -101,6 +101,7 @@ const apiErrors: Record<string, Record<Lang, string>> = {
   'ipam.invalid_cidr':            { en: 'Invalid CIDR format', zh: '无效的 CIDR 格式' },
   'ipam.cidr_not_canonical':      { en: 'Non-canonical CIDR — did you mean {suggest}?', zh: '地址不标准，您需要的是否是 {suggest}？' },
   'ipam.cidr_taken':              { en: 'This root prefix already exists', zh: '该根前缀已存在' },
+  'ipam.cidr_overlap':            { en: 'Address range overlaps with existing root prefix {conflict}', zh: '与现有根前缀 {conflict} 存在地址范围重叠' },
   'ipam.subnet_conflict':         { en: 'Resulting subnet already exists under another prefix', zh: '目标网段已存在于其他前缀下，无法创建' },
   'ipam.subnet_missing':          { en: 'Some selected subnets no longer exist — refresh and retry', zh: '部分选中的子网已不存在，请刷新后重试' },
   'ipam.split_bits_too_small':    { en: 'Target mask /{target} must be longer than the current /{current}', zh: '目标掩码 /{target} 必须大于当前掩码 /{current}' },
@@ -123,7 +124,11 @@ const apiErrors: Record<string, Record<Lang, string>> = {
   'agent.invalid_address_family': { en: 'Invalid address family — must be auto, v4, v6 or both', zh: '无效的地址族——可选 auto / v4 / v6 / both' },
   'agent.token_not_unused':     { en: 'Only unused tokens can be revoked', zh: '仅可作废未使用的 Token' },
   'agent.release_file_missing': { en: 'Binary file is required (form field "file")', zh: '缺少二进制文件（字段名 file）' },
+  'agent.release_too_large':    { en: 'Binary file too large (256 MiB max)', zh: '二进制文件过大（上限 256 MiB）' },
   'agent.ca_no_pending':        { en: 'No pending CA rotation to finalize', zh: '当前没有待终结的轮换' },
+  'agent.ca_already_prepared':  { en: 'A next Root CA is already prepared — wait for agents to sync and activate it', zh: '已存在预生成的下一代 CA，请等待 Agent 同步后直接激活切换' },
+  'agent.ca_pending_finalize':  { en: 'Previous CA rotation is still awaiting finalize — finalize it first', zh: '上一轮 CA 轮换尚未终结，请先执行「终结轮换」' },
+  'agent.ca_prepare_required':  { en: 'Prepare and pre-distribute the next CA first so online agents trust it before switching', zh: '请先执行「预分发新 CA」，待在线 Agent 同步信任链后再激活切换' },
 
   // ── Probe Results 维护任务 ─────────────────────────────────────────────────
   'probe.job_running':          { en: 'Another purge / delete job is already running — showing its progress instead', zh: '已有清理/删除任务正在运行，已切换到该任务的进度' },

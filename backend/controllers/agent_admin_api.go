@@ -230,12 +230,20 @@ func DeleteAgent(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Agent 不存在", "code": "not_found"})
 			return
 		}
-		txErr := db.Transaction(func(tx *gorm.DB) error {
-			if c.Query("purge") == "true" {
-				if err := tx.Where("agent_id = ?", agentID).Delete(&models.ProbeResult{}).Error; err != nil {
-					return fmt.Errorf("清除探测记录失败: %w", err)
-				}
+		if c.Query("purge") == "true" {
+			if _, err := deleteProbeResultsChunked(db, "agent_id = ?", agentID); err != nil {
+				dbErr(c, "清除探测记录", err)
+				return
 			}
+			db.Where("agent_id = ?", agentID).Delete(&models.ProbeLatestState{})
+			var seriesIDs []uint
+			db.Model(&models.ProbeSeries{}).Where("agent_id = ?", agentID).Pluck("id", &seriesIDs)
+			if len(seriesIDs) > 0 {
+				db.Where("series_id IN ?", seriesIDs).Delete(&models.ProbeRollup{})
+				db.Where("id IN ?", seriesIDs).Delete(&models.ProbeSeries{})
+			}
+		}
+		txErr := db.Transaction(func(tx *gorm.DB) error {
 			// scope=agent 的专属任务随 Agent 一并删除，避免 Probe Config 留下悬空引用的孤儿任务
 			if err := tx.Where("scope = ? AND agent_id = ?", "agent", agentID).Delete(&models.AgentTask{}).Error; err != nil {
 				return fmt.Errorf("清除专属任务失败: %w", err)
@@ -359,8 +367,18 @@ func DeleteAgentGroup(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		txErr := db.Transaction(func(tx *gorm.DB) error {
-			tx.Exec("UPDATE agents SET group_id = NULL WHERE group_id = ?", id)
-			tx.Exec("UPDATE agent_tasks SET group_id = NULL WHERE group_id = ?", id)
+			if err := tx.Exec("UPDATE agents SET group_id = NULL WHERE group_id = ?", id).Error; err != nil {
+				return err
+			}
+			// 绑定了该分组的任务清掉 group_id 并自动停用（等待管理员重新指定分组后再启用），
+			// 避免残留 scope=group 但 group_id=NULL 的孤儿启用任务
+			if err := tx.Exec("UPDATE agent_tasks SET group_id = NULL, enabled = false WHERE group_id = ?", id).Error; err != nil {
+				return err
+			}
+			// 同步清除注册码上的预设分组引用，防止后续用该注册码注册的 Agent 指向已删分组
+			if err := tx.Exec("UPDATE agent_tokens SET preset_group_id = NULL WHERE preset_group_id = ?", id).Error; err != nil {
+				return err
+			}
 			return tx.Delete(&models.AgentGroup{}, id).Error
 		})
 		if txErr != nil {
@@ -398,9 +416,9 @@ func portOK(p string) bool {
 
 // targetLineOK 校验 targets_raw 的单行。基础形态是字面 IP 或域名；portTolerant
 // 额外放行 host:port（IPv6 用 [addr]:port 括号形式，与 Agent 侧 net.SplitHostPort
-// 解析方式一致）；urlTolerant 额外放行完整 http(s):// URL（Agent 的 httpcheck
-// 原生支持 scheme 前缀与路径）。
-func targetLineOK(target string, portTolerant, urlTolerant bool) bool {
+// 解析方式一致）；urlTolerant 额外放行完整 http(s):// URL；dnsServerTolerant 额外
+// 放行 domain@server 或 domain@server:port（供 dnscheck 指定上游 DNS 服务器）。
+func targetLineOK(target string, portTolerant, urlTolerant, dnsServerTolerant bool) bool {
 	if urlTolerant && (strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://")) {
 		u, err := url.Parse(target)
 		if err != nil || u.Hostname() == "" {
@@ -410,6 +428,20 @@ func targetLineOK(target string, portTolerant, urlTolerant bool) bool {
 			return false
 		}
 		return hostOK(u.Hostname())
+	}
+	if dnsServerTolerant {
+		if domain, srv, hasAt := strings.Cut(target, "@"); hasAt {
+			if !hostOK(domain) || srv == "" {
+				return false
+			}
+			if hostOK(srv) {
+				return true
+			}
+			if h, p, err := net.SplitHostPort(srv); err == nil {
+				return hostOK(h) && portOK(p)
+			}
+			return false
+		}
 	}
 	if hostOK(target) {
 		return true
@@ -424,13 +456,12 @@ func targetLineOK(target string, portTolerant, urlTolerant bool) bool {
 
 // validateTargets 校验 targets_raw 里的每一行。所有需要手动指定 Target 的类型都
 // 接受字面 IPv4/IPv6 地址或域名（域名的解析地址族由任务的 AddressFamily 控制）；
-// tcpping/httpcheck 额外接受 host:port；httpcheck 额外接受完整 http(s):// URL。
-// 多选类型共用同一份 target 列表，校验按并集放行（与既有语义一致：某行只对
-// 部分类型有意义时，其余类型运行时以失败结果兜底）。meshping/meshmtr 的 Target
-// 由 Server 动态解析，调用方应跳过校验。
+// tcpping/httpcheck 额外接受 host:port；httpcheck 额外接受完整 http(s):// URL；
+// dnscheck 额外接受 domain@server[:port]。
 func validateTargets(raw string, types []string) string {
 	portTolerant := false
 	urlTolerant := false
+	dnsServerTolerant := false
 	for _, ty := range types {
 		if portOptionalTypes[ty] {
 			portTolerant = true
@@ -438,10 +469,13 @@ func validateTargets(raw string, types []string) string {
 		if ty == "httpcheck" {
 			urlTolerant = true
 		}
+		if ty == "dnscheck" {
+			dnsServerTolerant = true
+		}
 	}
 	task := models.AgentTask{TargetsRaw: raw}
 	for _, target := range task.Targets() {
-		if targetLineOK(target, portTolerant, urlTolerant) {
+		if targetLineOK(target, portTolerant, urlTolerant, dnsServerTolerant) {
 			continue
 		}
 		hint := "支持 IPv4/IPv6 地址或域名"
@@ -450,6 +484,9 @@ func validateTargets(raw string, types []string) string {
 		}
 		if urlTolerant {
 			hint += "，httpcheck 亦支持完整 http(s):// URL"
+		}
+		if dnsServerTolerant {
+			hint += "，dnscheck 亦支持 domain@server[:port]"
 		}
 		return fmt.Sprintf("无效的 Target 地址: %s（%s）", target, hint)
 	}
@@ -715,27 +752,85 @@ func RevokeAgentToken(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// ── CA 状态/轮换（Token Tab 顶部的 CA 管理面板）─────────────────────────────
+// ── CA 状态/轮换（Token Tab 顶部的三阶段平滑 CA 管理面板）─────────────────────
 
-func GetCAStatus(pki *core.PKI) gin.HandlerFunc {
+func hasCAFP(csv, target string) bool {
+	if csv == "" || target == "" {
+		return false
+	}
+	for _, p := range strings.Split(csv, ",") {
+		if strings.TrimSpace(p) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func GetCAStatus(db *gorm.DB, pki *core.PKI) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.JSON(http.StatusOK, pki.Status())
+		st := pki.Status()
+		if db != nil {
+			var onlineAgents []models.Agent
+			db.Select("agent_id", "trusted_ca_fp", "cert_issuer_fp").
+				Where("revoked = ? AND status = ?", false, "online").
+				Find(&onlineAgents)
+			st.OnlineAgents = int64(len(onlineAgents))
+			for _, a := range onlineAgents {
+				if st.NextCAFP != "" && hasCAFP(a.TrustedCAFP, st.NextCAFP) {
+					st.NextCATrustedAgents++
+				}
+				if st.ActiveCAFP != "" && a.CertIssuerFP == st.ActiveCAFP {
+					st.ActiveCAIssuedAgents++
+				}
+			}
+		}
+		c.JSON(http.StatusOK, st)
 	}
 }
 
-// RotateCA POST /api/v1/agents/ca/rotate —— 生成新 Root CA 并写入磁盘。
-// 仅落盘生效，需要重启 NMS 进程后新的信任边界才会真正生效（原因见 core/pki.go
-// 类型注释：避免热切换一个正被 TLS 握手并发读取的信任池引入数据竞争）。
+// PrepareCA POST /api/v1/agents/ca/prepare —— 阶段一：预生成下一代 Root CA 并通过
+// /agent-sync/tasks 预分发给所有在线 Agent 热更新信任锚，无需重启进程、不中断现有握手。
+func PrepareCA(db *gorm.DB, pki *core.PKI, caDays int) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if err := pki.Prepare(caDays); err != nil {
+			if _, ok := err.(*core.CodedError); ok {
+				c.JSON(http.StatusBadRequest, codedErrJSON(err))
+				return
+			}
+			internalErr(c, http.StatusInternalServerError, "预生成下一代 CA 失败", err)
+			return
+		}
+		writeAgentAudit(db, getUsername(c), "prepare_ca", "ca", "",
+			"Prepared next Root CA for pre-distribution to online agents")
+		c.JSON(http.StatusOK, gin.H{
+			"message": "已生成下一代 Root CA 并开始预分发，待在线 Agent 同步就绪后即可执行「激活新 CA」",
+		})
+	}
+}
+
+// RotateCA POST /api/v1/agents/ca/rotate —— 阶段二：将已预分发的下一代 Root CA 提升为活跃 CA
+// （默认要求已先执行 PrepareCA，除非显式传 ?force=true 执行紧急直接轮换）。需重启 NMS 服务生效。
 func RotateCA(db *gorm.DB, pki *core.PKI, caDays int) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if err := pki.Rotate(caDays); err != nil {
+		force := c.Query("force") == "true"
+		var err error
+		if force && !pki.HasPreparedNext() {
+			err = pki.Rotate(caDays)
+		} else {
+			err = pki.Promote()
+		}
+		if err != nil {
+			if _, ok := err.(*core.CodedError); ok {
+				c.JSON(http.StatusBadRequest, codedErrJSON(err))
+				return
+			}
 			internalErr(c, http.StatusInternalServerError, "轮换失败", err)
 			return
 		}
 		writeAgentAudit(db, getUsername(c), "rotate_ca", "ca", "",
-			"Rotated Root CA; restart required to take effect")
+			"Activated new Root CA; restart required to take effect")
 		c.JSON(http.StatusOK, gin.H{
-			"message": "已生成新 Root CA，重启 NMS 服务后生效；旧 CA 在 Finalize 之前仍被信任",
+			"message": "已切换至新 Root CA，请重启 NMS 服务生效；旧 CA 在终结轮换前仍被信任，重启后在线 Agent 将自动续期客户端证书",
 		})
 	}
 }
@@ -746,7 +841,11 @@ func FinalizeCA(db *gorm.DB, pki *core.PKI) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := pki.Finalize(); err != nil {
 			// "无待终结的轮换" 由 core 层以 CodedError 携带 agent.ca_no_pending 返回
-			c.JSON(http.StatusBadRequest, codedErrJSON(err))
+			if _, ok := err.(*core.CodedError); ok {
+				c.JSON(http.StatusBadRequest, codedErrJSON(err))
+				return
+			}
+			internalErr(c, http.StatusInternalServerError, "终结轮换失败", err)
 			return
 		}
 		writeAgentAudit(db, getUsername(c), "finalize_ca", "ca", "",
@@ -796,23 +895,41 @@ func ListAgentReleases(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// maxAgentReleaseSize 单个 Agent 二进制上传体积上限（256 MiB）。
+const maxAgentReleaseSize = 256 << 20
+
 // CreateAgentRelease POST /api/v1/agent-releases（multipart/form-data）
 // 字段：version, os, arch, notes（文本） + file（二进制文件）。
 // 服务端流式写盘、同时计算 SHA256，不在内存中缓存整个文件。
 func CreateAgentRelease(db *gorm.DB, releaseDir string) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		extendTransferDeadlines(c, 10*time.Minute)
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAgentReleaseSize+(4<<20))
+
 		version := strings.TrimSpace(c.PostForm("version"))
 		osName := strings.TrimSpace(c.PostForm("os"))
 		arch := strings.TrimSpace(c.PostForm("arch"))
 		notes := strings.TrimSpace(c.PostForm("notes"))
 		if version == "" || osName == "" || arch == "" {
+			if isMaxBytesErr(c.Request.Context().Err()) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "二进制文件过大（上限 256 MiB）", "code": "agent.release_too_large"})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "version / os / arch 不能为空", "code": "bad_request"})
 			return
 		}
 
 		fh, err := c.FormFile("file")
 		if err != nil {
+			if isMaxBytesErr(err) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "二进制文件过大（上限 256 MiB）", "code": "agent.release_too_large"})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少二进制文件（字段名 file）", "code": "agent.release_file_missing"})
+			return
+		}
+		if fh.Size > maxAgentReleaseSize {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "二进制文件过大（上限 256 MiB）", "code": "agent.release_too_large"})
 			return
 		}
 		src, err := fh.Open()
@@ -839,10 +956,18 @@ func CreateAgentRelease(db *gorm.DB, releaseDir string) gin.HandlerFunc {
 
 		// 流式写盘 + 同步计算 SHA256
 		h := sha256.New()
-		written, err := io.Copy(io.MultiWriter(tmp, h), src)
+		written, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(src, maxAgentReleaseSize+1))
 		tmp.Close()
 		if err != nil {
+			if isMaxBytesErr(err) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "二进制文件过大（上限 256 MiB）", "code": "agent.release_too_large"})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "写入文件失败", "code": "server_error"})
+			return
+		}
+		if written > maxAgentReleaseSize {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "二进制文件过大（上限 256 MiB）", "code": "agent.release_too_large"})
 			return
 		}
 		checksum := hex.EncodeToString(h.Sum(nil))
@@ -994,17 +1119,68 @@ func GetAgentReleaseProgress(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// ── Agent Audit Log ────────────────────────────────────────────────────────
+
+func ListAgentAuditLogs(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+		pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+		if page < 1 {
+			page = 1
+		}
+		if pageSize < 1 || pageSize > 100 {
+			pageSize = 20
+		}
+		query := db.Model(&models.AgentAuditLog{}).Order("created_at desc")
+		if u := c.Query("username"); u != "" {
+			query = query.Where("username LIKE ?", "%"+u+"%")
+		}
+		if a := c.Query("action"); a != "" {
+			query = query.Where("action = ?", a)
+		}
+		if rt := c.Query("resource_type"); rt != "" {
+			query = query.Where("resource_type = ?", rt)
+		}
+		var total int64
+		query.Count(&total)
+		var logs []models.AgentAuditLog
+		query.Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs)
+		c.JSON(http.StatusOK, gin.H{"total": total, "items": logs, "page": page, "page_size": pageSize})
+	}
+}
+
+func PurgeAgentAuditLogs(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		daysStr := c.Query("days")
+		days, err := strconv.Atoi(daysStr)
+		if err != nil || days < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的天数参数（最小 1 天）", "code": "bad_request"})
+			return
+		}
+		cutoff := time.Now().AddDate(0, 0, -days)
+		result := db.Where("created_at < ?", cutoff).Delete(&models.AgentAuditLog{})
+		writeAgentAudit(db, getUsername(c), "purge_audit", "audit_log", "",
+			fmt.Sprintf("Purged agent audit logs older than %d days (%d rows)", days, result.RowsAffected))
+		c.JSON(http.StatusOK, gin.H{"deleted": result.RowsAffected})
+	}
+}
+
 // ── Route Registration ─────────────────────────────────────────────────────
 
 // RegisterAgentAdminRoutes 注册不依赖 PKI 的 Agent 管理路由（agents/groups/tasks/tokens/releases），
 // 无论 agent_pki.enabled 是否开启都应调用。releaseDir 为 Agent 二进制文件存储目录。
 func RegisterAgentAdminRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc, releaseDir string) {
+	// 轻量级全量探针元数据（不含 IP/证书敏感字段），登录即可读，无 200 条分页截断
+	r.GET("/api/v1/agents-lite", authMW, ListDeviceAgentsLite(db))
+
 	agents := r.Group("/api/v1/agents")
 	agents.Use(authMW, middleware.AdminRequired)
 	{
 		agents.GET("", ListAgents(db))
 		agents.GET("/summary", GetAgentSummary(db))
 		agents.GET("/filter-options", GetAgentFilterOptions(db))
+		agents.GET("/audit-logs", ListAgentAuditLogs(db))
+		agents.DELETE("/audit-logs", PurgeAgentAuditLogs(db))
 		agents.PUT("/:agent_id", UpdateAgent(db))
 		agents.DELETE("/:agent_id", DeleteAgent(db))
 		agents.POST("/:agent_id/revoke", RevokeAgent(db))
@@ -1047,7 +1223,7 @@ func RegisterAgentAdminRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc
 	}
 }
 
-// RegisterAgentPKIRoutes 注册依赖 PKI 的 CA 管理路由（ca-cert/ca/status/rotate/finalize），
+// RegisterAgentPKIRoutes 注册依赖 PKI 的 CA 管理路由（ca-cert/ca/status/prepare/rotate/finalize），
 // 仅在 agent_pki.enabled=true 且 PKI 初始化成功时调用。
 func RegisterAgentPKIRoutes(r *gin.Engine, db *gorm.DB, pki *core.PKI, caDays int, authMW gin.HandlerFunc) {
 	agents := r.Group("/api/v1/agents")
@@ -1056,7 +1232,8 @@ func RegisterAgentPKIRoutes(r *gin.Engine, db *gorm.DB, pki *core.PKI, caDays in
 		// 浏览器走主站 HTTPS/HTTP，无法直接信任 enroll 端口上自签发的内置 CA 证书，
 		// 故在主引擎上镜像一份 GetCACert，方便 Token Tab 展示/下载 CA 公钥。
 		agents.GET("/ca-cert", GetCACert(pki))
-		agents.GET("/ca/status", GetCAStatus(pki))
+		agents.GET("/ca/status", GetCAStatus(db, pki))
+		agents.POST("/ca/prepare", PrepareCA(db, pki, caDays))
 		agents.POST("/ca/rotate", RotateCA(db, pki, caDays))
 		agents.POST("/ca/finalize", FinalizeCA(db, pki))
 	}

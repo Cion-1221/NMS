@@ -154,14 +154,22 @@ const TabDeviceList: React.FC = () => {
     }
   };
 
-  // 筛选条件变化时回到第一页（loadData 依赖变化会自动触发重新查询）
+  // 筛选条件变化时回到第一页，避免在 page > 1 时先用旧页码发一次多余请求
+  const filterKey = JSON.stringify([
+    debHostname, debIP, debIPv6, filterStatus, filterOperStatus,
+    filterSiteId, filterPopId, filterRoleId, filterVendorId,
+  ]);
+  const prevFilterKey = useRef(filterKey);
   useEffect(() => {
-    setPage(1);
-  }, [debHostname, debIP, debIPv6, filterStatus, filterOperStatus,
-      filterSiteId, filterPopId, filterRoleId, filterVendorId]);
-
-  // 分页 / 筛选任一变化即重新查询；首次挂载同样由此触发
-  useEffect(() => { void loadData(); }, [loadData]);
+    if (prevFilterKey.current !== filterKey) {
+      if (page !== 1) {
+        setPage(1);
+        return;
+      }
+      prevFilterKey.current = filterKey;
+    }
+    void loadData();
+  }, [loadData, filterKey, page]);
 
   useEffect(() => { void loadLookups(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

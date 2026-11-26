@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -41,6 +42,12 @@ type Config struct {
 		// 这些地址的连接，其 X-Forwarded-For 才会被采信为客户端真实 IP——否则任何
 		// 人都能伪造 XFF 绕过登录防爆破的按 IP 锁定。默认只信任本机回环。
 		TrustedProxies []string `mapstructure:"trusted_proxies"`
+		// HTTP 超时参数（可选，单位：秒；<= 0 表示不限制该项）：
+		// 防御慢速连接耗尽（Slowloris）及空闲连接堆积，同时作用于主端口与 Agent TLS 端口。
+		ReadHeaderTimeoutSeconds int `mapstructure:"read_header_timeout_seconds"`
+		ReadTimeoutSeconds       int `mapstructure:"read_timeout_seconds"`
+		WriteTimeoutSeconds      int `mapstructure:"write_timeout_seconds"`
+		IdleTimeoutSeconds       int `mapstructure:"idle_timeout_seconds"`
 	} `mapstructure:"server"`
 	Database struct {
 		Host     string `mapstructure:"host"`
@@ -79,9 +86,10 @@ type Config struct {
 		// 小型 VPS，几小时内就被 probe_results 打满导致 MariaDB 崩溃）建议开启：
 		// 高频检查可用空间，跌破阈值立即对 probe_results 做一次紧急清理。
 		ProbeDiskGuard struct {
-			Enabled              bool `mapstructure:"enabled"`
-			CheckIntervalMinutes int  `mapstructure:"check_interval_minutes"`
-			CriticalFreeMB       int  `mapstructure:"critical_free_mb"`
+			Enabled              bool   `mapstructure:"enabled"`
+			CheckIntervalMinutes int    `mapstructure:"check_interval_minutes"`
+			CriticalFreeMB       int    `mapstructure:"critical_free_mb"`
+			CheckPath            string `mapstructure:"check_path"`
 		} `mapstructure:"probe_disk_guard"`
 	} `mapstructure:"audit"`
 	// ASN 查询：基于 CAIDA RouteViews + RIPE 数据的 IP→ASN 前缀匹配
@@ -138,10 +146,15 @@ func loadConfig() (*Config, error) {
 
 	// 受信反代缺省值：只信任本机回环（Nginx 同机部署的标准拓扑）
 	viper.SetDefault("server.trusted_proxies", []string{"127.0.0.1", "::1"})
+	// HTTP 服务超时缺省值（秒，可选项，config.yaml 未配置时使用默认值，设为 0 则不限制）
+	viper.SetDefault("server.read_header_timeout_seconds", 10)
+	viper.SetDefault("server.read_timeout_seconds", 30)
+	viper.SetDefault("server.write_timeout_seconds", 120)
+	viper.SetDefault("server.idle_timeout_seconds", 120)
 
-	// 数据库连接池缺省值：旧版 config.yaml 未配置时保持开箱即用
-	viper.SetDefault("database.max_open_conns", 25)
-	viper.SetDefault("database.max_idle_conns", 10)
+	// 数据库连接池缺省值：兼顾 Direct SNMP 轮询器、归档聚合与前端/Agent 高频并发
+	viper.SetDefault("database.max_open_conns", 50)
+	viper.SetDefault("database.max_idle_conns", 15)
 	viper.SetDefault("database.conn_max_lifetime_minutes", 60)
 	viper.SetDefault("database.conn_max_idle_time_minutes", 10)
 
@@ -156,6 +169,7 @@ func loadConfig() (*Config, error) {
 	viper.SetDefault("audit.probe_disk_guard.enabled", false)
 	viper.SetDefault("audit.probe_disk_guard.check_interval_minutes", 10)
 	viper.SetDefault("audit.probe_disk_guard.critical_free_mb", 500)
+	viper.SetDefault("audit.probe_disk_guard.check_path", ".")
 
 	// ASN DB 缺省值：功能默认关闭，开启后使用标准路径
 	viper.SetDefault("asndb.enabled", false)
@@ -237,8 +251,14 @@ func main() {
 		cfg.JWT.RefreshTokenDays = 7
 	}
 
-	initLogger(cfg.Log)
+	logCloser := initLogger(cfg.Log)
 	slog.Info("NMS 后端服务启动中...")
+
+	// 全局停机上下文与后台任务 WaitGroup：收到 SIGINT/SIGTERM 时通知所有后台协程退出，
+	// 并在关闭数据库连接池与日志文件前等待在途 SQL / SNMP 轮询收尾。
+	appCtx, appStop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer appStop()
+	var bgWG sync.WaitGroup
 
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
 		cfg.Database.User, cfg.Database.Password,
@@ -317,6 +337,7 @@ func main() {
 		&models.AgentToken{},
 		&models.AgentTask{},
 		&models.ProbeResult{},
+		&models.ProbeLatestState{},
 		&models.AgentAuditLog{},
 		&models.AgentRelease{},
 		// 探测结果降采样归档（序列维表 + 归档桶）
@@ -327,13 +348,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 写入初始化种子数据（幂等）
+	// 写入初始化种子数据（仅空库首次执行）
 	controllers.SeedDatabase(db)
 
-	// probe_results 幂等去重唯一索引（Agent 上报重试的去重依据）。后台执行：
-	// 大表建索引/清理历史重复行可能耗时数分钟，不阻塞启动；索引就绪前入库
-	// 行为与旧版一致（详见 EnsureProbeDedupIndex）。
-	go controllers.EnsureProbeDedupIndex(db)
+	// probe_results 幂等去重唯一索引与 probe_latest_states 存量快照回填（后台执行，不阻塞启动）
+	controllers.EnsureProbeDedupIndex(appCtx, &bgWG, db)
+	controllers.BackfillProbeLatestStates(appCtx, &bgWG, db)
 
 	// 确保 Agent 二进制存储目录存在
 	releasesDir := filepath.Clean(cfg.AgentPKI.ReleasesDir)
@@ -366,19 +386,18 @@ func main() {
 	}
 
 	// 审计日志 + 探测结果自动保留（后台任务）
-	controllers.StartAuditRetention(db, retention)
+	controllers.StartAuditRetention(appCtx, &bgWG, db, retention)
 	// 探测结果降采样归档（Cacti RRA 风格，未配置归档层时不启动）
-	controllers.StartProbeRollups(db, retention)
-	// 磁盘空间兜底（默认关闭，见 audit.probe_disk_guard 注释）：常规保留任务 24
-	// 小时一次太慢，磁盘几小时内就能被打满（2026-07-23 事故），开启后高频检查、
-	// 跌破阈值立即紧急清理
-	controllers.StartDiskSpaceGuard(db, retention, controllers.DiskGuardConfig{
+	controllers.StartProbeRollups(appCtx, &bgWG, db, retention)
+	// 磁盘空间兜底（默认关闭，见 audit.probe_disk_guard 注释）
+	controllers.StartDiskSpaceGuard(appCtx, &bgWG, db, retention, controllers.DiskGuardConfig{
 		Enabled:              cfg.Audit.ProbeDiskGuard.Enabled,
 		CheckIntervalMinutes: cfg.Audit.ProbeDiskGuard.CheckIntervalMinutes,
 		CriticalFreeMB:       cfg.Audit.ProbeDiskGuard.CriticalFreeMB,
+		CheckPath:            cfg.Audit.ProbeDiskGuard.CheckPath,
 	})
 
-	// SNMP 凭证静态加密（snmp.credentials_key 配置后启用；previous 供密钥轮换过渡）
+	// 敏感凭证静态加密（snmp.credentials_key 配置后启用，同时保护 SNMP 凭证与用户 TOTP 种子；previous 供密钥轮换过渡）
 	secretBox, err := core.NewSecretBox(cfg.SNMP.CredentialsKey, cfg.SNMP.CredentialsKeyPrevious)
 	if err != nil {
 		slog.Error("初始化凭证加密失败", "err", err)
@@ -386,7 +405,6 @@ func main() {
 	}
 
 	// SNMP 设备采集装配：Direct 模式内置轮询器 + 运行状态看门狗。
-	// 看门狗对 direct/agent 两种模式统一兜底，与 agent_pki 是否启用无关。
 	snmpCfg := controllers.SNMPConfig{
 		Enabled:                cfg.SNMP.Enabled,
 		DefaultIntervalSeconds: cfg.SNMP.DefaultIntervalSeconds,
@@ -407,15 +425,15 @@ func main() {
 		os.Exit(1)
 	}
 	if secretBox != nil {
-		slog.Info("snmp: 凭证静态加密已启用")
-		// 一次性把存量明文凭证加密（幂等，重复启动零副作用）
+		slog.Info("静态加密已启用（SNMP 凭证 + TOTP 种子密钥）")
 		controllers.EncryptExistingSNMPCredentials(db, snmpCfg)
+		controllers.EncryptExistingTOTPSecrets(db, secretBox)
 	}
 	if snmpCfg.Enabled {
-		controllers.StartDeviceSNMPPoller(db, snmpCfg)
-		controllers.StartDeviceOperStatusSweeper(db, snmpCfg)
-		controllers.StartDeviceMetricRetention(db, snmpCfg)
-		controllers.StartDeviceMetricRollups(db, snmpCfg)
+		controllers.StartDeviceSNMPPoller(appCtx, &bgWG, db, snmpCfg)
+		controllers.StartDeviceOperStatusSweeper(appCtx, &bgWG, db, snmpCfg)
+		controllers.StartDeviceMetricRetention(appCtx, &bgWG, db, snmpCfg)
+		controllers.StartDeviceMetricRollups(appCtx, &bgWG, db, snmpCfg)
 	} else {
 		slog.Info("snmp: 设备 SNMP 采集已禁用（snmp.enabled = false）")
 	}
@@ -444,24 +462,18 @@ func main() {
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
-	// 受信反代（server.trusted_proxies，默认本机回环）：Gin 默认信任任意来源的
-	// X-Forwarded-For，攻击者可通过伪造 XFF 让 c.ClientIP() 返回任意地址，从而绕过
-	// 登录防爆破的按 IP 锁定。Nginx/LB 异机部署时在 config.yaml 中加入其内网地址。
 	if err := r.SetTrustedProxies(cfg.Server.TrustedProxies); err != nil {
 		slog.Error("设置受信代理失败（请检查 server.trusted_proxies 配置）", "err", err)
 		os.Exit(1)
 	}
 	r.MaxMultipartMemory = 128 << 20 // 128 MiB，支持上传较大的 Agent 二进制
-	// 自定义 Recovery：panic 堆栈写入 slog（落盘），而非 gin 默认的 stderr
 	r.Use(middleware.Recovery())
-	// API 响应基础安全头（nosniff / DENY / no-referrer / no-store）
 	r.Use(middleware.SecurityHeaders())
 	if cfg.Log.AccessLog {
 		r.Use(slogGinMiddleware())
 	}
 
-	// 健康检查（无需认证）：探测数据库连通性，供 LB / 监控发现 DB 故障。
-	// 限速防匿名端点被高频轰击放大 DB 压力——120 次/分钟/IP 足够覆盖 1s 间隔的探活
+	// 健康检查（无需认证）
 	r.GET("/api/health", middleware.RateLimit(120, time.Minute), func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 		defer cancel()
@@ -472,13 +484,14 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "db": "up"})
 	})
 
-	// JWT 中间件实例（共享给 IPAM / System 路由组）
-	authMW := middleware.JWTAuth(cfg.JWT.Secret)
+	// JWT 中间件实例
+	authMW := middleware.JWTAuth(cfg.JWT.Secret, db)
 
-	// 认证配置
+	// 认证配置（携带 Secrets 用于 TOTP 静态加密）
 	authCfg := controllers.AuthConfig{
 		JWTSecret:        cfg.JWT.Secret,
 		RefreshTokenDays: cfg.JWT.RefreshTokenDays,
+		Secrets:          secretBox,
 	}
 
 	// 注册各模块路由
@@ -486,21 +499,15 @@ func main() {
 	controllers.RegisterIPAMRoutes(r, db, authMW)
 	controllers.RegisterDeviceRoutes(r, db, authMW, snmpCfg, mibsDir, mibEngine)
 	controllers.RegisterSystemRoutes(r, db, authMW)
-	// Agent 管理路由（list/update/delete/groups/tasks/tokens）和探测结果路由不依赖 PKI，
-	// 无论 agent_pki.enabled 是否开启都注册，确保前端页面始终可用。
 	controllers.RegisterAgentAdminRoutes(r, db, authMW, releasesDir)
 	controllers.RegisterProbeResultsRoutes(r, db, authMW, retention)
-	// NOC 看板聚合端点（任何已登录用户可访问，只读）
 	controllers.RegisterOverviewRoutes(r, db, authMW)
 	if pki != nil {
-		// CA 管理路由（ca-cert/status/rotate/finalize）和 mTLS 监听端口需要 PKI。
 		controllers.RegisterAgentPKIRoutes(r, db, pki, cfg.AgentPKI.CACertDays, authMW)
-		// 后台扫描：把超过心跳阈值仍标记 online 的 Agent 翻转为 offline
-		controllers.StartAgentOfflineSweeper(db)
+		controllers.StartAgentOfflineSweeper(appCtx, &bgWG, db)
 	}
 
 	// ASN 查询功能（可选，由 asndb.enabled 控制）
-	// 关闭时不注册任何路由，对系统其余功能无影响。
 	if cfg.ASNDB.Enabled {
 		asnDB := new(asndb.DB)
 		if err := asnDB.Load(
@@ -513,7 +520,7 @@ func main() {
 				"download_endpoint", "POST /api/v1/admin/asndb/download",
 			)
 		}
-		asndb.StartScheduler(asnDB,
+		asndb.StartScheduler(appCtx, &bgWG, asnDB,
 			cfg.ASNDB.V4PrefixFile,
 			cfg.ASNDB.V6PrefixFile,
 			cfg.ASNDB.NamesFile,
@@ -529,10 +536,23 @@ func main() {
 		slog.Info("asndb: ASN 查询功能已禁用（asndb.enabled = false）")
 	}
 
-	// 优雅停机：收到 SIGINT/SIGTERM 后停止接收新连接，
-	// 等待进行中的请求完成（上限 15 秒）后退出，避免发版/重启掐断在途请求
+	applyTimeouts := func(s *http.Server) *http.Server {
+		if cfg.Server.ReadHeaderTimeoutSeconds > 0 {
+			s.ReadHeaderTimeout = time.Duration(cfg.Server.ReadHeaderTimeoutSeconds) * time.Second
+		}
+		if cfg.Server.ReadTimeoutSeconds > 0 {
+			s.ReadTimeout = time.Duration(cfg.Server.ReadTimeoutSeconds) * time.Second
+		}
+		if cfg.Server.WriteTimeoutSeconds > 0 {
+			s.WriteTimeout = time.Duration(cfg.Server.WriteTimeoutSeconds) * time.Second
+		}
+		if cfg.Server.IdleTimeoutSeconds > 0 {
+			s.IdleTimeout = time.Duration(cfg.Server.IdleTimeoutSeconds) * time.Second
+		}
+		return s
+	}
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Server.Port)
-	srv := &http.Server{Addr: addr, Handler: r}
+	srv := applyTimeouts(&http.Server{Addr: addr, Handler: r})
 
 	go func() {
 		slog.Info("服务监听中", slog.String("addr", addr))
@@ -542,10 +562,6 @@ func main() {
 		}
 	}()
 
-	// Agent Enroll（单向 HTTPS）+ Agent Sync（mTLS）：与主 API 端口并存的两个独立 TLS
-	// 监听器。Go 的 tls.Config.ClientAuth 按监听器全局生效，无法在同一端口对不同路径
-	// 区分"是否要求客户端证书"，故两者必须分开监听——这两个端口需要让 Agent 直连
-	// （绕开现有 Nginx/Caddy），因为 mTLS 校验在本进程内完成。
 	var enrollSrv, syncSrv *http.Server
 	if pki != nil {
 		serverCert, err := pki.IssueServerCert(cfg.AgentPKI.ServerSAN, cfg.AgentPKI.ServerCertDays)
@@ -555,36 +571,27 @@ func main() {
 		}
 
 		enrollEngine := gin.New()
-		// Agent 直连（不经反代）：不信任任何代理头，c.ClientIP() 一律取 TCP 来源地址，
-		// 防止伪造 X-Forwarded-For 绕过 enroll 注册码防爆破
 		_ = enrollEngine.SetTrustedProxies(nil)
 		enrollEngine.Use(middleware.Recovery())
 		controllers.RegisterAgentEnrollRoutes(enrollEngine, db, pki, controllers.AgentPKIConfig{
 			ClientCertDays: cfg.AgentPKI.ClientCertDays,
 			SyncPort:       cfg.AgentPKI.SyncPort,
 		})
-		// Addr 留空主机部分（":PORT" 而非 "0.0.0.0:PORT"）—— Agent 需要同时支持
-		// IPv4/IPv6（Source IP、Target 均可为任一族），监听端口本身也必须双栈可达，
-		// 否则纯 IPv6 或优先 IPv6 路由的 Agent 主机连不上 enroll/sync 端口。
-		// 空主机让 Go 在系统支持双栈套接字时监听 "[::]"（同时接受 v4-mapped 连接），
-		// 在确实没有 IPv6 的系统上会自动回退为仅 IPv4，不需要按平台特判。
-		enrollSrv = &http.Server{
+		enrollSrv = applyTimeouts(&http.Server{
 			Addr:      fmt.Sprintf(":%d", cfg.AgentPKI.EnrollPort),
 			Handler:   enrollEngine,
 			TLSConfig: pki.TLSConfig(serverCert, false),
-		}
+		})
 
 		syncEngine := gin.New()
-		// 同 enroll：Agent 直连端口不信任任何代理头（X-Agent-IPv4/IPv6 是独立的业务
-		// header，由 mTLS 中间件单独校验地址族，不受此影响）
 		_ = syncEngine.SetTrustedProxies(nil)
 		syncEngine.Use(middleware.Recovery())
 		controllers.RegisterAgentSyncRoutes(syncEngine, db, pki, cfg.AgentPKI.ClientCertDays, snmpCfg)
-		syncSrv = &http.Server{
+		syncSrv = applyTimeouts(&http.Server{
 			Addr:      fmt.Sprintf(":%d", cfg.AgentPKI.SyncPort),
 			Handler:   syncEngine,
 			TLSConfig: pki.TLSConfig(serverCert, true),
-		}
+		})
 
 		go func() {
 			slog.Info("Agent Enroll 服务监听中（单向 HTTPS）", slog.Int("port", cfg.AgentPKI.EnrollPort))
@@ -602,17 +609,14 @@ func main() {
 		}()
 	}
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	<-appCtx.Done()
+	appStop()
 	slog.Info("收到退出信号，开始优雅停机...")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		slog.Error("优雅停机超时，强制退出", "err", err)
-	} else {
-		slog.Info("服务已优雅停止")
+		slog.Error("主 HTTP 服务停机超时", "err", err)
 	}
 	if enrollSrv != nil {
 		if err := enrollSrv.Shutdown(shutdownCtx); err != nil {
@@ -623,5 +627,27 @@ func main() {
 		if err := syncSrv.Shutdown(shutdownCtx); err != nil {
 			slog.Error("Agent Sync 服务停机超时", "err", err)
 		}
+	}
+
+	// 等待后台任务（SNMP 在途轮询、归档聚合、异步分片清理）收尾后再关闭连接池与日志文件
+	bgDone := make(chan struct{})
+	go func() {
+		bgWG.Wait()
+		controllers.WaitProbeJobs()
+		close(bgDone)
+	}()
+	select {
+	case <-bgDone:
+		slog.Info("后台任务已全部安全收尾")
+	case <-time.After(10 * time.Second):
+		slog.Warn("等待后台任务收尾超时（10s），继续退出")
+	}
+
+	if err := sqlDB.Close(); err != nil {
+		slog.Warn("关闭数据库连接池失败", "err", err)
+	}
+	slog.Info("服务已优雅停止")
+	if logCloser != nil {
+		_ = logCloser.Close()
 	}
 }

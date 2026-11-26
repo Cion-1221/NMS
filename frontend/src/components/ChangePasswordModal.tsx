@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Form, Input, message, Modal } from 'antd';
-import { LockOutlined, WarningOutlined } from '@ant-design/icons';
+import { Alert, Button, Form, Input, message, Modal, Space } from 'antd';
+import { LockOutlined, LogoutOutlined, WarningOutlined } from '@ant-design/icons';
 import { changePassword } from '../api/auth';
 import { useAuth } from '../contexts/AuthContext';
 import { useApiError, useT } from '../i18n';
@@ -12,7 +12,7 @@ interface Props {
 }
 
 const ChangePasswordModal: React.FC<Props> = ({ open, forced, onClose }) => {
-  const { refreshSession } = useAuth();
+  const { refreshSession, logout } = useAuth();
   const t = useT();
   const apiErr = useApiError();
   const [form] = Form.useForm();
@@ -50,28 +50,37 @@ const ChangePasswordModal: React.FC<Props> = ({ open, forced, onClose }) => {
       open={open}
       onOk={handleOk}
       onCancel={forced ? undefined : () => { form.resetFields(); onClose(); }}
+      footer={forced ? (
+        <Space>
+          <Button icon={<LogoutOutlined />} disabled={loading} onClick={() => { form.resetFields(); void logout(); }}>
+            {t('auth.logout')}
+          </Button>
+          <Button type="primary" loading={loading} onClick={handleOk}>
+            {t('security.changePwd')}
+          </Button>
+        </Space>
+      ) : undefined}
       okText={t('security.changePwd')}
       cancelText={t('common.cancel')}
-      cancelButtonProps={forced ? { style: { display: 'none' } } : {}}
       closable={!forced}
       maskClosable={!forced}
       confirmLoading={loading}
       width={420}
     >
       {forced && (
-        <div style={{
-          background: '#fffbe6', border: '1px solid #ffe58f',
-          borderRadius: 6, padding: '10px 14px', marginBottom: 20, fontSize: 13,
-        }}>
-          {t('security.forcedHint')}
-        </div>
+        <Alert
+          type="warning"
+          showIcon
+          message={t('security.forcedHint')}
+          style={{ marginBottom: 20 }}
+        />
       )}
       <Form form={form} layout="vertical">
         <Form.Item label={t('security.oldPwd')} name="old_password" rules={[{ required: true }]}>
           <Input.Password prefix={<LockOutlined />} />
         </Form.Item>
         <Form.Item label={t('security.newPwd')} name="new_password"
-          rules={[{ required: true }, { min: 8, message: t('security.pwdMinLen') }]}>
+          rules={[{ required: true }, { min: 8, message: t('security.pwdMinLen') }, { max: 72 }]}>
           <Input.Password prefix={<LockOutlined />} />
         </Form.Item>
         <Form.Item label={t('security.confirmPwd')} name="confirm" rules={[{ required: true }]}>

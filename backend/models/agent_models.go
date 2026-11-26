@@ -43,6 +43,12 @@ type Agent struct {
 	RegisteredAt time.Time  `json:"registered_at"`
 	CertExpiry   time.Time  `json:"cert_expiry"`
 	CertSerial   string     `gorm:"type:varchar(100)" json:"-"`
+	// TrustedCAFP 记录 Agent 通过 X-Agent-CA-FP 上报的本地信任锚指纹集合（逗号分隔的 16 位 SHA-256 前缀），
+	// 用于三阶段 CA 轮换中观测多少在线 Agent 已完成新 CA 预分发同步。
+	TrustedCAFP string `gorm:"type:varchar(255)" json:"-"`
+	// CertIssuerFP 记录签发当前 Agent 客户端证书的 CA 指纹（16 位 SHA-256 前缀），
+	// 用于观测切换新 CA 后多少在线 Agent 已完成客户端证书续期。
+	CertIssuerFP string     `gorm:"type:varchar(64)" json:"-"`
 	Revoked      bool       `gorm:"not null;default:false" json:"revoked"`
 	LastSeenAt   *time.Time `json:"last_seen_at"`
 }
@@ -151,6 +157,26 @@ type ProbeResult struct {
 }
 
 func (ProbeResult) TableName() string { return "probe_results" }
+
+// ── ProbeLatestState ─────────────────────────────────────────────────────────
+// 每个 (type, agent_id, target) 组合维护唯一一行最新状态快照（千行级小表）。
+// GetLatestProbeResults / GetMeshPingMatrix / GetProbeResultTargets 直接读此表，
+// 避免高频轮询在千万行级 probe_results 热表上执行 GROUP BY MAX(reported_at) + 自连接。
+// PostAgentResults 入库时按单调时间条件（VALUES(reported_at) >= reported_at）幂等更新。
+
+type ProbeLatestState struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	Type       string    `gorm:"type:varchar(20);not null;uniqueIndex:idx_probe_latest_key,priority:1" json:"type"`
+	AgentID    string    `gorm:"type:varchar(64);not null;index;uniqueIndex:idx_probe_latest_key,priority:2" json:"agent_id"`
+	Target     string    `gorm:"type:varchar(255);not null;uniqueIndex:idx_probe_latest_key,priority:3" json:"target"`
+	TaskID     *uint     `json:"task_id"`
+	Success    bool      `gorm:"not null" json:"success"`
+	LatencyMs  *float64  `json:"latency_ms"`
+	Detail     string    `gorm:"type:text" json:"detail"`
+	ReportedAt time.Time `gorm:"not null;index" json:"reported_at"`
+}
+
+func (ProbeLatestState) TableName() string { return "probe_latest_states" }
 
 // ── AgentAuditLog ────────────────────────────────────────────────────────────
 // Same shape as DeviceAuditLog/IPAMAuditLog, except ResourceID is a string since

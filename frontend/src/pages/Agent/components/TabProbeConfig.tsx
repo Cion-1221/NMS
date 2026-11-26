@@ -3,9 +3,9 @@ import { Alert, Button, Form, Input, InputNumber, Modal, Select, Space, Switch, 
 import { ExclamationCircleFilled, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
-  getAgentTasks, createAgentTasks, updateAgentTask, deleteAgentTask, getAgentGroups, getAgents,
+  getAgentTasks, createAgentTasks, updateAgentTask, deleteAgentTask, getAgentGroups, getAgentsLite,
 } from '../../../api/agent';
-import type { AgentTask, AgentGroup, Agent, TaskType, TaskScope } from '../../../types/agent';
+import type { AgentTask, AgentGroup, AgentLiteItem, TaskType, TaskScope } from '../../../types/agent';
 import { apiErrMsg, useT } from '../../../i18n';
 import { FONT_MONO } from '../../../theme/theme';
 
@@ -32,7 +32,7 @@ const TabProbeConfig: React.FC = () => {
   const t = useT();
   const [data, setData]       = useState<AgentTask[]>([]);
   const [groups, setGroups]   = useState<AgentGroup[]>([]);
-  const [agents, setAgents]   = useState<Agent[]>([]);
+  const [agents, setAgents]   = useState<AgentLiteItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen]       = useState(false);
   const [mode, setMode]       = useState<'create' | 'edit'>('create');
@@ -62,7 +62,7 @@ const TabProbeConfig: React.FC = () => {
   useEffect(() => {
     loadData();
     getAgentGroups().then(r => setGroups(r.data)).catch(() => {});
-    getAgents({ page: 1, page_size: 200 }).then(r => setAgents(r.data.items)).catch(() => {});
+    getAgentsLite().then(r => setAgents(r.data ?? [])).catch(() => {});
   }, []);
 
   const openCreate = () => {

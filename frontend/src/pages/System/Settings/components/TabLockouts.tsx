@@ -61,11 +61,18 @@ const TabLockouts: React.FC = () => {
     }
   }, [page, pageSize, debSearch]);
 
-  // 搜索条件变化时回到第一页
-  useEffect(() => { setPage(1); }, [debSearch]);
-
-  // 分页 / 搜索任一变化即重新查询；首次挂载同样由此触发
-  useEffect(() => { void loadData(); }, [loadData]);
+  // 搜索条件变化时回到第一页，避免在 page > 1 时先用旧页码发一次多余请求
+  const prevSearchRef = useRef(debSearch);
+  useEffect(() => {
+    if (prevSearchRef.current !== debSearch) {
+      if (page !== 1) {
+        setPage(1);
+        return;
+      }
+      prevSearchRef.current = debSearch;
+    }
+    void loadData();
+  }, [loadData, debSearch, page]);
 
   const handleUnlock = async (keys: string[]) => {
     try {

@@ -1,18 +1,22 @@
 import client from './client';
 import type {
   Agent, AgentListParams, AgentListResp, UpdateAgentReq, AgentSummary, PKIStatus,
-  AgentFilterOptions, AgentGroup,
+  AgentFilterOptions, AgentGroup, AgentLiteItem,
   AgentTask, CreateAgentTasksReq, UpdateAgentTaskReq,
   AgentTokenListResp, CreateAgentTokenReq, CreateAgentTokenResp,
   AgentRelease, AgentReleaseProgress,
   ProbeResultListParams, ProbeResultListResp, MeshPingMatrixResp, MeshPingMatrixParams,
-  LatencySeriesResp, ProbeJob,
+  LatencySeriesResp, ProbeJob, AgentAuditLog,
 } from '../types/agent';
 
 // ── Agent 管理 ────────────────────────────────────────────────────────────────
 // 服务端分页：undefined 的过滤参数会被 axios 自动从 query string 中剔除
 export const getAgents = (params: AgentListParams) =>
   client.get<AgentListResp>('/agents', { params });
+
+// 轻量级全量 Agent 元数据（登录即可读，无 200 条分页截断）
+export const getAgentsLite = (includeRevoked = false) =>
+  client.get<AgentLiteItem[]>('/agents-lite', includeRevoked ? { params: { include_revoked: 'true' } } : undefined);
 
 export const getAgentSummary = () =>
   client.get<AgentSummary>('/agents/summary');
@@ -37,8 +41,11 @@ export const getAgentCACert = () =>
 export const getCAStatus = () =>
   client.get<PKIStatus>('/agents/ca/status');
 
-export const rotateCA = () =>
-  client.post<{ message: string }>('/agents/ca/rotate');
+export const prepareCA = () =>
+  client.post<{ message: string }>('/agents/ca/prepare');
+
+export const rotateCA = (force = false) =>
+  client.post<{ message: string }>('/agents/ca/rotate', undefined, force ? { params: { force: 'true' } } : undefined);
 
 export const finalizeCA = () =>
   client.post<{ message: string }>('/agents/ca/finalize');
@@ -151,3 +158,18 @@ export const lookupASN = (ips: string[]) =>
   client.get<Record<string, { asn: number; name: string } | null>>(
     '/asn', { params: { ips: ips.join(',') } },
   );
+
+// ── Agent Audit Logs ──────────────────────────────────────────────────────────
+export const getAgentAuditLogs = (
+  page: number,
+  pageSize: number,
+  filters?: { username?: string; action?: string; resource_type?: string },
+) =>
+  client.get<{ total: number; items: AgentAuditLog[]; page: number; page_size: number }>(
+    '/agents/audit-logs',
+    { params: { page, page_size: pageSize, ...filters } },
+  );
+
+export const purgeAgentAuditLogs = (days: number) =>
+  client.delete<{ deleted: number }>('/agents/audit-logs', { params: { days } });
+

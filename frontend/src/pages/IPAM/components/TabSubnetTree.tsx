@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert, Button, Form, Modal, Input, message, Select, Space, Table, Tag, theme, Tooltip,
 } from 'antd';
@@ -6,10 +6,10 @@ import { SearchOutlined } from '@ant-design/icons';
 import { AxiosError } from 'axios';
 import type { ColumnsType } from 'antd/es/table';
 import {
-  getRootPrefixes, getSubnetTree, mergeSubnets, splitSubnet, updateSubnet,
+  getAllSubnetTrees, getSubnetTree, mergeSubnets, splitSubnet, updateSubnet,
   getGroups, getIPAMTypes, getVRFs,
 } from '../../../api/ipam';
-import type { RootPrefix, SubnetNode, IPAMGroup, IPAMType, IPAMVRF } from '../../../types/ipam';
+import type { RootSubnetTree, SubnetNode, IPAMGroup, IPAMType, IPAMVRF } from '../../../types/ipam';
 import { apiErrMsg, useT } from '../../../i18n';
 import { PERM_IPAM_WRITE, useCan } from '../../../utils/perms';
 import { cidrMatchesSearch } from '../../../utils/cidr';
@@ -17,40 +17,74 @@ import { FONT_MONO } from '../../../theme/theme';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+interface RootInheritedAttrs {
+  group_id?: number | null;
+  type_id?: number | null;
+  vrf_id?: number | null;
+}
+
 interface UINode {
-  key:         string;
-  id:          number;
-  cidr:        string;
-  level:       string;
-  target_type: 'root' | 'subnet';
-  is_v4:       boolean;
-  children?:   UINode[];
-  _loading?:   boolean;
-  group_id?:   number | null;
-  group?:      { id: number; name: string } | null;
-  type_id?:    number | null;
-  type?:       { id: number; name: string } | null;
-  vrf_id?:     number | null;
-  vrf?:        { id: number; name: string; rd?: string } | null;
-  remark?:     string;
+  key:          string;
+  id:           number;
+  cidr:         string;
+  level:        string;
+  target_type:  'root' | 'subnet';
+  is_v4:        boolean;
+  children?:    UINode[];
+  group_id?:    number | null;
+  group?:       { id: number; name: string } | null;
+  type_id?:     number | null;
+  type?:        { id: number; name: string } | null;
+  vrf_id?:      number | null;
+  vrf?:         { id: number; name: string; rd?: string } | null;
+  remark?:      string;
+  device_count?: number;
+  root_attrs:   RootInheritedAttrs;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function mapSubnets(subnets: SubnetNode[], is_v4: boolean): UINode[] {
+function mapSubnets(subnets: SubnetNode[], is_v4: boolean, rootAttrs: RootInheritedAttrs): UINode[] {
   return subnets.map((s): UINode => ({
-    key:         `subnet-${s.id}`,
-    id:          s.id,
-    cidr:        s.cidr,
-    level:       s.level,
-    target_type: 'subnet',
+    key:          `subnet-${s.id}`,
+    id:           s.id,
+    cidr:         s.cidr,
+    level:        s.level,
+    target_type:  'subnet',
     is_v4,
-    group_id:    s.group_id,  group:  s.group  ?? null,
-    type_id:     s.type_id,   type:   s.type   ?? null,
-    vrf_id:      s.vrf_id,    vrf:    s.vrf    ?? null,
-    remark:      s.remark ?? '',
-    children:    s.children?.length ? mapSubnets(s.children, is_v4) : undefined,
+    group_id:     s.group_id,  group:  s.group  ?? null,
+    type_id:      s.type_id,   type:   s.type   ?? null,
+    vrf_id:       s.vrf_id,    vrf:    s.vrf    ?? null,
+    remark:       s.remark ?? '',
+    device_count: s.device_count ?? 0,
+    root_attrs:   rootAttrs,
+    children:     s.children?.length ? mapSubnets(s.children, is_v4, rootAttrs) : undefined,
   }));
+}
+
+function mapRootTree(r: RootSubnetTree): UINode {
+  const is_v4 = r.ip_version === 4;
+  const rootAttrs: RootInheritedAttrs = {
+    group_id: r.group_id ?? null,
+    type_id:  r.type_id  ?? null,
+    vrf_id:   r.vrf_id   ?? null,
+  };
+  const kids = r.children?.length ? mapSubnets(r.children, is_v4, rootAttrs) : undefined;
+  return {
+    key: `root-${r.id}`,
+    id: r.id,
+    cidr: r.cidr,
+    level: 'Root',
+    target_type: 'root',
+    is_v4,
+    group_id: r.group_id, group: r.group ?? null,
+    type_id:  r.type_id,  type:  r.type  ?? null,
+    vrf_id:   r.vrf_id,   vrf:   r.vrf   ?? null,
+    remark:   r.remark ?? '',
+    device_count: r.device_count ?? 0,
+    root_attrs: rootAttrs,
+    children: kids,
+  };
 }
 
 function filterTree(
@@ -68,30 +102,63 @@ function filterTree(
       (!typeId  || n.type_id  === typeId)  &&
       (!vrfId   || n.vrf_id   === vrfId);
     if (match || fc.length > 0) {
-      acc.push({ ...n, children: fc.length ? fc : n.children });
+      acc.push({ ...n, children: fc.length ? fc : (match ? n.children : undefined) });
     }
     return acc;
   }, []);
 }
 
+function collectExpandableKeys(nodes: UINode[]): string[] {
+  const keys: string[] = [];
+  for (const n of nodes) {
+    if (n.children && n.children.length > 0) {
+      keys.push(n.key);
+      keys.push(...collectExpandableKeys(n.children));
+    }
+  }
+  return keys;
+}
+
+function isLeafAssigned(leaf: UINode): boolean {
+  if ((leaf.device_count ?? 0) > 0) return true;
+  if (leaf.remark && leaf.remark.trim() !== '') return true;
+  const ra = leaf.root_attrs;
+  return (leaf.group_id ?? null) !== (ra.group_id ?? null) ||
+         (leaf.type_id  ?? null) !== (ra.type_id  ?? null) ||
+         (leaf.vrf_id   ?? null) !== (ra.vrf_id   ?? null);
+}
+
+function assignedSpaceFraction(node: UINode, baseBits: number, maxBits: number): number {
+  const kids = node.children;
+  if (!kids || kids.length === 0) {
+    if (node.target_type === 'root' || !isLeafAssigned(node)) return 0;
+    const cp = parseInt(node.cidr.split('/')[1] ?? '0', 10);
+    if (Number.isNaN(cp) || cp < baseBits || cp > maxBits) return 0;
+    return Math.pow(2, baseBits - cp);
+  }
+  let sum = 0;
+  for (const c of kids) {
+    sum += assignedSpaceFraction(c, baseBits, maxBits);
+  }
+  return sum;
+}
+
 /**
- * Allocation of a node into its direct children, derived purely from CIDR math:
- * Σ(child address space) / (node address space). Returns null for leaves (no
- * children loaded yet → utilization unknown). A real per-address utilization would
- * need a backend aggregate; this reflects how much of the block is carved out.
+ * 真实叶子分配使用率：
+ * Split 操作会将父网段 100% 等分生成所有兄弟子网并继承根前缀默认属性，因此单纯累加直接子网空间恒为 100%。
+ * 改为统计下属叶子子网中"已实际分配业务属性（自定义分组/类型/VRF/备注）或已有受管设备落入"的地址空间占比：
+ *  - 未拆分的 Root 或刚拆分完尚未分配任何子网时为 0%，随网段指派与设备入网平滑增长至 100%。
+ *  - 叶子子网自身无下级树，返回 null（有匹配设备时单独展示设备徽标）。
  */
 function nodeUtilization(node: UINode): number | null {
   const kids = node.children;
-  if (!kids || kids.length === 0) return null;
+  if (!kids || kids.length === 0) {
+    return node.target_type === 'root' ? 0 : null;
+  }
   const maxBits = node.is_v4 ? 32 : 128;
   const np = parseInt(node.cidr.split('/')[1] ?? '0', 10);
   if (Number.isNaN(np)) return null;
-  let frac = 0;
-  for (const c of kids) {
-    const cp = parseInt(c.cidr.split('/')[1] ?? '0', 10);
-    if (Number.isNaN(cp) || cp < np || cp > maxBits) continue;
-    frac += Math.pow(2, np - cp);
-  }
+  const frac = assignedSpaceFraction(node, np, maxBits);
   return Math.min(100, frac * 100);
 }
 
@@ -102,7 +169,7 @@ const TabSubnetTree: React.FC = () => {
   const canWrite = useCan(PERM_IPAM_WRITE);
   const { token } = theme.useToken();
 
-  const [roots, setRoots]       = useState<RootPrefix[]>([]);
+  const [roots, setRoots]       = useState<RootSubnetTree[]>([]);
   const [treeData, setTreeData] = useState<UINode[]>([]);
   const [loading, setLoading]   = useState(false);
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
@@ -129,23 +196,15 @@ const TabSubnetTree: React.FC = () => {
   const [editNode, setEditNode] = useState<UINode | null>(null);
   const [editForm]              = Form.useForm();
 
-  // ── Initial load ──────────────────────────────────────────────────────────────
+  // ── Initial full-tree load (2 SQL queries server-side, instant cross-level search) ──
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        const res = await getRootPrefixes();
-        setRoots(res.data);
-        const initial: UINode[] = res.data.map((r) => ({
-          key: `root-${r.id}`, id: r.id, cidr: r.cidr,
-          level: 'Root', target_type: 'root' as const, is_v4: r.ip_version === 4,
-          group_id: r.group_id, group: r.group  ?? null,
-          type_id:  r.type_id,  type:  r.type   ?? null,
-          vrf_id:   r.vrf_id,   vrf:   r.vrf    ?? null,
-          remark:   r.remark ?? '',
-          children: [],
-        }));
-        setTreeData(initial);
+        const res = await getAllSubnetTrees();
+        const data = res.data ?? [];
+        setRoots(data);
+        setTreeData(data.map(mapRootTree));
       } catch (err) {
         message.error(apiErrMsg(err));
       } finally {
@@ -162,11 +221,16 @@ const TabSubnetTree: React.FC = () => {
     const root = roots.find((r) => r.id === rootId);
     if (!root) return;
     const res = await getSubnetTree(rootId);
-    const children = mapSubnets(res.data, root.ip_version === 4);
+    const rootAttrs: RootInheritedAttrs = {
+      group_id: root.group_id ?? null,
+      type_id:  root.type_id  ?? null,
+      vrf_id:   root.vrf_id   ?? null,
+    };
+    const children = res.data?.length ? mapSubnets(res.data, root.ip_version === 4, rootAttrs) : undefined;
     setTreeData((prev) =>
       prev.map((n) =>
         n.id === rootId && n.target_type === 'root'
-          ? { ...n, _loading: false, children }
+          ? { ...n, children }
           : n,
       ),
     );
@@ -177,28 +241,12 @@ const TabSubnetTree: React.FC = () => {
     });
   }, [roots]);
 
-  // ── Lazy-load expand ──────────────────────────────────────────────────────────
-  const handleExpand = async (expanded: boolean, record: UINode) => {
+  const handleExpand = (expanded: boolean, record: UINode) => {
     if (!expanded) {
       setExpandedKeys((prev) => prev.filter((k) => k !== record.key));
       return;
     }
     setExpandedKeys((prev) => Array.from(new Set([...prev, record.key])));
-    if (record.target_type === 'root') {
-      const current = treeData.find((n) => n.key === record.key);
-      if (current && current.children?.length === 0) {
-        setTreeData((prev) =>
-          prev.map((n) => n.key === record.key ? { ...n, _loading: true } : n),
-        );
-        try { await reloadRootSubtree(record.id); }
-        catch (err) {
-          message.error(apiErrMsg(err));
-          setTreeData((prev) =>
-            prev.map((n) => n.key === record.key ? { ...n, _loading: false } : n),
-          );
-        }
-      }
-    }
   };
 
   // ── Split ─────────────────────────────────────────────────────────────────────
@@ -308,18 +356,26 @@ const TabSubnetTree: React.FC = () => {
       render: (_, r) => r.vrf ? `${r.vrf.name}${r.vrf.rd ? ` (${r.vrf.rd})` : ''}` : '—',
     },
     {
-      title: t('ipam.subnet.utilization'), key: 'util', width: 170,
+      title: t('ipam.subnet.utilization'), key: 'util', width: 180,
       render: (_, r: UINode) => {
         const u = nodeUtilization(r);
-        if (u == null) return <span style={{ color: 'var(--ant-color-text-tertiary)' }}>—</span>;
+        const devs = r.device_count ?? 0;
+        if (u == null) {
+          return devs > 0
+            ? <Tag color="processing" style={{ fontFamily: FONT_MONO, marginRight: 0 }}>{t('ipam.subnet.utilDevicesBadge', { devices: devs })}</Tag>
+            : <span style={{ color: 'var(--ant-color-text-tertiary)' }}>—</span>;
+        }
         const color = u >= 80 ? token.colorError : u >= 60 ? token.colorWarning : token.colorSuccess;
+        const pctLabel = u > 0 && u < 1 ? '<1' : u.toFixed(0);
         return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ flex: 1, minWidth: 60, height: 6, borderRadius: 4, background: token.colorFillTertiary }}>
-              <div style={{ height: '100%', width: `${u}%`, borderRadius: 4, background: color }} />
+          <Tooltip title={t('ipam.subnet.utilTip', { pct: u.toFixed(1), devices: devs })}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ flex: 1, minWidth: 60, height: 6, borderRadius: 4, background: token.colorFillTertiary }}>
+                <div style={{ height: '100%', width: `${u}%`, borderRadius: 4, background: color }} />
+              </div>
+              <span style={{ fontFamily: FONT_MONO, fontSize: 12, fontWeight: 600, color }}>{pctLabel}%</span>
             </div>
-            <span style={{ fontFamily: FONT_MONO, fontSize: 12, fontWeight: 600, color }}>{u.toFixed(0)}%</span>
-          </div>
+          </Tooltip>
         );
       },
     },
@@ -352,9 +408,14 @@ const TabSubnetTree: React.FC = () => {
   ];
 
   const anyFilter = !!(filterCIDR || filterGroupId || filterTypeId || filterVrfId);
-  const visibleData = anyFilter
-    ? filterTree(treeData, filterCIDR, filterGroupId, filterTypeId, filterVrfId)
-    : treeData;
+  const visibleData = useMemo(
+    () => (anyFilter ? filterTree(treeData, filterCIDR, filterGroupId, filterTypeId, filterVrfId) : treeData),
+    [anyFilter, treeData, filterCIDR, filterGroupId, filterTypeId, filterVrfId],
+  );
+  const activeExpandedKeys = useMemo(
+    () => (anyFilter ? collectExpandableKeys(visibleData) : expandedKeys),
+    [anyFilter, visibleData, expandedKeys],
+  );
 
   return (
     <div>
@@ -396,7 +457,7 @@ const TabSubnetTree: React.FC = () => {
         rowKey="key"
         loading={loading}
         expandable={{
-          expandedRowKeys: expandedKeys,
+          expandedRowKeys: activeExpandedKeys,
           onExpand:        handleExpand,
           indentSize:      20,
           expandRowByClick: false,

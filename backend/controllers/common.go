@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"nms-backend/core"
 	"nms-backend/middleware"
@@ -120,4 +121,23 @@ func friendlyNameUniqueErr(err error, entityName string) string {
 		return entityName + "名称已存在，请使用其他名称"
 	}
 	return ""
+}
+
+// extendTransferDeadlines 为大文件上传/下载或大批量同步接口按请求单独延长连接读写截止时间，
+// 既保留全局 http.Server ReadTimeout(30s) / WriteTimeout(120s) 对普通接口的 Slowloris 防护，
+// 又避免跨洲慢速链路上传/下载 Agent 二进制或 MIB 文件时被全局超时掐断。
+func extendTransferDeadlines(c *gin.Context, d time.Duration) {
+	rc := http.NewResponseController(c.Writer)
+	deadline := time.Now().Add(d)
+	_ = rc.SetReadDeadline(deadline)
+	_ = rc.SetWriteDeadline(deadline)
+}
+
+// isMaxBytesErr 判断错误是否由 http.MaxBytesReader 超出请求体体积上限触发。
+func isMaxBytesErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var mbe *http.MaxBytesError
+	return errors.As(err, &mbe)
 }

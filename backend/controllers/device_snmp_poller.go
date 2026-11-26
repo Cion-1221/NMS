@@ -15,6 +15,7 @@ package controllers
 //   unknown —— 没有可信结论：未开启采集、从未采集、采集链路本身断了（watchdog）
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -270,14 +271,28 @@ func applySNMPResult(db *gorm.DB, deviceID uint, sourceAgentID *string, obs snmp
 	}
 
 	// 重启检测（成功采集且新旧 uptime 均存在时才有意义）
-	if obs.Success && obs.UptimeTicks != nil && prevErr == nil &&
-		prev.UptimeTicks != nil && *obs.UptimeTicks < *prev.UptimeTicks {
+	rebooted := obs.Success && obs.UptimeTicks != nil && prevErr == nil &&
+		prev.UptimeTicks != nil && *obs.UptimeTicks < *prev.UptimeTicks
+	if rebooted {
 		id := deviceID
 		writeDeviceAudit(db, "system", "reboot_detected", "device", &id,
 			fmt.Sprintf("SNMP sysUpTime went backwards (%d → %d ticks) — device likely rebooted",
 				*prev.UptimeTicks, *obs.UptimeTicks))
 		slog.Warn("SNMP 检测到设备疑似重启", "device_id", deviceID,
 			"prev_ticks", *prev.UptimeTicks, "new_ticks", *obs.UptimeTicks)
+	}
+
+	// calcUintDelta 计算无符号计数器差值：优先 64 位精确相减；当 cur < prev 且设备未重启、
+	// 同时新旧值均在 32 位范围内时，按 32 位 Counter32 单次翻转（2^32）补偿。
+	calcUintDelta := func(prev, cur uint64) (uint64, bool) {
+		if cur >= prev {
+			return cur - prev, true
+		}
+		const maxU32 = uint64(1)<<32 - 1
+		if !rebooted && prev <= maxU32 && cur <= maxU32 {
+			return (uint64(1)<<32 - prev) + cur, true
+		}
+		return 0, false
 	}
 
 	// 自定义 OID：快照回写 + 数值时序入库。先取定义行（需要 Kind 与上一次原值做
@@ -296,19 +311,32 @@ func applySNMPResult(db *gorm.DB, deviceID uint, sourceAgentID *string, obs snmp
 				continue
 			}
 			// 时序点（仅数值型且本次无错）：gauge 存原值；counter 用相邻两次采样
-			// 换算每秒速率——差值为负（回绕/设备重置）跳过；dt < 1s（时钟回拨、
-			// 重复上报或异常密集采样）同样跳过，避免除以近零产生假尖峰。
+			// 换算每秒速率——优先用 LastValue/Value 解析为 uint64 做 64 位精确整数求差
+			//（避免 Counter64 > 2^53 时 float64 尾数精度丢失），并支持 32 位翻转补偿；
+			// dt < 1s（时钟回拨、重复上报或异常密集采样）同样跳过，避免除以近零产生假尖峰。
 			// 时间基准一律用采集时刻 at，快照照常更新。
 			if v.Err == "" && v.Numeric != nil {
 				switch row.Kind {
 				case "counter":
-					if row.LastNumeric != nil && row.PolledAt != nil {
+					if row.PolledAt != nil {
 						dt := at.Sub(*row.PolledAt).Seconds()
-						delta := *v.Numeric - *row.LastNumeric
-						if dt >= 1 && delta >= 0 {
-							points = append(points, models.DeviceMetricPoint{
-								OIDID: row.ID, DeviceID: deviceID, Value: delta / dt, ReportedAt: at,
-							})
+						if dt >= 1 && !rebooted {
+							var delta float64
+							var hasDelta bool
+							if curU, err1 := strconv.ParseUint(v.Value, 10, 64); err1 == nil {
+								if prevU, err2 := strconv.ParseUint(row.LastValue, 10, 64); err2 == nil {
+									if d, ok := calcUintDelta(prevU, curU); ok {
+										delta, hasDelta = float64(d), true
+									}
+								}
+							} else if row.LastNumeric != nil && *v.Numeric >= *row.LastNumeric {
+								delta, hasDelta = *v.Numeric-*row.LastNumeric, true
+							}
+							if hasDelta && delta >= 0 {
+								points = append(points, models.DeviceMetricPoint{
+									OIDID: row.ID, DeviceID: deviceID, Value: delta / dt, ReportedAt: at,
+								})
+							}
 						}
 					}
 				default: // gauge
@@ -351,19 +379,22 @@ func applySNMPResult(db *gorm.DB, deviceID uint, sourceAgentID *string, obs snmp
 		seen := make([]int, 0, len(obs.Interfaces))
 		for _, in := range obs.Interfaces {
 			seen = append(seen, in.IfIndex)
-			// 速率：Δ计数器 ×8 / Δt。计数器回退（回绕/设备重置）或 dt<1s 时置 NULL
-			//（不显示陈旧速率），下个周期恢复
+			// 速率：Δ计数器 ×8 / Δt。支持 32 位 Counter32 单次翻转补偿；设备重启或 dt<1s 时置 NULL
 			var inBps, outBps *float64
 			if prev := prevByIdx[in.IfIndex]; prev != nil && prev.PolledAt != nil {
 				dt := at.Sub(*prev.PolledAt).Seconds()
-				if dt >= 1 {
-					if prev.LastInOctets != nil && in.InOctets >= *prev.LastInOctets {
-						r := float64(in.InOctets-*prev.LastInOctets) * 8 / dt
-						inBps = &r
+				if dt >= 1 && !rebooted {
+					if prev.LastInOctets != nil {
+						if d, ok := calcUintDelta(*prev.LastInOctets, in.InOctets); ok {
+							r := float64(d) * 8 / dt
+							inBps = &r
+						}
 					}
-					if prev.LastOutOctets != nil && in.OutOctets >= *prev.LastOutOctets {
-						r := float64(in.OutOctets-*prev.LastOutOctets) * 8 / dt
-						outBps = &r
+					if prev.LastOutOctets != nil {
+						if d, ok := calcUintDelta(*prev.LastOutOctets, in.OutOctets); ok {
+							r := float64(d) * 8 / dt
+							outBps = &r
+						}
 					}
 				}
 			}
@@ -724,10 +755,16 @@ func decodeSNMPValue(oid string, v gosnmp.SnmpPDU) snmpOIDValue {
 			res.Value = strconv.FormatFloat(f, 'f', -1, 64)
 		}
 	default:
-		// Integer/Counter32/Gauge32/Counter64/TimeTicks/Uinteger32 等整数族
+		// Integer/Counter32/Gauge32/Counter64/TimeTicks/Uinteger32 等整数族：
+		// 非负值一律用 Uint64()，防止 Counter64 ≥ 2^63 时 Int64() 有符号溢出为负数
 		n := gosnmp.ToBigInt(v.Value)
 		if n != nil {
-			f := float64(n.Int64())
+			var f float64
+			if n.Sign() < 0 {
+				f = float64(n.Int64())
+			} else {
+				f = float64(n.Uint64())
+			}
 			res.Numeric = &f
 			res.Value = n.String()
 		}
@@ -836,10 +873,15 @@ func TestDeviceSNMP(db *gorm.DB, cfg SNMPConfig) gin.HandlerFunc {
 //     被自然摊平，之后各设备的相位由各自完成时间错开）；
 //   - 快/慢两档：每 InventoryEveryN 次快轮询附带一次完整 system 组；进程重启后
 //     计数器归零，首轮全部做全量采集，顺带把快照补齐。
-func StartDeviceSNMPPoller(db *gorm.DB, cfg SNMPConfig) {
+func StartDeviceSNMPPoller(ctx context.Context, wg *sync.WaitGroup, db *gorm.DB, cfg SNMPConfig) {
 	cfg.Normalize()
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		var mu sync.Mutex
+		var pollWG sync.WaitGroup
+		defer pollWG.Wait()
+
 		inFlight := make(map[uint]bool)
 		pollCount := make(map[uint]uint64) // 仅调度 goroutine 读写
 		sem := make(chan struct{}, cfg.MaxConcurrent)
@@ -849,7 +891,12 @@ func StartDeviceSNMPPoller(db *gorm.DB, cfg SNMPConfig) {
 		slog.Info("Device SNMP poller 已启动",
 			"default_interval_s", cfg.DefaultIntervalSeconds, "max_concurrent", cfg.MaxConcurrent)
 
-		for range ticker.C {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
 			// planned（未上架）与 offline（已停用）都不采集；时间基准用 Go 侧时钟传参，
 			// 与 last_poll_at 的写入方（applySNMPResult 的 time.Now()）保持同源，
 			// 避免 DB 会话时区与应用时区不一致时的判定漂移
@@ -866,6 +913,9 @@ func StartDeviceSNMPPoller(db *gorm.DB, cfg SNMPConfig) {
 			}
 
 			for _, d := range due {
+				if ctx.Err() != nil {
+					return
+				}
 				mu.Lock()
 				if inFlight[d.ID] {
 					mu.Unlock()
@@ -877,13 +927,22 @@ func StartDeviceSNMPPoller(db *gorm.DB, cfg SNMPConfig) {
 				full := pollCount[d.ID]%uint64(cfg.InventoryEveryN) == 0
 				pollCount[d.ID]++
 
-				sem <- struct{}{}
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					mu.Lock()
+					delete(inFlight, d.ID)
+					mu.Unlock()
+					return
+				}
+				pollWG.Add(1)
 				go func(dev models.Device, full bool) {
 					defer func() {
 						<-sem
 						mu.Lock()
 						delete(inFlight, dev.ID)
 						mu.Unlock()
+						pollWG.Done()
 					}()
 					// 自定义 OID 每次采集前取最新定义（用户可能刚增删；量小且有索引）
 					var extraOIDs []models.DeviceSNMPOID
@@ -950,11 +1009,13 @@ func EncryptExistingSNMPCredentials(db *gorm.DB, cfg SNMPConfig) {
 // StartDeviceMetricRetention 启动时序点保留清理（每 12 小时一次；与 audit_retention
 // 的探测结果清理同哲学，独立于 rollup 归档——时序表按 snmp.metrics_max_age_days
 // 滚动保留，0 = 永久不清理，不启动本任务）。
-func StartDeviceMetricRetention(db *gorm.DB, cfg SNMPConfig) {
+func StartDeviceMetricRetention(ctx context.Context, wg *sync.WaitGroup, db *gorm.DB, cfg SNMPConfig) {
 	if cfg.MetricsMaxAgeDays <= 0 {
 		return
 	}
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ticker := time.NewTicker(12 * time.Hour)
 		defer ticker.Stop()
 		for {
@@ -966,29 +1027,24 @@ func StartDeviceMetricRetention(db *gorm.DB, cfg SNMPConfig) {
 				slog.Info("SNMP 指标时序保留清理完成",
 					"deleted", res.RowsAffected, "max_age_days", cfg.MetricsMaxAgeDays)
 			}
-			<-ticker.C
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
 		}
 	}()
 }
 
 // StartDeviceOperStatusSweeper 启动运行状态看门狗（每分钟）。
-//
-// 连环故障场景：Agent 断电后无法上报"设备超时"，如果没有这个 sweeper，其名下所有
-// 设备的 oper_status 会永远停在最后一次结论（多半是 up）。判定依据是设备自身的
-// last_poll_at（最近一次拿到采集结论的时间）而非 Agent 心跳——这样 Direct 模式的
-// poller 卡死同样会被兜底。阈值 = max(3 × 设备采集间隔, 300 秒)。
-//
-// 第二条规则处理绑定失效：指派的 Agent 被吊销或删除（snmp_agent_id 已被置 NULL）
-// 时立即归位 unknown/agent_revoked，不必等结论停滞满阈值。
-func StartDeviceOperStatusSweeper(db *gorm.DB, cfg SNMPConfig) {
+func StartDeviceOperStatusSweeper(ctx context.Context, wg *sync.WaitGroup, db *gorm.DB, cfg SNMPConfig) {
 	cfg.Normalize()
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
-			// 规则 0：planned/offline 设备不参与采集（poller 与任务合成都跳过），
-			// 其最后一次结论必须归位 unknown（原因留空，不误导为链路故障），
-			// 否则一台已停用设备会永远显示最后一次的 up/down。
 			res := db.Exec(`UPDATE devices
 				SET oper_status = 'unknown', oper_reason = ''
 				WHERE polling_mode IN ('direct','agent')
@@ -1027,7 +1083,11 @@ func StartDeviceOperStatusSweeper(db *gorm.DB, cfg SNMPConfig) {
 			} else if res.RowsAffected > 0 {
 				slog.Info("设备探针绑定失效：已归位 unknown", "count", res.RowsAffected)
 			}
-			<-ticker.C
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
 		}
 	}()
 }

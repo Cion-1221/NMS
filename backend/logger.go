@@ -82,8 +82,10 @@ func newDailyRotateWriter(cfg LogConfig) (*dailyRotateWriter, error) {
 	return w, nil
 }
 
-// Close 关闭当前日志文件（生产环境随进程存活无需调用，供测试使用）
+// Close 等待正在进行的后台压缩维护完成后关闭当前日志文件。
 func (w *dailyRotateWriter) Close() error {
+	w.maintainMu.Lock()
+	defer w.maintainMu.Unlock()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.file == nil {
@@ -245,9 +247,9 @@ func parseLogLevel(s string) (slog.Level, bool) {
 	}
 }
 
-// initLogger 根据配置初始化全局 slog。
+// initLogger 根据配置初始化全局 slog，并返回底层日志轮转器的 Closer（停机时调用以安全刷盘）。
 // 日志目录不可用时退化为纯 stdout 输出，保证服务可用性优先于日志落盘。
-func initLogger(cfg LogConfig) {
+func initLogger(cfg LogConfig) io.Closer {
 	level, levelOK := parseLogLevel(cfg.Level)
 
 	format := strings.ToLower(strings.TrimSpace(cfg.Format))
@@ -289,4 +291,8 @@ func initLogger(cfg LogConfig) {
 	if !formatOK {
 		slog.Warn("log.format 配置值无法识别，已回退为 json", "value", cfg.Format)
 	}
+	if rotErr != nil {
+		return nil
+	}
+	return rotator
 }

@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"nms-backend/models"
 
@@ -113,8 +114,15 @@ func SeedBuiltinMIBs(db *gorm.DB, mibDir string, fsys fs.FS) {
 // 落盘后触发翻译引擎全量重建，响应携带本模块的解析状态。
 func UploadDeviceMIB(db *gorm.DB, mibDir string, engine *MIBEngine) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		extendTransferDeadlines(c, 2*time.Minute)
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxMIBSize+(1<<20))
+
 		fh, err := c.FormFile("file")
 		if err != nil {
+			if isMaxBytesErr(err) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "MIB 文件过大（上限 2 MiB）", "code": "device.mib_too_large"})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 MIB 文件（字段名 file）", "code": "device.mib_file_missing"})
 			return
 		}
@@ -260,6 +268,7 @@ func DownloadDeviceMIB(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在（可能已被删除）", "code": "not_found"})
 			return
 		}
+		extendTransferDeadlines(c, 2*time.Minute)
 		c.FileAttachment(mib.FilePath, mib.FileName)
 	}
 }

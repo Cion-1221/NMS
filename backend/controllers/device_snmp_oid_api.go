@@ -298,11 +298,15 @@ func GetDeviceSNMPOIDSeries(db *gorm.DB, cfg SNMPConfig) gin.HandlerFunc {
 				Group("bucket").Order("bucket").Scan(&rows)
 		} else {
 			// 归档层→显示桶的重聚合：加权平均 SUM(val_sum)/SUM(val_cnt)（层里存的是
-			// 和与样本数，精确无损）；显示桶宽不低于层桶宽，避免"放大"出假点
+			// 和与样本数，精确无损）；显示桶宽向上对齐到层桶宽的整数倍，避免不等宽分桶
 			source = fmt.Sprintf("rollup:%dm", tier.BucketMinutes)
 			tierSec := int64(tier.BucketMinutes * 60)
-			if bucketSec < tierSec {
-				bucketSec = tierSec
+			if tierSec > 0 {
+				if bucketSec < tierSec {
+					bucketSec = tierSec
+				} else {
+					bucketSec = ((bucketSec + tierSec - 1) / tierSec) * tierSec
+				}
 			}
 			db.Model(&models.DeviceMetricRollup{}).
 				Select("CAST(FLOOR(bucket_ts/?) AS SIGNED) AS bucket, "+
@@ -311,6 +315,28 @@ func GetDeviceSNMPOIDSeries(db *gorm.DB, cfg SNMPConfig) gin.HandlerFunc {
 				Where("oid_id = ? AND bucket_seconds = ? AND bucket_ts >= ? AND val_cnt > 0",
 					row.ID, tierSec, start.Unix()).
 				Group("bucket").Order("bucket").Scan(&rows)
+
+			// 尾部实时补齐：将尚未归档的最新原始点补入尾段，避免长窗口趋势图右端断档
+			tailFrom := start
+			if len(rows) > 0 {
+				lastBucketStart := time.Unix(rows[len(rows)-1].Bucket*bucketSec, 0)
+				if lastBucketStart.After(tailFrom) {
+					tailFrom = lastBucketStart
+				}
+			}
+			var tailRows []bucketRow
+			db.Model(&models.DeviceMetricPoint{}).
+				Select("CAST(FLOOR(UNIX_TIMESTAMP(reported_at)/?) AS SIGNED) AS bucket, "+
+					"AVG(value) AS avg, MIN(value) AS min, MAX(value) AS max, "+
+					"CAST(COUNT(*) AS SIGNED) AS cnt", bucketSec).
+				Where("oid_id = ? AND reported_at >= ?", row.ID, tailFrom).
+				Group("bucket").Order("bucket").Scan(&tailRows)
+			if len(tailRows) > 0 {
+				if len(rows) > 0 && rows[len(rows)-1].Bucket >= tailRows[0].Bucket {
+					rows = rows[:len(rows)-1]
+				}
+				rows = append(rows, tailRows...)
+			}
 		}
 
 		points := make([]gin.H, 0, len(rows))

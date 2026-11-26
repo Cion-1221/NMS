@@ -1,12 +1,14 @@
 package middleware
 
 import (
+	"crypto/x509"
 	"log/slog"
 	"net/http"
 	"net/netip"
 	"strings"
 	"time"
 
+	"nms-backend/core"
 	"nms-backend/models"
 
 	"github.com/gin-gonic/gin"
@@ -16,17 +18,22 @@ import (
 // CtxAgentKey 在 gin.Context 中存储已认证 Agent 记录的 key（mTLS 校验通过后写入）。
 const CtxAgentKey = "agent_claims"
 
+// CtxAgentCertKey 在 gin.Context 中存储本次握手客户端叶子证书的 key。
+const CtxAgentCertKey = "agent_peer_cert"
+
 // heartbeatWriteInterval 心跳写节流间隔：距上次 last_seen_at 落库不足该间隔、且本次
 // 请求没有任何字段变化时跳过 UPDATE。DB 中 last_seen_at 最多滞后该间隔，远小于
 // agent_sync_api.go 的 onlineThreshold（5 分钟），不影响离线判定与 MeshPing 目标解析。
 const heartbeatWriteInterval = 30 * time.Second
 
-// AgentMTLS 校验 mTLS 客户端证书并解析出调用方 AgentID。
-// 证书链信任已由监听器的 tls.RequireAndVerifyClientCert + ClientCAs=Root CA 在 TLS
-// 握手阶段完成校验；这里只需取出 PeerCertificates[0]，按其 CommonName（=AgentID）
-// 查找 Agent 记录，并检查吊销状态/证书序列号是否与登记时一致——标准库的证书链校验
-// 不检查吊销列表，吊销必须在应用层兜底。
+// AgentMTLS 校验 mTLS 客户端证书并解析出调用方 AgentID（兼容无 PKI 实例注入的调用签名）。
 func AgentMTLS(db *gorm.DB) gin.HandlerFunc {
+	return AgentMTLSWithPKI(db, nil)
+}
+
+// AgentMTLSWithPKI 校验 mTLS 客户端证书并同步记录客户端信任锚指纹与证书签发 CA 指纹，
+// 支撑三阶段平滑 CA 轮换的实时同步进度统计。
+func AgentMTLSWithPKI(db *gorm.DB, pki *core.PKI) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request.TLS == nil || len(c.Request.TLS.PeerCertificates) == 0 {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "缺少客户端证书"})
@@ -137,6 +144,15 @@ func AgentMTLS(db *gorm.DB) gin.HandlerFunc {
 		setIfChanged("os", &agent.OS, c.GetHeader("X-Agent-OS"))
 		setIfChanged("arch", &agent.Arch, c.GetHeader("X-Agent-Arch"))
 
+		if caFP := sanitizeCAFPHeader(c.GetHeader("X-Agent-CA-FP")); caFP != "" {
+			setIfChanged("trusted_ca_fp", &agent.TrustedCAFP, caFP)
+		}
+		if pki != nil {
+			if issuerFP := pki.ClassifyIssuerFP(cert); issuerFP != "" {
+				setIfChanged("cert_issuer_fp", &agent.CertIssuerFP, issuerFP)
+			}
+		}
+
 		if len(updates) > 0 || agent.LastSeenAt == nil ||
 			now.Sub(*agent.LastSeenAt) >= heartbeatWriteInterval {
 			updates["last_seen_at"] = now
@@ -147,8 +163,35 @@ func AgentMTLS(db *gorm.DB) gin.HandlerFunc {
 		agent.Status = "online"
 
 		c.Set(CtxAgentKey, &agent)
+		c.Set(CtxAgentCertKey, cert)
 		c.Next()
 	}
+}
+
+// sanitizeCAFPHeader 过滤并规整 X-Agent-CA-FP 请求头（仅允许小写十六进制与逗号，长度不超过 255）。
+func sanitizeCAFPHeader(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" || len(raw) > 255 {
+		return ""
+	}
+	for i := 0; i < len(raw); i++ {
+		ch := raw[i]
+		if (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || ch == ',' {
+			continue
+		}
+		return ""
+	}
+	return raw
+}
+
+// GetAgentPeerCert 从 gin.Context 中取出当前 mTLS 握手的客户端叶子证书。
+func GetAgentPeerCert(c *gin.Context) *x509.Certificate {
+	raw, exists := c.Get(CtxAgentCertKey)
+	if !exists {
+		return nil
+	}
+	cert, _ := raw.(*x509.Certificate)
+	return cert
 }
 
 // parseAgentStack 解析 X-Agent-Stack 头（逗号分隔的 v4 / v6）。头不存在或为空时

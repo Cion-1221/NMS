@@ -49,8 +49,17 @@ export interface AgentSummary {
 export interface PKIStatus {
   active_ca_expiry: string;
   active_ca_serial: string;
+  active_ca_fp: string;
+  has_prepared_next: boolean;
+  next_ca_expiry?: string | null;
+  next_ca_fp?: string;
   has_pending_previous: boolean;
   previous_ca_expiry?: string | null;
+  previous_ca_fp?: string;
+  restart_required: boolean;
+  online_agents: number;
+  next_ca_trusted_agents: number;
+  active_ca_issued_agents: number;
 }
 
 /** Agent 列表查询参数 — 服务端分页 + 过滤 */
@@ -208,6 +217,27 @@ export interface MtrHop {
   stddev_rtt_ms?: number;
 }
 
+export interface TraceHop {
+  ttl: number;
+  ip?: string;
+  rtt_ms?: number;
+  timeout?: boolean;
+}
+
+export interface TraceDetail {
+  hops: TraceHop[];
+  reached: boolean;
+}
+
+export interface AgentLiteItem {
+  agent_id: string;
+  hostname: string;
+  status: AgentStatus;
+  revoked?: boolean;
+  group_name: string;
+  last_seen_at?: string | null;
+}
+
 export interface ProbeResult {
   id: number;
   agent_id: string;
@@ -308,3 +338,14 @@ export interface MeshPingMatrixParams {
   group_id?: number;
   q?: string;
 }
+
+export interface AgentAuditLog {
+  id: number;
+  username: string;
+  action: string;
+  resource_type: string;
+  resource_id: string;
+  detail: string;
+  created_at: string;
+}
+

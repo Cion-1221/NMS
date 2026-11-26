@@ -4,7 +4,7 @@ import { CopyOutlined, EyeOutlined, PlusOutlined, ReloadOutlined, StopOutlined, 
 import type { ColumnsType } from 'antd/es/table';
 import {
   getAgentTokens, createAgentToken, revokeAgentToken, getAgentGroups,
-  getCAStatus, rotateCA, finalizeCA,
+  getCAStatus, prepareCA, rotateCA, finalizeCA,
 } from '../../../api/agent';
 import type { AgentToken, AgentGroup, PKIStatus } from '../../../types/agent';
 import { apiErrMsg, useT } from '../../../i18n';
@@ -63,6 +63,34 @@ const TabTokens: React.FC = () => {
   useEffect(() => { void loadData(); }, [loadData]);
   useEffect(() => { getAgentGroups().then(r => setGroups(r.data)).catch(() => {}); }, []);
   useEffect(() => { void loadCAStatus(); }, [loadCAStatus]);
+
+  // 轮换进行中（预分发或待终结）时每 10s 自动刷新在线 Agent 同步/续期进度
+  useEffect(() => {
+    if (!caStatus?.has_prepared_next && !caStatus?.has_pending_previous) return;
+    const timer = window.setInterval(() => { void loadCAStatus(); }, 10000);
+    return () => window.clearInterval(timer);
+  }, [caStatus?.has_prepared_next, caStatus?.has_pending_previous, loadCAStatus]);
+
+  const handlePrepareCA = () => {
+    confirm({
+      title: t('agent.ca.prepareTitle'),
+      content: t('agent.ca.prepareBody'),
+      okText: t('agent.ca.prepare'),
+      cancelText: t('common.cancel'),
+      onOk: async () => {
+        setCaBusy(true);
+        try {
+          const r = await prepareCA();
+          message.success(r.data.message);
+          void loadCAStatus();
+        } catch (err: any) {
+          message.error(apiErrMsg(err));
+        } finally {
+          setCaBusy(false);
+        }
+      },
+    });
+  };
 
   const handleRotateCA = () => {
     confirm({
@@ -215,14 +243,55 @@ const TabTokens: React.FC = () => {
               {mono(new Date(caStatus.active_ca_expiry).toLocaleString())}
             </Descriptions.Item>
             <Descriptions.Item label={t('agent.ca.pendingRotation')}>
-              {caStatus.has_pending_previous
-                ? <StatusTag status="warn" label={t('agent.ca.pending')} />
-                : <StatusTag status="ok" label={t('agent.ca.none')} />}
+              <Space size={6}>
+                {caStatus.has_prepared_next ? (
+                  <StatusTag status="processing" tone="accent" label={t('agent.ca.stagePrepared')} />
+                ) : caStatus.has_pending_previous ? (
+                  <StatusTag status="warn" label={t('agent.ca.pending')} />
+                ) : (
+                  <StatusTag status="ok" label={t('agent.ca.none')} />
+                )}
+                {caStatus.restart_required && (
+                  <StatusTag status="warn" label={t('agent.ca.restartRequired')} />
+                )}
+              </Space>
             </Descriptions.Item>
+            {caStatus.has_prepared_next && (
+              <Descriptions.Item label={t('agent.ca.nextSync')} span={2}>
+                {mono(t('agent.ca.onlineProgress', {
+                  ready: caStatus.next_ca_trusted_agents,
+                  online: caStatus.online_agents,
+                }))}
+              </Descriptions.Item>
+            )}
+            {caStatus.has_pending_previous && (
+              <Descriptions.Item label={t('agent.ca.certRenewed')} span={2}>
+                {mono(t('agent.ca.onlineProgress', {
+                  ready: caStatus.active_ca_issued_agents,
+                  online: caStatus.online_agents,
+                }))}
+              </Descriptions.Item>
+            )}
           </Descriptions>
         ) : <Text type="secondary">{t('common.loading')}</Text>}
-        <Space style={{ marginTop: 8 }}>
-          <Button icon={<SyncOutlined />} loading={caBusy} onClick={handleRotateCA}>{t('agent.ca.rotate')}</Button>
+        <Space style={{ marginTop: 8 }} wrap>
+          <Button
+            icon={<SyncOutlined />}
+            disabled={Boolean(caStatus?.has_prepared_next || caStatus?.has_pending_previous)}
+            loading={caBusy}
+            onClick={handlePrepareCA}
+          >
+            {t('agent.ca.prepare')}
+          </Button>
+          <Button
+            type={caStatus?.has_prepared_next ? 'primary' : 'default'}
+            danger={Boolean(caStatus?.has_prepared_next)}
+            disabled={!caStatus?.has_prepared_next || Boolean(caStatus?.has_pending_previous)}
+            loading={caBusy}
+            onClick={handleRotateCA}
+          >
+            {t('agent.ca.rotate')}
+          </Button>
           <Button danger disabled={!caStatus?.has_pending_previous} loading={caBusy} onClick={handleFinalizeCA}>
             {t('agent.ca.finalize')}
           </Button>

@@ -50,5 +50,5 @@ export const totpEnable = (code: string) =>
 export const totpDisable = (password: string, code: string) =>
   client.post('/auth/totp/disable', { password, code });
 
-export const totpRegenerateRecoveryCodes = (code: string) =>
-  client.post<TOTPRecoveryCodesResp>('/auth/totp/recovery-codes', { code });
+export const totpRegenerateRecoveryCodes = (password: string, code: string) =>
+  client.post<TOTPRecoveryCodesResp>('/auth/totp/recovery-codes', { password, code });

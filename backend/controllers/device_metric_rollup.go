@@ -7,18 +7,16 @@ package controllers
 // 原始点覆盖不到的长窗口自动落到能覆盖的最细归档层。
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"nms-backend/models"
 
 	"gorm.io/gorm"
 )
-
-// metricRollupRecomputeWindow 每次汇总重算的回看窗口——远大于运行间隔（1 小时），
-// 任务漏跑/进程重启后自动补算；配合唯一键 upsert 天然幂等。
-const metricRollupRecomputeWindow = 26 * time.Hour
 
 // metricRollupLockName MySQL 咨询锁：多实例部署时同一时刻只有一个实例执行归档。
 const metricRollupLockName = "nms_metric_rollup"
@@ -54,24 +52,31 @@ func ValidateMetricRollups(tiers []RollupTier, rawDays int) error {
 	return nil
 }
 
-// StartDeviceMetricRollups 启动指标归档任务：立即执行一次，之后每小时一次。
-// 未配置归档层时不启动（趋势查询只用原始点）。
-func StartDeviceMetricRollups(db *gorm.DB, cfg SNMPConfig) {
+// StartDeviceMetricRollups 启动指标归档任务：立即执行一次（全量覆盖原始保留期以自愈历史残缺桶），
+// 之后每 10 分钟增量重算一次。未配置归档层时不启动（趋势查询只用原始点）。
+func StartDeviceMetricRollups(ctx context.Context, wg *sync.WaitGroup, db *gorm.DB, cfg SNMPConfig) {
 	if len(cfg.MetricRollups) == 0 {
 		return
 	}
 	slog.Info("SNMP 指标归档已启用", "tiers", len(cfg.MetricRollups))
+	wg.Add(1)
 	go func() {
-		ticker := time.NewTicker(time.Hour)
+		defer wg.Done()
+		runMetricRollups(db, cfg, true)
+		ticker := time.NewTicker(10 * time.Minute)
 		defer ticker.Stop()
 		for {
-			runMetricRollups(db, cfg)
-			<-ticker.C
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				runMetricRollups(db, cfg, false)
+			}
 		}
 	}()
 }
 
-func runMetricRollups(db *gorm.DB, cfg SNMPConfig) {
+func runMetricRollups(db *gorm.DB, cfg SNMPConfig, fullBackfill bool) {
 	// 同 probe_rollup.go：GET_LOCK 是会话级的，用 db.Connection 钉住一条连接持锁，
 	// 实际聚合放回普通连接池执行（钉住连接的 Statement 会被 Scan 目标污染）。
 	err := db.Connection(func(conn *gorm.DB) error {
@@ -84,7 +89,7 @@ func runMetricRollups(db *gorm.DB, cfg SNMPConfig) {
 			return nil
 		}
 		defer conn.Exec("SELECT RELEASE_LOCK(?)", metricRollupLockName)
-		doMetricRollups(db, cfg)
+		doMetricRollups(db, cfg, fullBackfill)
 		return nil
 	})
 	if err != nil {
@@ -92,14 +97,38 @@ func runMetricRollups(db *gorm.DB, cfg SNMPConfig) {
 	}
 }
 
-func doMetricRollups(db *gorm.DB, cfg SNMPConfig) {
+func doMetricRollups(db *gorm.DB, cfg SNMPConfig, fullBackfill bool) {
 	start := time.Now()
-	since := start.Add(-metricRollupRecomputeWindow)
+	baseTier := cfg.MetricRollups[0]
+	baseSec := baseTier.BucketMinutes * 60
 
-	// 各层聚合 upsert：直接从原始点计算（非层间级联），min/max 全程保真；
-	// 存 val_sum/val_cnt 使查询期的跨桶重聚合精确（加权平均）。
-	for _, tier := range cfg.MetricRollups {
+	// 第 0 层从原始表聚合；更高层当桶大小为第 0 层的整数倍时直接从第 0 层归档桶级联聚合，
+	// 避免每 10 分钟对原始点热表重复做数天范围扫描，val_sum/val_cnt/min/max 完全保真。
+	for i, tier := range cfg.MetricRollups {
 		bucketSec := tier.BucketMinutes * 60
+		canCascade := i > 0 && bucketSec%baseSec == 0 && baseTier.MaxAgeDays*86400 >= bucketSec*2
+		if canCascade {
+			tierSince := alignRollupSince(start, tier.BucketMinutes, baseTier.MaxAgeDays, fullBackfill)
+			if err := db.Exec(`
+				INSERT INTO device_metric_rollups
+					(oid_id, device_id, bucket_seconds, bucket_ts, val_sum, val_cnt, min_val, max_val)
+				SELECT r.oid_id, MAX(r.device_id), ?,
+					CAST(FLOOR(r.bucket_ts/?)*? AS SIGNED),
+					SUM(r.val_sum), SUM(r.val_cnt), MIN(r.min_val), MAX(r.max_val)
+				FROM device_metric_rollups r
+				WHERE r.bucket_seconds = ? AND r.bucket_ts >= ?
+				GROUP BY r.oid_id, FLOOR(r.bucket_ts/?)
+				ON DUPLICATE KEY UPDATE
+					val_sum = VALUES(val_sum), val_cnt = VALUES(val_cnt),
+					min_val = VALUES(min_val), max_val = VALUES(max_val)`,
+				bucketSec, bucketSec, bucketSec, baseSec, tierSince.Unix(), bucketSec).Error; err != nil {
+				slog.Error("指标归档：级联聚合失败", "bucket_minutes", tier.BucketMinutes, "err", err)
+				return
+			}
+			continue
+		}
+
+		tierSince := alignRollupSince(start, tier.BucketMinutes, cfg.MetricsMaxAgeDays, fullBackfill)
 		if err := db.Exec(`
 			INSERT INTO device_metric_rollups
 				(oid_id, device_id, bucket_seconds, bucket_ts, val_sum, val_cnt, min_val, max_val)
@@ -112,7 +141,7 @@ func doMetricRollups(db *gorm.DB, cfg SNMPConfig) {
 			ON DUPLICATE KEY UPDATE
 				val_sum = VALUES(val_sum), val_cnt = VALUES(val_cnt),
 				min_val = VALUES(min_val), max_val = VALUES(max_val)`,
-			bucketSec, bucketSec, bucketSec, since, bucketSec).Error; err != nil {
+			bucketSec, bucketSec, bucketSec, tierSince, bucketSec).Error; err != nil {
 			slog.Error("指标归档：层聚合失败", "bucket_minutes", tier.BucketMinutes, "err", err)
 			return
 		}

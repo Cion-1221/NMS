@@ -47,6 +47,12 @@ export interface SubnetNode {
   vrf_id?: number | null;
   vrf?: IPAMVRF | null;
   remark?: string;
+  device_count?: number;
+  children: SubnetNode[];
+}
+
+export interface RootSubnetTree extends RootPrefix {
+  device_count?: number;
   children: SubnetNode[];
 }
 

@@ -107,9 +107,20 @@ const TabAgentList: React.FC = () => {
     }
   }, [page, pageSize, debSearch, filterGroupId, filterStatus, filterVersion, filterProfile]);
 
-  // 搜索词 / 任一筛选条件变化时回到第一页（loadData 依赖变化会自动触发重新查询）
-  useEffect(() => { setPage(1); }, [debSearch, filterGroupId, filterStatus, filterVersion, filterProfile]);
-  useEffect(() => { void loadData(); void loadSummary(); }, [loadData, loadSummary]);
+  // 搜索词 / 任一筛选条件变化时回到第一页，避免在 page > 1 时先用旧页码发一次多余请求
+  const filterKey = JSON.stringify([debSearch, filterGroupId, filterStatus, filterVersion, filterProfile]);
+  const prevFilterKey = useRef(filterKey);
+  useEffect(() => {
+    if (prevFilterKey.current !== filterKey) {
+      if (page !== 1) {
+        setPage(1);
+        return;
+      }
+      prevFilterKey.current = filterKey;
+    }
+    void loadData();
+  }, [loadData, filterKey, page]);
+  useEffect(() => { void loadSummary(); }, [loadSummary]);
   useEffect(() => { getAgentGroups().then(r => setGroups(r.data ?? [])).catch(() => {}); }, []);
   useEffect(() => { void loadFilterOptions(); }, [loadFilterOptions]);
 

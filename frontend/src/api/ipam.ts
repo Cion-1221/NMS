@@ -1,6 +1,6 @@
 import client from './client';
 import type {
-  RootPrefix, CreateRootPrefixReq, UpdateRootPrefixReq,
+  RootPrefix, RootSubnetTree, CreateRootPrefixReq, UpdateRootPrefixReq,
   SubnetNode, IPAMGroup, IPAMType, IPAMVRF, IPAMAuditLog,
 } from '../types/ipam';
 
@@ -19,6 +19,9 @@ export const deleteRootPrefix = (id: number) =>
   client.delete(`/ipam/root-prefixes/${id}`);
 
 // ── Subnet Tree & Operations ───────────────────────────────────────────────────
+
+export const getAllSubnetTrees = () =>
+  client.get<RootSubnetTree[]>('/ipam/trees');
 
 export const getSubnetTree = (rootPrefixId: number) =>
   client.get<SubnetNode[]>(`/ipam/root-prefixes/${rootPrefixId}/tree`);

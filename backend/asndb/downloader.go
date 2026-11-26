@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -66,9 +67,11 @@ func (db *DB) DownloadAndUpdate(v4File, v6File, namesFile string) error {
 }
 
 // StartScheduler starts a background goroutine that calls DownloadAndUpdate
-// at updateHour (0–23, server local time) each day.
-func StartScheduler(db *DB, v4File, v6File, namesFile string, updateHour int) {
+// at updateHour (0–23, server local time) each day until ctx is cancelled.
+func StartScheduler(ctx context.Context, wg *sync.WaitGroup, db *DB, v4File, v6File, namesFile string, updateHour int) {
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
 			now := time.Now()
 			next := time.Date(now.Year(), now.Month(), now.Day(),
@@ -81,7 +84,13 @@ func StartScheduler(db *DB, v4File, v6File, namesFile string, updateHour int) {
 				"next_run", next.Format("2006-01-02 15:04:05 MST"),
 				"wait", next.Sub(now).Round(time.Minute).String(),
 			)
-			<-time.After(next.Sub(now))
+			timer := time.NewTimer(next.Sub(now))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 
 			slog.Info("asndb: 开始执行定时自动更新")
 			if err := db.DownloadAndUpdate(v4File, v6File, namesFile); err != nil {

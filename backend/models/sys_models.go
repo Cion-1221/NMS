@@ -66,7 +66,7 @@ type SysUser struct {
 	// Secret 在 setup 阶段写入（此时 Enabled=false，登录仍不要求验证码），enable
 	// 校验通过后置 Enabled=true。LastCounter 记录上次成功使用的时间步，拒绝同一步长
 	// 内重放。RecoveryCodes 为 JSON 数组形式的 SHA-256 哈希，一码一用。
-	TOTPSecret        string    `gorm:"column:totp_secret;type:varchar(64)" json:"-"`
+	TOTPSecret        string    `gorm:"column:totp_secret;type:varchar(500)" json:"-"`
 	TOTPEnabled       bool      `gorm:"column:totp_enabled;not null;default:false" json:"totp_enabled"`
 	TOTPLastCounter   int64     `gorm:"column:totp_last_counter;not null;default:0" json:"-"`
 	TOTPRecoveryCodes string    `gorm:"column:totp_recovery_codes;type:text" json:"-"`

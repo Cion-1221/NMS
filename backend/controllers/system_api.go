@@ -225,6 +225,18 @@ func UpdateUser(db *gorm.DB) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "目标用户组不存在", "code": "not_found"})
 				return
 			}
+			// 不能将系统中最后一个启用的管理员移出管理员组
+			if user.Enabled && user.Group.IsAdmin() && !newGroup.IsAdmin() {
+				remaining, err := countRemainingAdminUsers(db, targetID)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "权限校验失败", "code": "server_error"})
+					return
+				}
+				if remaining == 0 {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "无法将系统中最后一个启用的管理员移出管理员组", "code": "sys.last_admin_user"})
+					return
+				}
+			}
 			updates["group_id"] = *req.GroupID
 			auditParts = append(auditParts, fmt.Sprintf("group %q → %q", user.Group.Name, newGroup.Name))
 		}
@@ -286,11 +298,11 @@ func UpdateUser(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		// 管理员重置密码与停用账号均属安全事件：吊销该用户全部 Refresh Token，
-		// 让既有会话无法续期——否则若操作原因正是"账号疑似被盗"，攻击者手里的旧
-		// Refresh Token 依然可以无限换新，操作形同虚设。
+		// 并立即失效认证缓存，使存量 Access Token 在下一次请求时立即被拒强制退出。
 		if _, pwChanged := updates["password_hash"]; pwChanged || disabling {
 			db.Where("user_id = ?", user.ID).Delete(&models.SysRefreshToken{})
 		}
+		middleware.InvalidateUserAuthCache(user.ID)
 
 		writeSysAudit(db, getUsername(c), "update_user", "user", user.Username,
 			fmt.Sprintf("Updated user %q: %s", user.Username, strings.Join(auditParts, ", ")))
@@ -346,6 +358,7 @@ func DeleteUser(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败", "code": "server_error"})
 			return
 		}
+		middleware.InvalidateUserAuthCache(targetID)
 		writeSysAudit(db, getUsername(c), "delete_user", "user", user.Username,
 			fmt.Sprintf("Deleted user %q (group %q)", user.Username, user.Group.Name))
 		c.JSON(http.StatusOK, gin.H{"message": "success"})
@@ -353,8 +366,7 @@ func DeleteUser(db *gorm.DB) gin.HandlerFunc {
 }
 
 // ForceLogoutUser POST /api/v1/system/users/:id/force-logout
-// 吊销目标用户全部 Refresh Token：所有会话在当前 Access Token 到期后无法续期。
-// （Access Token 本身不可吊销，存量 Token 在有效期内仍可用——与密码重置同款取舍）
+// 吊销目标用户全部 Refresh Token 并失效服务端会话缓存：所有存量 Access Token 在下一次请求时立即失效退出。
 func ForceLogoutUser(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		targetID, ok := parseUserID(c)
@@ -371,6 +383,7 @@ func ForceLogoutUser(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "操作失败", "code": "server_error"})
 			return
 		}
+		middleware.InvalidateUserAuthCache(targetID)
 		writeSysAudit(db, getUsername(c), "force_logout", "user", user.Username,
 			fmt.Sprintf("Revoked %d active session(s) of user %q", result.RowsAffected, user.Username))
 		c.JSON(http.StatusOK, gin.H{"revoked": result.RowsAffected})
@@ -425,6 +438,7 @@ func ResetUserTOTP(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		result := db.Where("user_id = ?", targetID).Delete(&models.SysRefreshToken{})
+		middleware.InvalidateUserAuthCache(targetID)
 		writeSysAudit(db, getUsername(c), "reset_totp", "user", user.Username,
 			fmt.Sprintf("Reset two-factor authentication of user %q, revoked %d session(s)", user.Username, result.RowsAffected))
 		c.JSON(http.StatusOK, gin.H{"revoked": result.RowsAffected})
@@ -432,8 +446,7 @@ func ResetUserTOTP(db *gorm.DB) gin.HandlerFunc {
 }
 
 // RevokeUserSession DELETE /api/v1/system/users/:id/sessions/:sid
-// 吊销单个会话：删除对应 Refresh Token 行，该会话无法再续期。与 force-logout 的
-// 全量吊销同款取舍：存量 Access Token 在其有效期内仍然可用，不可提前作废。
+// 吊销单个会话：删除对应 Refresh Token 及其家族行，并失效认证缓存使该会话立即下线。
 func RevokeUserSession(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		targetID, ok := parseUserID(c)
@@ -450,16 +463,22 @@ func RevokeUserSession(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在", "code": "not_found"})
 			return
 		}
-		// user_id 同时入条件：防止拿 A 用户的路由删 B 用户的会话
-		result := db.Where("id = ? AND user_id = ?", sid, targetID).Delete(&models.SysRefreshToken{})
+		var targetSess models.SysRefreshToken
+		if err := db.Where("id = ? AND user_id = ?", sid, targetID).First(&targetSess).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "会话不存在（可能已过期或已被吊销）", "code": "not_found"})
+			return
+		}
+		var result *gorm.DB
+		if targetSess.FamilyID != "" {
+			result = db.Where("family_id = ? AND user_id = ?", targetSess.FamilyID, targetID).Delete(&models.SysRefreshToken{})
+		} else {
+			result = db.Where("id = ? AND user_id = ?", sid, targetID).Delete(&models.SysRefreshToken{})
+		}
 		if result.Error != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "操作失败", "code": "server_error"})
 			return
 		}
-		if result.RowsAffected == 0 {
-			c.JSON(http.StatusNotFound, gin.H{"error": "会话不存在（可能已过期或已被吊销）", "code": "not_found"})
-			return
-		}
+		middleware.InvalidateUserAuthCache(targetID)
 		writeSysAudit(db, getUsername(c), "revoke_session", "user", user.Username,
 			fmt.Sprintf("Revoked session #%d of user %q", sid, user.Username))
 		c.JSON(http.StatusOK, gin.H{"message": "success"})
@@ -563,6 +582,7 @@ func UpdateGroup(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败", "code": "server_error"})
 			return
 		}
+		middleware.InvalidateAllAuthCache()
 		db.First(&group, gid)
 		writeSysAudit(db, getUsername(c), "update_group", "group", group.Name,
 			fmt.Sprintf("Updated group %q: permissions=%s", group.Name, group.Permissions))

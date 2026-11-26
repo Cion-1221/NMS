@@ -51,6 +51,7 @@ type probeJob struct {
 // probeJobRegistry：mu 同时保护 map 与每个 job 的字段；对外只交出副本。
 type probeJobRegistry struct {
 	mu      sync.Mutex
+	wg      sync.WaitGroup
 	jobs    map[string]*probeJob
 	current string // 正在运行的任务 ID，空 = 空闲
 	seq     uint64
@@ -100,7 +101,9 @@ func (r *probeJobRegistry) start(
 		fn(j)
 		r.mu.Unlock()
 	}
+	r.wg.Add(1)
 	go func() {
+		defer r.wg.Done()
 		var err error
 		func() {
 			defer func() {
@@ -113,6 +116,11 @@ func (r *probeJobRegistry) start(
 		r.finish(j, err)
 	}()
 	return snap, true
+}
+
+// WaitProbeJobs 等待正在运行的异步探测清理/批量删除任务收尾（供停机阶段调用）。
+func WaitProbeJobs() {
+	probeJobs.wg.Wait()
 }
 
 func (r *probeJobRegistry) finish(j *probeJob, err error) {

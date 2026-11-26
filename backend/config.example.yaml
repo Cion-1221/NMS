@@ -7,6 +7,12 @@ server:
     - "127.0.0.1"
     - "::1"
     # - "10.0.0.5"        # 异机 Nginx/LB 的内网地址示例
+  # ── HTTP 连接超时（可选项，省略时使用所示默认值；设为 0 则不限制该项）────────
+  # 同时作用于主端口与 Agent 注册/同步 TLS 端口，防止慢速连接（Slowloris）耗尽句柄
+  read_header_timeout_seconds: 10
+  read_timeout_seconds: 30
+  write_timeout_seconds: 120
+  idle_timeout_seconds: 120
 
 database:
   host: "127.0.0.1"
@@ -15,10 +21,10 @@ database:
   password: "CHANGE_ME"
   dbname: "nms_db"
   # ── 连接池（以下 4 项可省略，省略时使用所示默认值）─────────────────────────
-  # 最大并发连接数
-  max_open_conns: 25
+  # 最大并发连接数（兼顾 SNMP 轮询器、归档聚合与前端/Agent 高频并发）
+  max_open_conns: 50
   # 最大空闲连接数
-  max_idle_conns: 10
+  max_idle_conns: 15
   # 连接最长存活时间（分钟）；必须小于 MySQL wait_timeout（默认 480 分钟），
   # 否则空闲连接被服务端关闭后下一个请求会拿到死连接
   conn_max_lifetime_minutes: 60
@@ -92,6 +98,7 @@ audit:
     critical_free_mb: 500        # 可用空间低于此值（MB）触发对 probe_results 的紧急清理
                                   # （比 probe_results_max_age_days 更激进，但不会砍破
                                   # probe_rollups 归档层要求的最小原始点天数）
+    check_path: "."              # 可选：检查可用空间的磁盘挂载路径（默认当前工作目录 "."）
 
 # SNMP 设备采集（整个 snmp 块可省略，省略时使用下列默认值）
 # 设备在 Devices 页逐台开启：采集模式 Direct（Server 直连）或 Agent Proxy（探针代理）。

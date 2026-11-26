@@ -353,6 +353,31 @@ func CreateRootPrefix(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "IP 版本与 CIDR 地址族不一致", "code": "ipam.version_mismatch"})
 			return
 		}
+		// 校验与现有同版本根前缀是否存在地址范围包含或重叠（ipam_subnets.cidr 全局唯一，
+		// 提前阻断重叠根前缀可避免后续拆分子网时发生跨根前缀碰撞）。
+		var existingRoots []models.RootPrefix
+		if err := db.Where("ip_version = ?", req.IPVersion).Find(&existingRoots).Error; err != nil {
+			internalErr(c, http.StatusInternalServerError, "查询现有根前缀失败", err)
+			return
+		}
+		for _, er := range existingRoots {
+			ep, parseErr := netip.ParsePrefix(er.CIDR)
+			if parseErr != nil {
+				continue
+			}
+			if ep == prefix {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "该根前缀已存在", "code": "ipam.cidr_taken"})
+				return
+			}
+			if ep.Overlaps(prefix) {
+				c.JSON(http.StatusBadRequest, codedErrJSON(&core.CodedError{
+					Code:   "ipam.cidr_overlap",
+					Params: map[string]string{"conflict": er.CIDR},
+					Msg:    fmt.Sprintf("与现有根前缀 %s 存在地址范围重叠", er.CIDR),
+				}))
+				return
+			}
+		}
 		root := models.RootPrefix{
 			IPVersion: req.IPVersion,
 			CIDR:      prefix.String(),
@@ -455,18 +480,102 @@ func DeleteRootPrefix(db *gorm.DB) gin.HandlerFunc {
 // ── Subnet Tree ────────────────────────────────────────────────────────────────
 
 type SubnetNode struct {
-	ID       uint              `json:"id"`
-	Level    string            `json:"level"`
-	CIDR     string            `json:"cidr"`
-	ParentID *uint             `json:"parent_id"`
-	GroupID  *uint             `json:"group_id"`
-	Group    *models.IPAMGroup `json:"group,omitempty"`
-	TypeID   *uint             `json:"type_id"`
-	Type     *models.IPAMType  `json:"type,omitempty"`
-	VRFID    *uint             `json:"vrf_id"`
-	VRF      *models.IPAMVRF   `json:"vrf,omitempty"`
-	Remark   string            `json:"remark"`
-	Children []SubnetNode      `json:"children"`
+	ID          uint              `json:"id"`
+	Level       string            `json:"level"`
+	CIDR        string            `json:"cidr"`
+	ParentID    *uint             `json:"parent_id"`
+	GroupID     *uint             `json:"group_id"`
+	Group       *models.IPAMGroup `json:"group,omitempty"`
+	TypeID      *uint             `json:"type_id"`
+	Type        *models.IPAMType  `json:"type,omitempty"`
+	VRFID       *uint             `json:"vrf_id"`
+	VRF         *models.IPAMVRF   `json:"vrf,omitempty"`
+	Remark      string            `json:"remark"`
+	DeviceCount int               `json:"device_count"`
+	Children    []SubnetNode      `json:"children"`
+}
+
+type RootSubnetTree struct {
+	models.RootPrefix
+	DeviceCount int          `json:"device_count"`
+	Children    []SubnetNode `json:"children"`
+}
+
+func loadDeviceAddrs(db *gorm.DB) []netip.Addr {
+	var devs []struct {
+		ManagementIP   *string
+		ManagementIPv6 *string
+	}
+	db.Model(&models.Device{}).Select("management_ip, management_ipv6").Find(&devs)
+	addrs := make([]netip.Addr, 0, len(devs)*2)
+	for _, d := range devs {
+		if d.ManagementIP != nil && *d.ManagementIP != "" {
+			if a, err := netip.ParseAddr(*d.ManagementIP); err == nil {
+				addrs = append(addrs, a)
+			}
+		}
+		if d.ManagementIPv6 != nil && *d.ManagementIPv6 != "" {
+			if a, err := netip.ParseAddr(*d.ManagementIPv6); err == nil {
+				addrs = append(addrs, a)
+			}
+		}
+	}
+	return addrs
+}
+
+func countDevicesInCIDR(cidr string, addrs []netip.Addr) int {
+	if len(addrs) == 0 {
+		return 0
+	}
+	pfx, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return 0
+	}
+	cnt := 0
+	for _, a := range addrs {
+		if pfx.Contains(a) {
+			cnt++
+		}
+	}
+	return cnt
+}
+
+func buildSubnetTreeNodes(subnets []models.Subnet, devAddrs []netip.Addr) []SubnetNode {
+	sortSubnetsByIP(subnets)
+	childrenMap := make(map[uint][]SubnetNode)
+	for _, s := range subnets {
+		if s.Level == "L2" && s.ParentID != nil {
+			childrenMap[*s.ParentID] = append(childrenMap[*s.ParentID], SubnetNode{
+				ID: s.ID, Level: s.Level, CIDR: s.CIDR, ParentID: s.ParentID,
+				GroupID: s.GroupID, Group: s.Group,
+				TypeID: s.TypeID, Type: s.Type,
+				VRFID: s.VRFID, VRF: s.VRF,
+				Remark:      s.Remark,
+				DeviceCount: countDevicesInCIDR(s.CIDR, devAddrs),
+				Children:    []SubnetNode{},
+			})
+		}
+	}
+
+	l1Nodes := make([]SubnetNode, 0)
+	for _, s := range subnets {
+		if s.Level == "L1" {
+			node := SubnetNode{
+				ID: s.ID, Level: s.Level, CIDR: s.CIDR, ParentID: nil,
+				GroupID: s.GroupID, Group: s.Group,
+				TypeID: s.TypeID, Type: s.Type,
+				VRFID: s.VRFID, VRF: s.VRF,
+				Remark:      s.Remark,
+				DeviceCount: countDevicesInCIDR(s.CIDR, devAddrs),
+				Children:    []SubnetNode{},
+			}
+			if children, ok := childrenMap[s.ID]; ok {
+				node.Children = children
+			}
+			l1Nodes = append(l1Nodes, node)
+		}
+	}
+	return l1Nodes
 }
 
 func GetSubnetTree(db *gorm.DB) gin.HandlerFunc {
@@ -479,41 +588,42 @@ func GetSubnetTree(db *gorm.DB) gin.HandlerFunc {
 			internalErr(c, http.StatusInternalServerError, "查询树失败", err)
 			return
 		}
-		sortSubnetsByIP(subnets)
+		devAddrs := loadDeviceAddrs(db)
+		c.JSON(http.StatusOK, buildSubnetTreeNodes(subnets, devAddrs))
+	}
+}
 
-		childrenMap := make(map[uint][]SubnetNode)
-		for _, s := range subnets {
-			if s.Level == "L2" && s.ParentID != nil {
-				childrenMap[*s.ParentID] = append(childrenMap[*s.ParentID], SubnetNode{
-					ID: s.ID, Level: s.Level, CIDR: s.CIDR, ParentID: s.ParentID,
-					GroupID: s.GroupID, Group: s.Group,
-					TypeID: s.TypeID, Type: s.Type,
-					VRFID: s.VRFID, VRF: s.VRF,
-					Remark:   s.Remark,
-					Children: []SubnetNode{},
-				})
-			}
+// GetAllSubnetTrees GET /api/v1/ipam/trees —— 一次查询返回全部根前缀及其 L1/L2 子网树与关联设备计数。
+// 解决前端未展开根前缀时无法跨层级搜索/过滤子网的问题，同时提供真实的地址分配/设备占用统计依据。
+func GetAllSubnetTrees(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var roots []models.RootPrefix
+		if err := db.Preload("Group").Preload("Type").Preload("VRF").Find(&roots).Error; err != nil {
+			internalErr(c, http.StatusInternalServerError, "查询根前缀失败", err)
+			return
+		}
+		sortRootsByIP(roots)
+
+		var allSubnets []models.Subnet
+		if err := db.Preload("Group").Preload("Type").Preload("VRF").Find(&allSubnets).Error; err != nil {
+			internalErr(c, http.StatusInternalServerError, "查询子网树失败", err)
+			return
+		}
+		byRoot := make(map[uint][]models.Subnet, len(roots))
+		for _, s := range allSubnets {
+			byRoot[s.RootPrefixID] = append(byRoot[s.RootPrefixID], s)
 		}
 
-		var l1Nodes []SubnetNode
-		for _, s := range subnets {
-			if s.Level == "L1" {
-				node := SubnetNode{
-					ID: s.ID, Level: s.Level, CIDR: s.CIDR, ParentID: nil,
-					GroupID: s.GroupID, Group: s.Group,
-					TypeID: s.TypeID, Type: s.Type,
-					VRFID: s.VRFID, VRF: s.VRF,
-					Remark: s.Remark,
-				}
-				if children, ok := childrenMap[s.ID]; ok {
-					node.Children = children
-				} else {
-					node.Children = []SubnetNode{}
-				}
-				l1Nodes = append(l1Nodes, node)
-			}
+		devAddrs := loadDeviceAddrs(db)
+		out := make([]RootSubnetTree, 0, len(roots))
+		for _, r := range roots {
+			out = append(out, RootSubnetTree{
+				RootPrefix:  r,
+				DeviceCount: countDevicesInCIDR(r.CIDR, devAddrs),
+				Children:    buildSubnetTreeNodes(byRoot[r.ID], devAddrs),
+			})
 		}
-		c.JSON(http.StatusOK, l1Nodes)
+		c.JSON(http.StatusOK, out)
 	}
 }
 
@@ -804,6 +914,7 @@ func RegisterIPAMRoutes(r *gin.Engine, db *gorm.DB, authMW gin.HandlerFunc) {
 		api.DELETE("/root-prefixes/:id", w, DeleteRootPrefix(db))
 
 		// Subnet Tree & Operations
+		api.GET("/trees", GetAllSubnetTrees(db))
 		api.GET("/root-prefixes/:id/tree", GetSubnetTree(db))
 		api.POST("/split", w, SplitSubnet(db))
 		api.POST("/merge", w, MergeSubnets(db))
